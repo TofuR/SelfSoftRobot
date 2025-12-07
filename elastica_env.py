@@ -4,6 +4,7 @@ import cv2
 from collections import defaultdict
 from tqdm import tqdm
 
+
 # --- 1. PyVista 全局设置 ---
 pv.set_plot_theme("document")
 pv.OFF_SCREEN = True 
