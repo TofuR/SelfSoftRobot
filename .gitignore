@@ -14,3 +14,5 @@
 /.pytest_cache/
 /archive/
 *.npz
+train_log_soft/
+train_log_soft/*
