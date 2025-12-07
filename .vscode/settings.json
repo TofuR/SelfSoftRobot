@@ -1,0 +1,14 @@
+{
+    "python.defaultInterpreterPath": "/Data5/ddf/environments/conda_envs/selfsr/bin/python",
+    "python.terminal.activateEnvironment": false,
+    "python.analysis.extraPaths": [
+        "/Data5/ddf/projects",
+        "/Data5/ddf/projects/SelfSoftRobot"
+    ],
+    "python.linting.enabled": true,
+    "python.linting.pylintEnabled": true,
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true
+    }
+}
