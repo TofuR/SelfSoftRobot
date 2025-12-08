@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from tqdm import trange
 
 # --- [全局 GPU 配置] ---
-CUDA_DEVICE = 3  # <--- 在这里修改 GPU 编号
+CUDA_DEVICE = 2  # <--- 在这里修改 GPU 编号
 os.environ["CUDA_VISIBLE_DEVICES"] = str(CUDA_DEVICE)
 
 # 复用现有的模型定义
@@ -157,7 +157,33 @@ def soft_sample_stratified(rays_o, rays_d, near, far, n_samples, perturb=True):
 
     return pts, z_vals
 
-def soft_model_forward(rays_o, rays_d, near, far, model, action, chunksize, n_samples=64):
+def Robust_Mask_Rendering(raw, z_vals):
+    """
+    修正版：去掉了无穷远的背景墙
+    """
+    # 1. 计算采样点之间的距离 delta
+    dists = z_vals[..., 1:] - z_vals[..., :-1]
+    
+    # [修改点]：不要用 1e10！用最后一段的平均步长代替
+    # 这样光线穿过最后一点后，如果没碰到物体，就会穿出去（变成透明）
+    last_dist = dists[..., -1:]
+    dists = torch.cat([dists, last_dist], -1)
+    
+    # 2. 处理密度 (Density)
+    sigma = nn.functional.softplus(raw[..., 1]) 
+    
+    # 3. 计算 Alpha
+    alpha = 1.0 - torch.exp(-sigma * dists)
+    
+    # 4. 累积权重
+    weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1), device=alpha.device), 1.-alpha + 1e-10], -1), -1)[:, :-1]
+    
+    # 5. 计算最终 Mask
+    acc_map = torch.sum(weights, -1)
+    
+    return acc_map
+
+def soft_model_forward(rays_o, rays_d, near, far, model, action, chunksize, n_samples=192):
     """
     适配软体机器人的前向传播
     """
@@ -183,7 +209,8 @@ def soft_model_forward(rays_o, rays_d, near, far, model, action, chunksize, n_sa
     raw = torch.cat(predictions, dim=0)
     raw = raw.reshape(list(query_points.shape[:2]) + [raw.shape[-1]])
 
-    rgb_map, _ = OM_rendering(raw)
+    # rgb_map, _ = OM_rendering(raw)
+    rgb_map = Robust_Mask_Rendering(raw, z_vals)
     
     return {'rgb_map': rgb_map}
 
@@ -212,7 +239,7 @@ def load_soft_data(data_dir):
     if focal is None or focal == 1.0:
         height, width = images.shape[1:3]
         # 假设 FOV ~42度
-        approx_focal = 0.5 * width / np.tan(0.5 * 42 * np.pi / 180)
+        approx_focal = 0.5 * width / np.tan(0.5 * 30 * np.pi / 180)
         focal = approx_focal
         print(f"Warning: Using calculated focal length: {focal}")
     
@@ -230,7 +257,7 @@ def train():
     os.makedirs(os.path.join(LOG_DIR, "model"), exist_ok=True)
     
     N_ITERS = 50000         
-    LR = 5e-2               
+    LR = 5e-4               
     DISPLAY_RATE = 500      
     SAVE_RATE = 2000        
     

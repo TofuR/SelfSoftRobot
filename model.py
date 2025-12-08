@@ -85,6 +85,13 @@ class FBV_SM(nn.Module):
         )
 
         self.output = nn.Linear(d_filter//4, output_size)
+        
+        # [新增] 初始化技巧：
+        # 将密度的偏置(bias)设为负数 (例如 -5.0)
+        # 这样 Softplus(-5.0) ≈ 0，初始状态下整个空间就是透明的。
+        # 0号是颜色，1号是密度
+        with torch.no_grad():
+            self.output.bias[1] = -5.0
 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
