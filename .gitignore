@@ -16,3 +16,8 @@
 *.npz
 train_log_soft/
 train_log_soft/*
+*.gif
+train_log_softseq/
+train_log_softseq/*
+train_log_seq_vis/
+train_log_seq_vis/*
