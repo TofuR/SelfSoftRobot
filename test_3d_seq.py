@@ -8,7 +8,7 @@ import glob
 from tqdm import tqdm
 
 # 导入您的模块
-from model_seq_skip import RecurrentFBV_SM_Skip
+from src.models import model_v2
 from elastica_env import ContinuousSoftArmEnv, SimpleDistributedTorque
 
 # --- 全局设置 ---
@@ -37,7 +37,7 @@ class ResultVisualizer:
         self.action_dim = self.actions_raw.shape[1]
         
         # 3. 加载模型
-        self.model = RecurrentFBV_SM_Skip(
+        self.model = model_v2(
             action_dim=self.action_dim,
             seq_len=self.seq_len,
             hidden_dim=256

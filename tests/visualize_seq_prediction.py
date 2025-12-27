@@ -18,12 +18,12 @@ if project_root not in sys.path:
 
 # 现在可以正常导入根目录下的模块了
 try:
-    from model_seq_skip import RecurrentFBV_SM_Skip
+    from src.models import model_v2
     from func import OM_rendering
 except ImportError as e:
     print(f"导入错误: {e}")
     print(f"当前 sys.path: {sys.path}")
-    print("请确保 model_seq_skip.py 和 func.py 位于项目根目录下。")
+    print("请确保项目根目录在 sys.path 且通过 src.models 访问模型。")
     sys.exit(1)
 
 # --- 全局设置 ---
@@ -135,7 +135,7 @@ def visualize(seq_file_path, model_dir, output_gif="seq_vis_result.gif"):
     
     # 3. 加载模型
     SEQ_LEN = 20 # 必须与训练一致
-    model = RecurrentFBV_SM_Skip(
+    model = model_v2(
         action_dim=action_dim, 
         seq_len=SEQ_LEN, 
         hidden_dim=256

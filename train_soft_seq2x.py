@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 
 # 导入
 from func import OM_rendering
-from model_seq import RecurrentFBV_SM
+from src.models import model_v1
 
 # --- 全局设置 ---
 CUDA_DEVICE = 2
@@ -127,7 +127,7 @@ def train_seq():
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
     
-    model = RecurrentFBV_SM(action_dim=train_ds.action_dim, seq_len=SEQ_LEN, hidden_dim=256).to(device)
+    model = model_v1(action_dim=train_ds.action_dim, seq_len=SEQ_LEN, hidden_dim=256).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     criterion = torch.nn.MSELoss()
     

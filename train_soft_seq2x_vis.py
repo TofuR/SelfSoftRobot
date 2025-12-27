@@ -9,7 +9,7 @@ import matplotlib.animation as animation
 
 # 导入
 from func import OM_rendering
-from model_seq_skip import RecurrentFBV_SM_Skip # <--- 导入新模型
+from src.models import model_v2 # <--- 导入新模型
 
 # --- 全局设置 ---
 CUDA_DEVICE = 3
@@ -137,9 +137,9 @@ def train_seq_vis():
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE * 2, shuffle=False, num_workers=4)
     
     # 3. 初始化模型 (使用 Skip Connection 版本)
-    model = RecurrentFBV_SM_Skip(
-        action_dim=train_ds.action_dim, 
-        seq_len=SEQ_LEN, 
+    model = model_v2(
+        action_dim=train_ds.action_dim,
+        seq_len=SEQ_LEN,
         hidden_dim=256
     ).to(device)
     
