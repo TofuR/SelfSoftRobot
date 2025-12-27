@@ -12,7 +12,7 @@ from model_seq_skip import RecurrentFBV_SM_Skip
 from elastica_env import ContinuousSoftArmEnv, SimpleDistributedTorque
 
 # --- 全局设置 ---
-CUDA_DEVICE = 0
+CUDA_DEVICE = 3
 os.environ["CUDA_VISIBLE_DEVICES"] = str(CUDA_DEVICE)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Testing on device: {device}")
@@ -67,7 +67,7 @@ class ResultVisualizer:
         env = ContinuousSoftArmEnv(dt=1e-4)
         
         gt_positions = []   
-        pred_clouds = []    
+        pred_clouds = []
         
         # 历史动作 buffer
         history_buffer = torch.zeros((1, self.seq_len, self.action_dim), device=device)
@@ -76,7 +76,7 @@ class ResultVisualizer:
         sim_steps_per_action = 500 
         
         total_actions = len(self.actions_raw)
-        demo_length = min(50, total_actions) 
+        demo_length = min(100, total_actions) 
         
         for i in tqdm(range(demo_length)):
             target_action = self.actions_raw[i]
@@ -119,7 +119,7 @@ class ResultVisualizer:
                 # 密度筛选
                 density = 1.0 - torch.exp(-torch.nn.functional.relu(raw_out[0, :, 0])) 
                 
-                threshold = 0.45
+                threshold = 0.75
                 mask = density > threshold
                 
                 valid_points = self.grid_points[mask.cpu().numpy()]
