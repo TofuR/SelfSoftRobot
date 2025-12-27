@@ -1,7 +1,7 @@
 # Our implementation is based on the NeRF publicly available code from https://github.com/krrish94/nerf-pytorch/ and
 # https://github.com/bmild/nerf
 import random
-from model import FBV_SM, PositionalEncoder
+from src.models import FBV_SM, PositionalEncoder
 from func import *
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

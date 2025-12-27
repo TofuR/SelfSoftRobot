@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from model import PositionalEncoder
+from .layers import PositionalEncoder
 from .layers import TemporalLSTMEncoder, MLPDecoder
 
 class model_v1(nn.Module):

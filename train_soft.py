@@ -12,7 +12,7 @@ CUDA_DEVICE = 2  # <--- 在这里修改 GPU 编号
 os.environ["CUDA_VISIBLE_DEVICES"] = str(CUDA_DEVICE)
 
 # 复用现有的模型定义
-from model import FBV_SM, PositionalEncoder
+from src.models import FBV_SM, PositionalEncoder
 # [修改] 仅导入渲染相关函数，get_rays 使用本地修复版
 from func import prepare_chunks, OM_rendering
 

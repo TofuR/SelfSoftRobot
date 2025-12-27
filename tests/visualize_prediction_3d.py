@@ -13,7 +13,7 @@ parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 
 # 导入现有模块 (直接复用，不重写)
-from model import FBV_SM, PositionalEncoder
+from src.models import FBV_SM, PositionalEncoder
 from elastica_env import ContinuousSoftArmEnv
 
 # ==========================================
