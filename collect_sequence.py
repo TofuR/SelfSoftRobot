@@ -24,6 +24,17 @@ def generate_random_walk_actions(seq_length, dim=2, min_val=-0.005, max_val=0.00
     return actions
 
 def collect_continuous_data():
+    """从 `ContinuousSoftArmEnv` 采集连续时序数据集。
+
+    流程：
+        1) 通过随机游走生成平滑动作序列；
+        2) 连续推进仿真；
+        3) 按固定间隔记录图像与动作；
+        4) 保存为 `data/sequence_data/*.npz`。
+
+    Returns:
+        无返回值，结果写入磁盘文件。
+    """
     # --- 配置参数 ---
     NUM_SEQUENCES = 10       # 采集几段独立的连续轨迹
     ACTIONS_PER_SEQ = 50    # 每段轨迹包含多少个不同的动作目标

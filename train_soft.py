@@ -215,6 +215,16 @@ def soft_model_forward(rays_o, rays_d, near, far, model, action, chunksize, n_sa
     return {'rgb_map': rgb_map}
 
 def load_soft_data(data_dir):
+    """加载并合并软体机器人训练所需的序列 `.npz` 数据。
+
+    Args:
+        data_dir: 包含 `images` 与 `actions` 字段的目录。
+
+    Returns:
+        images: 图像数组，形状 (N, H, W[, C])。
+        actions: 动作数组，形状 (N, action_dim)。
+        focal: 焦距（float）。
+    """
     files = glob.glob(os.path.join(data_dir, "*.npz"))
     if not files:
         raise FileNotFoundError(f"No .npz files found in {data_dir}")
@@ -250,6 +260,15 @@ def load_soft_data(data_dir):
 # ==========================================
 
 def train():
+    """软体机器人神经场基线训练主循环。
+
+    主要流程：
+        加载数据 -> 动作归一化 -> 构建模型 -> 生成射线 ->
+        随机采样帧监督渲染 -> 反向优化。
+
+    Returns:
+        无返回值；会在 `train_log_soft/*` 写入模型与可视化结果。
+    """
     # --- 参数配置 ---
     DATA_DIR = "data/sequence_data"
     LOG_DIR = "train_log_soft/experiment_3"

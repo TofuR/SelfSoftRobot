@@ -71,6 +71,11 @@ def project_points(points_3d, view_matrix, focal_length=1.0):
     return u, v, points_cam
 
 def run_verification(driving_params):
+    """运行一次 3D 投影一致性验证并输出对比图。
+
+    参数:
+        driving_params: 仿真驱动参数。
+    """
     print(f">>> 开始验证仿真，驱动参数: {driving_params}")
     
     # 1. 运行仿真获取数据

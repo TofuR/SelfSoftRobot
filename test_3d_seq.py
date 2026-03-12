@@ -18,6 +18,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Testing on device: {device}")
 
 class ResultVisualizer:
+    """序列结果可视化器：对比物理仿真真实形态与模型预测点云。"""
     def __init__(self, log_dir, seq_file):
         self.log_dir = log_dir
         
@@ -61,8 +62,12 @@ class ResultVisualizer:
         self.grid_tensor = torch.tensor(self.grid_points, dtype=torch.float32, device=device)
         
     def run_inference_sequence(self):
-        """
-        运行完整的序列推理
+        """执行整段序列推理并收集可视化所需数据。
+
+        Returns:
+            gt_positions: 物理仿真得到的真实杆体坐标序列。
+            pred_clouds: 模型预测点云序列。
+            actions: 对应动作序列。
         """
         env = ContinuousSoftArmEnv(dt=1e-4)
         
@@ -128,6 +133,7 @@ class ResultVisualizer:
         return gt_positions, pred_clouds, self.actions_raw[:demo_length]
 
     def save_gif(self, gt_pos, pred_cld, actions, filename="test_3d.gif"):
+        """将真实形态、动作曲线和预测点云合成为 GIF。"""
         print("Generating 3D GIF...")
         
         fig = plt.figure(figsize=(15, 5))

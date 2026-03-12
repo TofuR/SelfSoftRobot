@@ -18,6 +18,16 @@ print(f"Training on device: {device}")
 
 # --- 重新定义 get_rays 以避免 import 问题 ---
 def get_rays(height, width, focal_length):
+    """生成相机射线（简化版）。
+
+    Args:
+        height: 图像高。
+        width: 图像宽。
+        focal_length: 焦距。
+
+    Returns:
+        (rays_o, rays_d)，形状均为 (H*W, 3)。
+    """
     i, j = torch.meshgrid(
         torch.arange(width, dtype=torch.float32, device=device),
         torch.arange(height, dtype=torch.float32, device=device),
@@ -38,6 +48,18 @@ def get_rays(height, width, focal_length):
     return rays_o.reshape(-1, 3), rays_d.reshape(-1, 3)
 
 def get_rays_from_camera_params(H, W, focal, eye, center, up):
+    """根据相机位姿参数生成世界坐标系射线。
+
+    Args:
+        H, W: 图像尺寸。
+        focal: 焦距。
+        eye: 相机位置。
+        center: 注视点。
+        up: 相机上方向。
+
+    Returns:
+        (rays_o, rays_d)，展平后形状为 (H*W, 3)。
+    """
     # 简单的 LookAt 实现
     eye = torch.tensor(eye, dtype=torch.float32, device=device)
     center = torch.tensor(center, dtype=torch.float32, device=device)
@@ -70,6 +92,7 @@ def get_rays_from_camera_params(H, W, focal, eye, center, up):
 # 1. Dataset (保持不变)
 # ==========================================
 class SoftSequenceDataset(Dataset):
+    """时序数据集，返回动作窗口与对应目标图像。"""
     def __init__(self, data_dir, seq_len=10, file_list=None):
         self.seq_len = seq_len
         self.samples = []
@@ -92,6 +115,15 @@ class SoftSequenceDataset(Dataset):
 
     def __len__(self): return len(self.samples)
     def __getitem__(self, idx):
+        """读取单条样本。
+
+        Args:
+            idx: 样本索引。
+
+        Returns:
+            input_seq: (seq_len, action_dim)
+            target_image_flat: (H*W,)
+        """
         seq_id, t = self.samples[idx]
         data = self.data_cache[seq_id]
         actions_full, target_image = data['actions'], data['images'][t]
@@ -110,6 +142,7 @@ class SoftSequenceDataset(Dataset):
 # 2. 训练逻辑 (显存优化版)
 # ==========================================
 def train_seq():
+    """训练序列模型（2x 版本）并保存验证可视化。"""
     DATA_DIR = "data/sequence_data"
     SEQ_LEN = 20
     BATCH_SIZE = 8
@@ -143,8 +176,13 @@ def train_seq():
 
     # --- 优化后的批量处理函数 ---
     def run_batch(batch_actions):
-        """
-        Memory Efficient Batch Rendering
+        """按块渲染一个 batch，降低显存占用。
+
+        Args:
+            batch_actions: (B, T, D) 动作序列。
+
+        Returns:
+            预测图像展平结果，形状 (B, H*W)。
         """
         curr_bs = batch_actions.shape[0]
         

@@ -89,8 +89,12 @@ class FBVSM_Env(gym.Env):
         return full_matrix
 
     def get_obs(self):
-        """
-        Capture a camera image and read the robot's joint states.
+        """采集当前相机图像与归一化关节状态。
+
+        Returns:
+            [joint_array, processed_img]
+            - joint_array: 形状 (num_motor,)，按 `action_space` 归一化。
+            - processed_img: 预处理后的图像。
         """
         img = p.getCameraImage(self.width, self.height,
                                self.view_matrix, self.projection_matrix,
@@ -122,9 +126,14 @@ class FBVSM_Env(gym.Env):
         return [np.array(joint_list), processed_img]
 
     def act(self, action_norm, time_out_step_num=1000):
-        """
-        Apply the given action (in normalized units) and step the simulation until
-        the desired joint configuration is reached.
+        """执行归一化动作直到收敛或超时。
+
+        Args:
+            action_norm: 归一化关节目标。
+            time_out_step_num: 最大控制迭代次数。
+
+        Returns:
+            是否达到目标关节状态。
         """
         action_degree = action_norm * self.action_space
         action_rad = action_degree / 180 * np.pi
@@ -200,12 +209,17 @@ class FBVSM_Env(gym.Env):
         return reached
 
     def add_obstacles(self, obj_urdf_path, position, orientation):
+        """在场景中加载固定障碍物。
+
+        Args:
+            obj_urdf_path: 障碍物 URDF 路径。
+            position: 障碍物世界坐标。
+            orientation: 障碍物姿态（PyBullet 支持的参数格式）。
+        """
         self.obstacle_id = p.loadURDF(obj_urdf_path, position, orientation, useFixedBase=1)
 
     def reset(self):
-        """
-        Reset the simulation, load the robot, and set up visualization elements.
-        """
+        """重置仿真、重新加载机械臂并初始化可视化辅助线。"""
         p.resetSimulation()
         p.setGravity(0, 0, -10)
         p.setAdditionalSearchPath(pd.getDataPath())

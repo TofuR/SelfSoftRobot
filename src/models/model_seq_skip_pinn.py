@@ -19,11 +19,21 @@ class model_v3(nn.Module):
     - y_pred: [Batch, Seq, 1, 64, 64] 预测的重建图像序列
     - latent_seq: [Batch, Seq, Hidden_Dim] LSTM 输出的隐变量序列，用于计算 Physics Loss
     """
-    def __init__(self, n_inputs=1, n_outputs=4, input_channel=1, hidden_size=512):
+    def __init__(self, n_inputs=1, n_outputs=4, input_channel=1, hidden_size=512, pretrained=False):
         super(model_v3, self).__init__()
         
         # 1. Visual Encoder (特征提取)
-        resnet = models.resnet18(pretrained=True)
+        if pretrained:
+            try:
+                from torchvision.models import ResNet18_Weights
+                resnet = models.resnet18(weights=ResNet18_Weights.DEFAULT)
+            except Exception:
+                resnet = models.resnet18(pretrained=True)
+        else:
+            try:
+                resnet = models.resnet18(weights=None)
+            except TypeError:
+                resnet = models.resnet18(pretrained=False)
         # 修改第一层以适配输入通道
         if input_channel != 3:
             resnet.conv1 = nn.Conv2d(input_channel, 64, kernel_size=7, stride=2, padding=3, bias=False)

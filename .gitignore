@@ -21,3 +21,9 @@ train_log_softseq/
 train_log_softseq/*
 train_log_seq_vis/
 train_log_seq_vis/*
+train_log*
+train_log_v3/*
+*.pth
+*.pt
+*.ckpt
+*.log

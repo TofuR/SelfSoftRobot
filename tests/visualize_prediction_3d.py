@@ -47,9 +47,7 @@ RECORD_INTERVAL = 50 # 每50个物理步对应1个数据帧
 # ==========================================
 
 def run_physics_reconstruction(actions_seq):
-    """
-    重新运行物理引擎以获取真实的 3D 坐标
-    """
+    """重放动作序列并重建真实 3D 杆体轨迹。"""
     print(f">>> 正在重构物理仿真 (共 {len(actions_seq)} 帧)...")
     env = ContinuousSoftArmEnv(dt=DT)
     
@@ -74,7 +72,7 @@ def run_physics_reconstruction(actions_seq):
     return gt_positions
 
 def generate_query_grid():
-    """生成用于探测模型的 3D 网格点"""
+    """生成模型查询用三维网格点。"""
     # 根据比例计算 X/Y 的分辨率
     z_len = Z_RANGE[1] - Z_RANGE[0]
     x_len = X_RANGE[1] - X_RANGE[0]
@@ -101,9 +99,7 @@ def generate_query_grid():
     return flat_pts
 
 def get_model_prediction_cloud(model, action, grid_pts, threshold=2.0):
-    """
-    输入动作，查询整个 3D 空间的密度，返回高密度点云
-    """
+    """给定动作查询体场密度并返回阈值点云。"""
     n_points = grid_pts.shape[0]
     
     # 扩展 Action: (N_points, Action_Dim)
@@ -141,6 +137,7 @@ def get_model_prediction_cloud(model, action, grid_pts, threshold=2.0):
 # ==========================================
 
 def main():
+    """执行 3D 真实/预测对比并导出动画 GIF。"""
     # 1. 加载数据
     print(f"Loading Data: {DATA_PATH}")
     data = np.load(DATA_PATH)

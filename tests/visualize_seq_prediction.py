@@ -37,7 +37,7 @@ print(f"Running visualization on: {DEVICE}")
 # ==========================================
 
 def get_rays_from_camera_params(H, W, focal, eye, center, up):
-    """生成相机射线 (与训练时保持严格一致)"""
+    """生成相机射线（与训练配置保持一致）。"""
     eye = torch.tensor(eye, dtype=torch.float32, device=DEVICE)
     center = torch.tensor(center, dtype=torch.float32, device=DEVICE)
     up = torch.tensor(up, dtype=torch.float32, device=DEVICE)
@@ -67,8 +67,18 @@ def get_rays_from_camera_params(H, W, focal, eye, center, up):
     return rays_o.reshape(-1, 3), rays_d.reshape(-1, 3)
 
 def run_inference_frame(model, action_window, current_act, rays_o, rays_d, n_samples=64, near=0.5, far=2.5):
-    """
-    单帧推理函数
+    """执行单帧序列推理。
+
+    Args:
+        model: 序列模型。
+        action_window: 动作历史窗口，形状 (1, seq_len, D)。
+        current_act: 当前动作，形状 (1, D)。
+        rays_o, rays_d: 射线起点与方向。
+        n_samples: 每条射线采样数量。
+        near, far: 采样深度范围。
+
+    Returns:
+        展平预测像素，形状 (H*W,)。
     """
     # 1. 采样空间点
     t_vals = torch.linspace(0., 1., n_samples, device=DEVICE)
@@ -114,6 +124,7 @@ def run_inference_frame(model, action_window, current_act, rays_o, rays_d, n_sam
 # ==========================================
 
 def visualize(seq_file_path, model_dir, output_gif="seq_vis_result.gif"):
+    """加载序列与模型并输出时序预测可视化 GIF。"""
     # 1. 加载配置与归一化系数
     norm_path = os.path.join(model_dir, "action_norm_factor.txt")
     if os.path.exists(norm_path):

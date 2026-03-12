@@ -37,6 +37,7 @@ FOV = 30
 # ==========================================
 
 def get_rays_simple(H, W, focal, c2w):
+    """根据相机位姿矩阵生成像素射线。"""
     i, j = torch.meshgrid(
         torch.arange(W, dtype=torch.float32, device=DEVICE),
         torch.arange(H, dtype=torch.float32, device=DEVICE),
@@ -48,6 +49,7 @@ def get_rays_simple(H, W, focal, c2w):
     return rays_o, rays_d
 
 def Robust_Mask_Rendering(raw, z_vals):
+    """将网络原始输出聚合为二维掩码图。"""
     dists = z_vals[..., 1:] - z_vals[..., :-1]
     last_dist = dists[..., -1:]
     dists = torch.cat([dists, last_dist], -1)
@@ -59,6 +61,7 @@ def Robust_Mask_Rendering(raw, z_vals):
     return acc_map
 
 def sample_stratified(rays_o, rays_d, near, far, n_samples):
+    """沿射线进行分层采样。"""
     t_vals = torch.linspace(0., 1., n_samples, device=DEVICE)
     z_vals = near * (1. - t_vals) + far * (t_vals)
     z_vals = z_vals.expand(list(rays_o.shape[:-1]) + [n_samples])
@@ -66,8 +69,15 @@ def sample_stratified(rays_o, rays_d, near, far, n_samples):
     return pts, z_vals
 
 def run_inference(model, action, rays_o, rays_d):
-    """
-    执行推理 (包含 Flatten/Reshape 修复)
+    """执行单帧推理（含分块前向与结果重塑）。
+
+    Args:
+        model: 已加载权重模型。
+        action: 当前时刻动作向量。
+        rays_o, rays_d: 射线起点与方向。
+
+    Returns:
+        img_pred: 预测图像，形状 (H, W)。
     """
     H, W = rays_o.shape[:2]
     rays_o_flat = rays_o.reshape(-1, 3)
@@ -103,6 +113,7 @@ def run_inference(model, action, rays_o, rays_d):
 # ==========================================
 
 def main():
+    """加载数据与模型，生成真实/动作/预测三联动可视化 GIF。"""
     print(f"Loading Model: {MODEL_PATH}")
     print(f"Loading Data: {DATA_PATH}")
 

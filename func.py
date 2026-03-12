@@ -12,7 +12,7 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(device)
 def rot_X(th: float) -> np.ndarray:
-    """Creates a 4x4 rotation matrix around the X-axis."""
+    """生成绕 X 轴旋转的 4x4 齐次矩阵。"""
     return np.array([
         [1, 0, 0, 0],
         [0, np.cos(th), -np.sin(th), 0],
@@ -21,7 +21,7 @@ def rot_X(th: float) -> np.ndarray:
     ])
 
 def rot_Y(th: float) -> np.ndarray:
-    """Creates a 4x4 rotation matrix around the Y-axis."""
+    """生成绕 Y 轴旋转的 4x4 齐次矩阵。"""
     return np.array([
         [np.cos(th), 0, -np.sin(th), 0],
         [0, 1, 0, 0],
@@ -30,7 +30,7 @@ def rot_Y(th: float) -> np.ndarray:
     ])
 
 def rot_Z(th: float) -> np.ndarray:
-    """Creates a 4x4 rotation matrix around the Z-axis."""
+    """生成绕 Z 轴旋转的 4x4 齐次矩阵。"""
     return np.array([
         [np.cos(th), -np.sin(th), 0, 0],
         [np.sin(th), np.cos(th), 0, 0],
@@ -40,6 +40,16 @@ def rot_Z(th: float) -> np.ndarray:
 
 
 def pts_trans_matrix_numpy(theta,phi,no_inverse=False):
+    """使用 NumPy 构造世界/相机变换矩阵。
+
+    Args:
+        theta: 偏航角（角度制）。
+        phi: 俯仰角（角度制）。
+        no_inverse: 为 True 返回正向矩阵，否则返回逆矩阵。
+
+    Returns:
+        4x4 齐次变换矩阵。
+    """
     # the coordinates in pybullet, camera is along X axis, but in the pts coordinates, the camera is along z axis
 
     w2c = transition_matrix("rot_z", -theta / 180. * np.pi)
@@ -50,6 +60,16 @@ def pts_trans_matrix_numpy(theta,phi,no_inverse=False):
 
 
 def pts_trans_matrix(theta, phi, no_inverse=False):
+    """使用 PyTorch 构造世界/相机变换矩阵。
+
+    Args:
+        theta: 偏航角（角度制）。
+        phi: 俯仰角（角度制）。
+        no_inverse: 为 True 返回正向矩阵，否则返回逆矩阵。
+
+    Returns:
+        4x4 的 torch 变换矩阵。
+    """
     # the coordinates in pybullet, camera is along X axis,
     # but in the pts coordinates, the camera is along z axis
 
@@ -100,6 +120,17 @@ def rays_np(H, W, D, c_h=1.106):
 
 
 def transfer_box(vbox, norm_angles, c_h=1.106, forward_flag=False):
+    """在相机坐标系与机械臂坐标系之间旋转体素采样点。
+
+    Args:
+        vbox: 体素网格，形状 (H, W, D, 3)。
+        norm_angles: 归一化角度。
+        c_h: 相机高度偏移。
+        forward_flag: True 表示静态机械臂/移动相机映射。
+
+    Returns:
+        (new_view_box, flatten_new_view_box)，分别为网格与展平点。
+    """
     vb_shape = vbox.shape
     flatten_box = vbox.reshape(vb_shape[0] * vb_shape[1] * vb_shape[2], 3)
     flatten_box[:, 2] -= c_h
@@ -127,6 +158,17 @@ def get_rays(
         width: int,
         focal_length: torch.Tensor
 ) -> Tuple[torch.Tensor, torch.Tensor]:
+    """按项目坐标约定生成每个像素的相机射线。
+
+    Args:
+        height: 图像高度。
+        width: 图像宽度。
+        focal_length: 焦距张量。
+
+    Returns:
+        rays_o: 射线起点，形状 (height*width, 3)。
+        rays_d: 射线方向，形状 (height*width, 3)。
+    """
     # Find origin and direction of rays through every pixel and camera origin.
 
     # Apply pinhole camera model to gather directions at each pixel
@@ -178,6 +220,22 @@ def sample_stratified(
         inverse_depth: bool = False
 ) -> Tuple[torch.Tensor, torch.Tensor]:
 
+    """沿射线均匀（或逆深度）采样三维点。
+
+    Args:
+        rays_o: 射线起点 (N_rays, 3)。
+        rays_d: 射线方向 (N_rays, 3)。
+        arm_angle: 预留参数（当前未使用）。
+        near/far: 采样近远边界。
+        n_samples: 每条射线采样数量。
+        perturb: 是否进行分层抖动采样。
+        inverse_depth: 是否按逆深度线性采样。
+
+    Returns:
+        pts: 采样点，形状 (N_rays, n_samples, 3)。
+        x_vals: 对应深度，形状 (N_rays, n_samples)。
+    """
+
     # Grab samples for space integration along ray
     t_vals = torch.linspace(0., 1., n_samples, device=rays_o.device)
     if not inverse_depth:
@@ -223,6 +281,19 @@ def VR_rendering(
         raw_noise_std: float = 0.0,
         white_bkgd: bool = False
 ) -> Tuple[torch.Tensor, torch.Tensor]:
+    """基于原始密度输出的简单体渲染累积。
+
+    Args:
+        raw: 网络原始输出，形状通常为 (N_rays, N_samples, C)。
+        x_vals: 采样深度（为接口兼容保留）。
+        rays_d: 射线方向（为接口兼容保留）。
+        raw_noise_std: 预留噪声参数。
+        white_bkgd: 预留背景参数。
+
+    Returns:
+        render_img: 累积结果，形状 (N_rays,)。
+        dense: 每采样点不透明度，形状 (N_rays, N_samples)。
+    """
 
     dense = 1.0 - torch.exp(-nn.functional.relu(raw[..., 0]))
 
@@ -237,6 +308,19 @@ def VRAT_rendering(
         raw_noise_std: float = 0.0,
         white_bkgd: bool = False
 ) -> Tuple[torch.Tensor, torch.Tensor]:
+    """带距离项的体渲染 alpha 计算。
+
+    Args:
+        raw: 网络原始输出。
+        x_vals: 每条射线上的采样深度。
+        rays_d: 用于距离缩放的射线方向。
+        raw_noise_std: 预留噪声参数。
+        white_bkgd: 预留背景参数。
+
+    Returns:
+        render_img: 累积 alpha，形状 (N_rays,)。
+        alpha_dense: 每采样点 alpha，形状 (N_rays, N_samples)。
+    """
 
     dists = x_vals[..., 1:] - x_vals[..., :-1]
 
@@ -254,13 +338,34 @@ def OM_rendering(
         raw: torch.Tensor
 ) -> Tuple[torch.Tensor, torch.Tensor]:
 
+    """NeRF-PINN 使用的不透明度调制渲染。
+
+    Args:
+        raw: 解码器输出，形状 (N_rays, N_samples, 2)，通道为 [可见性, 密度]。
+
+    Returns:
+        render_img: 累积像素值，形状 (N_rays,)。
+        alpha: 每采样点权重，形状 (N_rays, N_samples)。
+    """
+
     alpha = 1.0 - torch.exp(-nn.functional.relu(raw[..., 1]))
-    rgb_each_point = alpha*raw[..., 0]
+    rgb_each_point = alpha * raw[..., 0]
     render_img = torch.sum(rgb_each_point, dim=1)
 
     return render_img, alpha
 
 def OM_rendering_split_output(raw):
+    """输出可见性分量的不透明度调制渲染。
+
+    Args:
+        raw: 解码器输出，形状 (N_rays, N_samples, 2)，
+            通道为 [可见性, 密度]。
+
+    Returns:
+        render_img: 渲染结果。
+        alpha: alpha 权重。
+        visibility: 原始可见性通道。
+    """
     alpha = 1.0 - torch.exp(-nn.functional.relu(raw[..., 1]))
     rgb_each_point = alpha*raw[..., 0]
     render_img = torch.sum(rgb_each_point, dim=1)
@@ -273,9 +378,17 @@ def sample_pdf(
         n_samples: int,
         perturb: bool = False
 ) -> torch.Tensor:
-    r"""
-  Apply inverse transform sampling to a weighted set of points.
-  """
+    r"""基于权重分布执行逆变换采样。
+
+    Args:
+        bins: 采样分箱中心或边界，形状 (N_rays, N_bins)。
+        weights: 非负权重，形状 (N_rays, N_bins)。
+        n_samples: 每条射线新增采样数。
+        perturb: True 为随机采样，False 为确定性采样。
+
+    Returns:
+        重新采样深度，形状 (N_rays, n_samples)。
+    """
 
     # Normalize weights to get PDF.
     pdf = (weights + 1e-5) / torch.sum(weights + 1e-5, -1, keepdims=True)  # [n_rays, weights.shape[-1]]
@@ -326,9 +439,23 @@ def sample_hierarchical(
         angle: float = 1.,
         more_dof: bool = False
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    r"""
-  Apply hierarchical sampling to the rays.
-  """
+    r"""执行分层重采样并重建查询点。
+
+    Args:
+        rays_o: 射线起点。
+        rays_d: 射线方向。
+        z_vals: 粗采样深度。
+        weights: 粗采样权重。
+        n_samples: 细采样数量。
+        perturb: 是否随机采样。
+        angle: `more_dof` 开启时附加的角度值。
+        more_dof: 是否在点坐标后附加额外角度通道。
+
+    Returns:
+        pts: 合并后的采样点。
+        z_vals_combined: 合并并排序后的深度。
+        new_z_samples: 新增细采样深度。
+    """
 
     # Draw samples from PDF using z_vals as bins and weights as probabilities.
     z_vals_mid = .5 * (z_vals[..., 1:] + z_vals[..., :-1])
@@ -352,6 +479,15 @@ def prepare_chunks(
         points: torch.Tensor,
         chunksize: int = 2 ** 14
 ) -> List[torch.Tensor]:
+    """将查询点拆分为小块，避免推理显存溢出。
+
+    Args:
+        points: 输入点张量，最后一维为特征维。
+        chunksize: 每块最大点数。
+
+    Returns:
+        分块后的张量列表。
+    """
 
     points = points.reshape((-1, points.shape[-1]))
     points = [points[i:i + chunksize] for i in range(0, points.shape[0], chunksize)]
@@ -370,6 +506,25 @@ def model_forward(
         n_samples: int = 64,
         output_flag: int = 0
 ):
+    """执行从射线到渲染结果的完整 NeRF 风格前向。
+
+    Args:
+        rays_o: 射线起点。
+        rays_d: 射线方向。
+        near: 近裁剪面。
+        far: 远裁剪面。
+        model: 场函数网络。
+        arm_angle: 执行器控制量。
+        DOF: 使用的自由度数量。
+        chunksize: 网络查询分块大小。
+        n_samples: 每条射线采样数量。
+        output_flag: 渲染模式标志位。
+
+    Returns:
+        默认返回包含 `rgb_map`、`rgb_each_point`、`query_points` 的字典。
+        当 `output_flag == 3` 时返回元组
+        `(rgb_map, query_points, rgb_each_point, visibility)`。
+    """
 
     # Sample query points along each ray.
     query_points, z_vals = sample_stratified(
@@ -459,6 +614,12 @@ def transition_matrix_torch(label: str, value: torch.Tensor) -> torch.Tensor:
     return matrix
 
 def plot_3d_visual(x, y, z, if_transform=True):
+    """快速三维散点可视化工具。
+
+    Args:
+        x, y, z: 坐标（张量或 ndarray）。
+        if_transform: 是否先把张量转换为 NumPy。
+    """
     if if_transform:
         x = x.detach().cpu().numpy()
         y = y.detach().cpu().numpy()

@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from .layers import PositionalEncoder
+# from .layers import PositionalEncoder
 
 
 class FBV_SM(nn.Module):
@@ -49,6 +49,14 @@ class FBV_SM(nn.Module):
 			self.output.bias[1] = -5.0
 
 	def forward(self, x: torch.Tensor) -> torch.Tensor:
+		"""场查询网络前向推理。
+
+		Args:
+			x: 输入张量，形状 (N, d_input)，通常为 `[xyz, action...]`。
+
+		Returns:
+			输出张量，形状 (N, output_size)，常见为 `[visibility, density]`。
+		"""
 		if self.encoder is not None:
 			x_pos = self.encoder(x[:, :3])
 			x_cmd = self.encoder(x[:, 3:])

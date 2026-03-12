@@ -77,6 +77,18 @@ class SoftArmSimulator(BaseSystemCollection, Constraints, Forcing, CallBacks, Da
 # --- 5. 核心功能函数 ---
 
 def create_simulation(driving_params, total_steps=0, verbose=False):
+    """创建并配置一次软体臂仿真实例。
+
+    Args:
+        driving_params: 两个驱动扭矩分量。
+        total_steps: 总仿真步数（用于进度显示）。
+        verbose: 是否启用进度回调。
+
+    Returns:
+        (simulation, callback_data)
+        - simulation: 完成 finalize 的 SoftArmSimulator。
+        - callback_data: 记录位置与半径历史的字典。
+    """
     simulation = SoftArmSimulator()
     
     # 物理参数
@@ -137,6 +149,17 @@ def create_simulation(driving_params, total_steps=0, verbose=False):
     return simulation, callback_data
 
 def render_rod_as_image(position_data, radius_data, image_size=(100, 100), show_window=False):
+    """将杆体中心线与半径信息渲染为 RGB 图像。
+
+    Args:
+        position_data: 仿真输出的杆体位置集合。
+        radius_data: 杆体半径数组。
+        image_size: 输出图像分辨率。
+        show_window: 是否短暂显示可视化窗口。
+
+    Returns:
+        渲染后的 RGB 图像数组。
+    """
     points = position_data.T
     n_points = points.shape[0]
     cells = np.hstack((n_points, np.arange(n_points)))
@@ -169,8 +192,15 @@ def render_rod_as_image(position_data, radius_data, image_size=(100, 100), show_
     return img
 
 def get_simulation_data_pair(driving_params, verbose=True, visualize=False):
-    """
-    单次仿真接口 (非连续)
+    """执行一次仿真并返回二值观测图像。
+
+    Args:
+        driving_params: 本次仿真的驱动扭矩。
+        verbose: 是否输出日志。
+        visualize: 是否显示渲染窗口。
+
+    Returns:
+        (driving_params, binary_img)
     """
     final_time = 1.0
     dt = 1e-4
@@ -232,9 +262,7 @@ class ContinuousSoftArmEnv:
             )
 
     def set_action(self, driving_params):
-        """
-        更新当前的驱动参数 (不重置仿真，直接修改力)
-        """
+        """不重置仿真，原地更新当前驱动扭矩配置。"""
         n_elements = self.torque_force_cls.torque_profile.shape[1]
         new_profile = np.zeros((3, n_elements))
         new_profile[0, :] = driving_params[0]
@@ -243,9 +271,7 @@ class ContinuousSoftArmEnv:
         self.torque_force_cls.torque_profile[:] = new_profile
 
     def step(self, steps=1):
-        """
-        向前推进物理仿真 n 步
-        """
+        """推进物理积分器若干步。"""
         for _ in range(steps):
             # [关键修复] 使用显式参数调用 do_step
             self.current_time = self.timestepper.do_step(
@@ -258,8 +284,11 @@ class ContinuousSoftArmEnv:
             self.step_count += 1
 
     def get_observation(self):
-        """
-        获取当前的图像观察 (二值化) 和 真实驱动参数
+        """获取当前二值图像观测与驱动扭矩。
+
+        Returns:
+            binary_img: 阈值化渲染图像。
+            current_action: 当前扭矩，形状 (2,)。
         """
         # rod 是 simulation._systems 中的第一个对象
         soft_arm = self.simulation[0]

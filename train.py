@@ -12,15 +12,34 @@ def crop_center(
         img: torch.Tensor,
         frac: float = 0.5
 ) -> torch.Tensor:
-    r"""
-  Crop center square from image.
-  """
+    r"""按比例裁剪图像中心区域。
+
+    Args:
+        img: 输入图像张量。
+        frac: 裁剪比例，默认保留中心 50%。
+
+    Returns:
+        裁剪后的图像张量。
+    """
     h_offset = round(img.shape[0] * (frac / 2))
     w_offset = round(img.shape[1] * (frac / 2))
     return img[h_offset:-h_offset, w_offset:-w_offset]
 
 
 def init_models(d_input, d_filter, pretrained_model_pth=None, lr=5e-4, output_size=2,FLAG_PositionalEncoder = False):
+    """初始化模型与优化器。
+
+    Args:
+        d_input: 模型输入维度。
+        d_filter: 隐层通道数。
+        pretrained_model_pth: 预训练权重目录（可选）。
+        lr: 学习率。
+        output_size: 输出维度。
+        FLAG_PositionalEncoder: 是否启用位置编码。
+
+    Returns:
+        (model, optimizer)
+    """
 
     if FLAG_PositionalEncoder:
         encoder = PositionalEncoder(d_input, n_freqs=10, log_space=True)
@@ -47,6 +66,15 @@ def init_models(d_input, d_filter, pretrained_model_pth=None, lr=5e-4, output_si
 
 
 def train(model, optimizer):
+    """执行主训练循环并周期验证。
+
+    Args:
+        model: 待训练模型。
+        optimizer: 优化器。
+
+    Returns:
+        bool: 训练是否正常完成；若触发重启条件返回 False。
+    """
 
     loss_v_last = np.inf
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.1, patience=20, verbose=True)

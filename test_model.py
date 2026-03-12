@@ -9,6 +9,16 @@ from torch import nn
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def test_model( angle_tensor,model,  save_offline_data=False):
+    """给定关节角，查询模型并返回占据点云坐标。
+
+    Args:
+        angle_tensor: 关节角张量。
+        model: 已加载权重的模型。
+        save_offline_data: 是否保存离线数据（当前未启用）。
+
+    Returns:
+        np.ndarray: 变换到世界坐标后的占据点云 (N, 3)。
+    """
     print('angle: ', angle_tensor)
     DOF = len(angle_tensor)
     rays_o, rays_d = get_rays(height, width, focal)
@@ -81,6 +91,12 @@ def test_model( angle_tensor,model,  save_offline_data=False):
     return query_xyz
 
 def query_models_separated_outputs( angle, model, DOF, n_samples = 64):
+    """查询模型分离输出（密度与可见性）并提取点云。
+
+    Returns:
+        occ_points_xyz_density: 按密度阈值筛选的点云。
+        occ_points_xyz_visibility: 在密度基础上叠加可见性筛选后的点云。
+    """
 
     rays_o, rays_d = get_rays(height, width, focal)
     rays_o = rays_o.reshape([-1, 3]).to(device)
@@ -118,6 +134,15 @@ def query_models_separated_outputs( angle, model, DOF, n_samples = 64):
     return occ_points_xyz_density,occ_points_xyz_visibility
 
 def query_models( angle, model, DOF, mean_ee = False, n_samples = 64):
+    """查询模型标准输出并返回点云或末端中心。
+
+    Args:
+        angle: 当前关节角。
+        model: 模型实例。
+        DOF: 自由度数量。
+        mean_ee: True 时返回加权中心点；否则返回全部点云。
+        n_samples: 每条射线采样点数量。
+    """
 
     rays_o, rays_d = get_rays(height, width, focal)
     rays_o = rays_o.reshape([-1, 3]).to(device)
@@ -163,6 +188,7 @@ def query_models( angle, model, DOF, mean_ee = False, n_samples = 64):
 
 
 def interaction(data_pth, angle_list):
+    """通过滑条交互方式查看角度对应的数据图像。"""
     def call_back_func(x):
         pass
 

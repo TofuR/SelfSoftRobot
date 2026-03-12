@@ -21,6 +21,18 @@ print(f"Training on device: {device}")
 # 1. 基础工具
 # ==========================================
 def get_rays_from_camera_params(H, W, focal, eye, center, up):
+    """根据相机参数计算每个像素对应射线。
+
+    Args:
+        H, W: 图像尺寸。
+        focal: 焦距。
+        eye: 相机位置。
+        center: 注视点。
+        up: 上方向。
+
+    Returns:
+        (rays_o, rays_d)，形状为 (H*W, 3)。
+    """
     eye = torch.tensor(eye, dtype=torch.float32, device=device)
     center = torch.tensor(center, dtype=torch.float32, device=device)
     up = torch.tensor(up, dtype=torch.float32, device=device)
@@ -46,6 +58,7 @@ def get_rays_from_camera_params(H, W, focal, eye, center, up):
 # 2. 改进的数据集 (自动归一化)
 # ==========================================
 class SoftSequenceDataset(Dataset):
+    """序列数据集，支持动作归一化并提供可视化所需原始动作。"""
     def __init__(self, data_dir, seq_len=10, file_list=None, norm_factor=None):
         self.seq_len = seq_len
         self.samples = []
@@ -86,6 +99,15 @@ class SoftSequenceDataset(Dataset):
     def __len__(self): return len(self.samples)
 
     def __getitem__(self, idx):
+        """读取一条训练样本。
+
+        Args:
+            idx: 样本索引。
+
+        Returns:
+            input_seq: 动作窗口 (seq_len, action_dim)
+            target_image_flat: 目标图像展平 (H*W,)
+        """
         seq_id, t = self.samples[idx]
         data = self.data_cache[seq_id]
         actions_full = data['actions']
@@ -109,6 +131,7 @@ class SoftSequenceDataset(Dataset):
 # 3. 训练主程序
 # ==========================================
 def train_seq_vis():
+    """训练带可视化输出的序列模型并定期导出 GIF。"""
     DATA_DIR = "data/sequence_data"
     SEQ_LEN = 40            
     BATCH_SIZE = 4
@@ -161,8 +184,13 @@ def train_seq_vis():
 
     # --- 4. 核心渲染 (适配新模型接口) ---
     def run_batch(batch_actions):
-        """
-        batch_actions: (B, T, D)
+        """对一个 batch 执行分块渲染前向。
+
+        Args:
+            batch_actions: (B, T, D) 动作序列。
+
+        Returns:
+            预测图像展平张量 (B, H*W)。
         """
         curr_bs = batch_actions.shape[0]
         
@@ -205,6 +233,7 @@ def train_seq_vis():
 
     # --- 5. 验证可视化逻辑 ---
     def evaluate_and_save_gif(epoch_idx):
+        """在验证集上评估并保存当前 epoch 的可视化 GIF。"""
         print(f"Generating GIF for Epoch {epoch_idx}...")
         model.eval()
         pred_frames = []
