@@ -29,7 +29,8 @@ class PositionalEncoder(nn.Module):
 class TemporalLSTMEncoder(nn.Module):
 	"""通用的时序编码器：
 	- 默认返回最后一层的最后时间步隐状态 (Batch, Hidden_Dim)
-	- 如需完整输出，可设置 return_all=True，得到 (output, (h_n, c_n)) 与原生 LSTM 对齐。
+	- 如需完整输出，可设置 return_sequence=True，得到 (Batch, Seq_Len, Hidden_Dim)
+	- 如需与原生 LSTM 结果对齐，可设置 return_all=True，得到 (output, (h_n, c_n))
 	forward 输入形状: (Batch, Seq_Len, Input_Dim)
 	forward 输出形状: (Batch, Hidden_Dim)
 	"""
@@ -43,10 +44,15 @@ class TemporalLSTMEncoder(nn.Module):
 			dropout=dropout if num_layers > 1 else 0.0,
 		)
 
-	def forward(self, seq, return_all: bool = False):
+	def forward(self, seq, return_all: bool = False, return_sequence: bool = False):
+		if return_all and return_sequence:
+			raise ValueError("return_all and return_sequence cannot both be True")
+
 		output, (h_n, c_n) = self.lstm(seq)
 		if return_all:
 			return output, (h_n, c_n)
+		if return_sequence:
+			return output
 		return h_n[-1]
 
 

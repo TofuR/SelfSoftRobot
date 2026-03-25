@@ -133,7 +133,7 @@ def train_v4():
     N_EPOCHS = 50
     VIS_INTERVAL = 5
     LAMBDA_PHY = 0.1 # 物理平滑损失权重
-    LOG_DIR = "train_log_v4"
+    LOG_DIR = os.path.join("train_log", "train_log_v4")
     
     os.makedirs(os.path.join(LOG_DIR, "model"), exist_ok=True)
     os.makedirs(os.path.join(LOG_DIR, "vis"), exist_ok=True)

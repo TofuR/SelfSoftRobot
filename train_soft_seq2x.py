@@ -1,5 +1,6 @@
 import os
 import glob
+from matplotlib import animation
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -7,8 +8,9 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 
 # 导入
-from func import OM_rendering
+from src.utils.rendering import OM_rendering
 from src.models import model_v1
+from src.utils.camera import get_rays
 
 # --- 全局设置 ---
 CUDA_DEVICE = 2
@@ -17,16 +19,11 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Training on device: {device}")
 
 # --- 重新定义 get_rays 以避免 import 问题 ---
-def get_rays(height, width, focal_length):
+def get_rays_simple(height, width, focal_length):
     """生成相机射线（简化版）。
 
-    Args:
-        height: 图像高。
-        width: 图像宽。
-        focal_length: 焦距。
-
-    Returns:
-        (rays_o, rays_d)，形状均为 (H*W, 3)。
+    保留本地简化实现（项目中多处使用该简化接口），但改名为
+    `get_rays_simple` 以避免与统一的 `get_rays` 名称冲突。
     """
     i, j = torch.meshgrid(
         torch.arange(width, dtype=torch.float32, device=device),
@@ -47,7 +44,7 @@ def get_rays(height, width, focal_length):
     rays_d = torch.matmul(rays_d, rotation_matrix)
     return rays_o.reshape(-1, 3), rays_d.reshape(-1, 3)
 
-def get_rays_from_camera_params(H, W, focal, eye, center, up):
+def get_rays(H, W, focal, eye, center, up):
     """根据相机位姿参数生成世界坐标系射线。
 
     Args:
@@ -148,7 +145,7 @@ def train_seq():
     BATCH_SIZE = 8
     LR = 1e-5
     N_EPOCHS = 50
-    LOG_DIR = "train_log_softseq/experiment_1"
+    LOG_DIR = os.path.join("train_log", "train_log_softseq", "experiment_1")
     os.makedirs(os.path.join(LOG_DIR, "model"), exist_ok=True)
     os.makedirs(os.path.join(LOG_DIR, "vis"), exist_ok=True)
 
@@ -168,7 +165,7 @@ def train_seq():
     CAM_EYE = (1.5, 0.0, 0.5)
     CAM_CENTER = (0.0, 0.0, 0.25)
     CAM_UP = (0.0, 0.0, 1.0)
-    rays_o, rays_d = get_rays_from_camera_params(train_ds.H, train_ds.W, torch.tensor(train_ds.focal).to(device), CAM_EYE, CAM_CENTER, CAM_UP)
+    rays_o, rays_d = get_rays(train_ds.H, train_ds.W, torch.tensor(train_ds.focal).to(device), CAM_EYE, CAM_CENTER, CAM_UP, device=device)
     rays_o, rays_d = rays_o.reshape(-1, 3), rays_d.reshape(-1, 3)
     
     NEAR, FAR = 0.5, 2.5
@@ -256,16 +253,57 @@ def train_seq():
                 v_pred = run_batch(v_input)
                 loss = criterion(v_pred, v_target)
                 val_loss += loss.item()
+                break  # 只计算一个 batch 的损失
+            
+            if epoch % 5 == 0:
+                # 生成验证 GIF
+                val_data = val_ds.data_cache[0]  # 取第一个验证序列
+                seq_length = val_data['length']
                 
-                if epoch % 5 == 0:
-                    pred_vis = v_pred[0].reshape(train_ds.H, train_ds.W).cpu().numpy()
-                    gt_vis = v_target[0].reshape(train_ds.H, train_ds.W).cpu().numpy()
-                    plt.figure(figsize=(6, 3))
-                    plt.subplot(1, 2, 1); plt.imshow(gt_vis, cmap='gray'); plt.title("GT")
-                    plt.subplot(1, 2, 2); plt.imshow(pred_vis, cmap='gray'); plt.title("Pred")
-                    plt.savefig(os.path.join(LOG_DIR, "vis", f"epoch_{epoch}_val.png"))
-                    plt.close()
-                break # 验证只跑一个 batch
+                gt_imgs = []
+                pred_imgs = []
+                
+                for t in range(seq_length):
+                    # 构建输入序列
+                    seq_len = val_ds.seq_len
+                    start = max(0, t - seq_len + 1)
+                    actions_seq = val_data['actions'][start:t+1]
+                    if len(actions_seq) < seq_len:
+                        pad = np.zeros((seq_len - len(actions_seq), val_ds.action_dim))
+                        actions_seq = np.concatenate([pad, actions_seq], axis=0)
+                    
+                    input_seq = torch.from_numpy(actions_seq).float().unsqueeze(0).to(device)
+                    target_img = torch.from_numpy(val_data['images'][t]).float().unsqueeze(0).to(device)
+                    
+                    # 预测
+                    pred_img_flat = run_batch(input_seq)
+                    pred_img = pred_img_flat[0].reshape(val_ds.H, val_ds.W).cpu().numpy()
+                    gt_img = target_img[0].reshape(val_ds.H, val_ds.W).cpu().numpy()
+                    
+                    gt_imgs.append(gt_img)
+                    pred_imgs.append(pred_img)
+                
+                # 生成 GIF
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 4))
+                ax1.set_title("Ground Truth")
+                ax2.set_title("Prediction")
+                ax1.axis('off'); ax2.axis('off')
+                
+                im1 = ax1.imshow(gt_imgs[0], cmap='gray', vmin=0, vmax=1)
+                im2 = ax2.imshow(pred_imgs[0], cmap='gray', vmin=0, vmax=1)
+                
+                def update(frame):
+                    im1.set_data(gt_imgs[frame])
+                    im2.set_data(pred_imgs[frame])
+                    ax1.set_title(f"GT (Frame {frame})")
+                    ax2.set_title(f"Pred (Frame {frame})")
+                    return im1, im2
+                
+                ani = animation.FuncAnimation(fig, update, frames=len(gt_imgs), blit=True)
+                save_path = os.path.join(LOG_DIR, "vis", f"epoch_{epoch}_val.gif")
+                ani.save(save_path, writer='pillow', fps=10)
+                plt.close()
+                print(f"    Saved validation GIF to {save_path}")
         
         print(f"Epoch {epoch+1} | Train Loss: {avg_train_loss:.6f} | Val Loss: {val_loss:.6f}")
         torch.save(model.state_dict(), os.path.join(LOG_DIR, "model", "best_seq_model.pt"))

@@ -14,7 +14,8 @@ os.environ["CUDA_VISIBLE_DEVICES"] = str(CUDA_DEVICE)
 # 复用现有的模型定义
 from src.models import FBV_SM, PositionalEncoder
 # [修改] 仅导入渲染相关函数，get_rays 使用本地修复版
-from func import prepare_chunks, OM_rendering
+from func import prepare_chunks
+from src.utils.rendering import OM_rendering
 
 # 设置设备
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -66,7 +67,7 @@ def get_rays(height: int, width: int, focal_length: torch.Tensor):
     return rays_o, rays_d
 
 
-def get_rays_from_camera_params(H, W, focal, eye, center, up):
+def get_rays(H, W, focal, eye, center, up):
     """
     根据相机参数 (Eye, Center, Up) 生成世界坐标系下的射线。
     完全匹配 PyVista/VTK 的渲染逻辑。
@@ -271,7 +272,7 @@ def train():
     """
     # --- 参数配置 ---
     DATA_DIR = "data/sequence_data"
-    LOG_DIR = "train_log_soft/experiment_3"
+    LOG_DIR = os.path.join("train_log", "train_log_soft", "experiment_3")
     os.makedirs(os.path.join(LOG_DIR, "image"), exist_ok=True)
     os.makedirs(os.path.join(LOG_DIR, "model"), exist_ok=True)
     
@@ -328,8 +329,8 @@ def train():
     print(f"Generating rays for Camera: Eye={CAM_EYE}, Center={CAM_CENTER}")
     
     # 调用新函数
-    # 注意：get_rays_from_camera_params 内部会自动处理 device，只要传入的 focal 在 GPU 上
-    rays_o, rays_d = get_rays_from_camera_params(H, W, focal, CAM_EYE, CAM_CENTER, CAM_UP)
+    # 注意：`get_rays` 内部会自动处理 device，只要传入的 focal 在 GPU 上
+    rays_o, rays_d = get_rays(H, W, focal, CAM_EYE, CAM_CENTER, CAM_UP)
     
     # 确保射线在正确的设备上
     rays_o = rays_o.to(device)

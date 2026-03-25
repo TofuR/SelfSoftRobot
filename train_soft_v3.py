@@ -5,6 +5,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import cv2
@@ -13,7 +15,7 @@ import cv2
 from model_seq_skip_pinn import model_v3
 
 # --- 全局设置 ---
-CUDA_DEVICE = 0
+CUDA_DEVICE = 3
 os.environ["CUDA_VISIBLE_DEVICES"] = str(CUDA_DEVICE)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Training V3 on device: {device}")
@@ -117,7 +119,7 @@ def train_v3():
     N_EPOCHS = 50
     VIS_INTERVAL = 5
     LAMBDA_PHY = 0.1 # 物理损失权重
-    LOG_DIR = "train_log_v3"
+    LOG_DIR = os.path.join("train_log", "train_log_v3")
     
     os.makedirs(os.path.join(LOG_DIR, "model"), exist_ok=True)
     os.makedirs(os.path.join(LOG_DIR, "vis"), exist_ok=True)

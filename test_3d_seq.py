@@ -189,7 +189,7 @@ class ResultVisualizer:
         print(f"GIF Saved to {filename}")
 
 if __name__ == "__main__":
-    LOG_DIR = "train_log_seq_vis/experiment_2" 
+    LOG_DIR = os.path.join("train_log", "train_log_seq_vis", "experiment_2") 
     data_dir = "data/sequence_data"
     seq_files = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
     if not seq_files:

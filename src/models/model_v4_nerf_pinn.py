@@ -16,6 +16,9 @@ class NeRF_PINN(nn.Module):
     def __init__(self, action_dim, seq_len, hidden_dim=128):
         super().__init__()
         
+        self.action_dim = action_dim
+        self.seq_len = seq_len
+        
         # --- A. 静态结构记忆 (Static Structure Memory) ---
         # 这是一个只与坐标有关的 MLP，用于记忆机器人的"本体"
         # 它不接受动作输入，只接受坐标，保证了对物体结构的"记忆"

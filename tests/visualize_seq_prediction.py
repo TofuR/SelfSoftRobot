@@ -19,7 +19,8 @@ if project_root not in sys.path:
 # 现在可以正常导入根目录下的模块了
 try:
     from src.models import model_v2
-    from func import OM_rendering
+    from src.utils.rendering import OM_rendering
+    from src.utils.camera import get_rays
 except ImportError as e:
     print(f"导入错误: {e}")
     print(f"当前 sys.path: {sys.path}")
@@ -36,35 +37,7 @@ print(f"Running visualization on: {DEVICE}")
 #  核心辅助函数
 # ==========================================
 
-def get_rays_from_camera_params(H, W, focal, eye, center, up):
-    """生成相机射线（与训练配置保持一致）。"""
-    eye = torch.tensor(eye, dtype=torch.float32, device=DEVICE)
-    center = torch.tensor(center, dtype=torch.float32, device=DEVICE)
-    up = torch.tensor(up, dtype=torch.float32, device=DEVICE)
-    
-    view_dir = center - eye
-    view_dir = view_dir / torch.norm(view_dir)
-    # 使用 linalg.cross 避免警告
-    right = torch.linalg.cross(view_dir, up)
-    right = right / torch.norm(right)
-    true_up = torch.linalg.cross(right, view_dir)
-    true_up = true_up / torch.norm(true_up)
-    
-    i, j = torch.meshgrid(
-        torch.arange(W, dtype=torch.float32, device=DEVICE),
-        torch.arange(H, dtype=torch.float32, device=DEVICE),
-        indexing='ij'
-    )
-    
-    dir_x = (i - W * 0.5) / focal
-    dir_y = -(j - H * 0.5) / focal
-    dir_z = torch.ones_like(dir_x)
-    
-    rays_d = (dir_x[..., None] * right + dir_y[..., None] * true_up + dir_z[..., None] * view_dir)
-    rays_d = rays_d / torch.norm(rays_d, dim=-1, keepdim=True)
-    rays_o = eye.expand_as(rays_d)
-    
-    return rays_o.reshape(-1, 3), rays_d.reshape(-1, 3)
+# use centralized get_rays from src.utils.camera
 
 def run_inference_frame(model, action_window, current_act, rays_o, rays_d, n_samples=64, near=0.5, far=2.5):
     """执行单帧序列推理。
@@ -170,9 +143,9 @@ def visualize(seq_file_path, model_dir, output_gif="seq_vis_result.gif"):
     CAM_CENTER = (0.0, 0.0, 0.25)
     CAM_UP = (0.0, 0.0, 1.0)
     
-    rays_o, rays_d = get_rays_from_camera_params(
+    rays_o, rays_d = get_rays(
         H, W, torch.tensor(focal).to(DEVICE), 
-        CAM_EYE, CAM_CENTER, CAM_UP
+        CAM_EYE, CAM_CENTER, CAM_UP, device=DEVICE
     )
     rays_o = rays_o.reshape(-1, 3)
     rays_d = rays_d.reshape(-1, 3)
@@ -282,7 +255,7 @@ if __name__ == "__main__":
     # --- 用户配置区 ---
     
     # 指向训练日志目录 (请根据实际情况修改 experiment_X)
-    LOG_DIR = os.path.join(project_root, "train_log_seq_vis/experiment_2") 
+    LOG_DIR = os.path.join(project_root, "train_log", "train_log_seq_vis", "experiment_2") 
     
     # 指向数据目录
     DATA_DIR = os.path.join(project_root, "data/sequence_data")

@@ -8,8 +8,9 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
 # 导入
-from func import OM_rendering
+from src.utils.rendering import OM_rendering
 from src.models import model_v2 # <--- 导入新模型
+from src.utils.camera import get_rays
 
 # --- 全局设置 ---
 CUDA_DEVICE = 3
@@ -20,39 +21,7 @@ print(f"Training on device: {device}")
 # ==========================================
 # 1. 基础工具
 # ==========================================
-def get_rays_from_camera_params(H, W, focal, eye, center, up):
-    """根据相机参数计算每个像素对应射线。
-
-    Args:
-        H, W: 图像尺寸。
-        focal: 焦距。
-        eye: 相机位置。
-        center: 注视点。
-        up: 上方向。
-
-    Returns:
-        (rays_o, rays_d)，形状为 (H*W, 3)。
-    """
-    eye = torch.tensor(eye, dtype=torch.float32, device=device)
-    center = torch.tensor(center, dtype=torch.float32, device=device)
-    up = torch.tensor(up, dtype=torch.float32, device=device)
-    view_dir = center - eye
-    view_dir = view_dir / torch.norm(view_dir)
-    right = torch.linalg.cross(view_dir, up)
-    right = right / torch.norm(right)
-    true_up = torch.linalg.cross(right, view_dir)
-    true_up = true_up / torch.norm(true_up)
-    i, j = torch.meshgrid(
-        torch.arange(W, dtype=torch.float32, device=device),
-        torch.arange(H, dtype=torch.float32, device=device),
-        indexing='ij')
-    dir_x = (i - W * 0.5) / focal
-    dir_y = -(j - H * 0.5) / focal
-    dir_z = torch.ones_like(dir_x)
-    rays_d = (dir_x[..., None] * right + dir_y[..., None] * true_up + dir_z[..., None] * view_dir)
-    rays_d = rays_d / torch.norm(rays_d, dim=-1, keepdim=True)
-    rays_o = eye.expand_as(rays_d)
-    return rays_o.reshape(-1, 3), rays_d.reshape(-1, 3)
+# use centralized get_rays from src.utils.camera
 
 # ==========================================
 # 2. 改进的数据集 (自动归一化)
@@ -138,7 +107,7 @@ def train_seq_vis():
     LR = 5e-4  # 稍微调高一点学习率
     N_EPOCHS = 50
     VIS_INTERVAL = 1        
-    LOG_DIR = "train_log_seq_vis/experiment_2"
+    LOG_DIR = os.path.join("train_log", "train_log_seq_vis", "experiment_2")
     
     os.makedirs(os.path.join(LOG_DIR, "model"), exist_ok=True)
     os.makedirs(os.path.join(LOG_DIR, "vis"), exist_ok=True)
@@ -147,7 +116,6 @@ def train_seq_vis():
     all_files = sorted(glob.glob(os.path.join(DATA_DIR, "*.npz")))
     train_files = all_files[:-1]
     val_files = [all_files[-1]]
-    
     # 2. 初始化数据集 (自动计算 Norm)
     train_ds = SoftSequenceDataset(DATA_DIR, seq_len=SEQ_LEN, file_list=train_files)
     # 验证集使用训练集的 Norm 参数，保证一致性
@@ -173,9 +141,9 @@ def train_seq_vis():
     CAM_EYE = (1.5, 0.0, 0.5)
     CAM_CENTER = (0.0, 0.0, 0.25)
     CAM_UP = (0.0, 0.0, 1.0)
-    rays_o, rays_d = get_rays_from_camera_params(
+    rays_o, rays_d = get_rays(
         train_ds.H, train_ds.W, torch.tensor(train_ds.focal).to(device), 
-        CAM_EYE, CAM_CENTER, CAM_UP
+        CAM_EYE, CAM_CENTER, CAM_UP, device=device
     )
     rays_o, rays_d = rays_o.reshape(-1, 3), rays_d.reshape(-1, 3)
     
