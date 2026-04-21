@@ -1,16 +1,21 @@
 import os
+import sys
 import glob
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+
+# 确保项目根目录在 sys.path 中
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 # 导入
 from src.utils.rendering import OM_rendering
 from src.models import model_v2 # <--- 导入新模型
 from src.utils.camera import get_rays
+from src.data.dataset import SoftSequenceDataset
 
 # --- 全局设置 ---
 CUDA_DEVICE = 3
@@ -24,80 +29,7 @@ print(f"Training on device: {device}")
 # use centralized get_rays from src.utils.camera
 
 # ==========================================
-# 2. 改进的数据集 (自动归一化)
-# ==========================================
-class SoftSequenceDataset(Dataset):
-    """序列数据集，支持动作归一化并提供可视化所需原始动作。"""
-    def __init__(self, data_dir, seq_len=10, file_list=None, norm_factor=None):
-        self.seq_len = seq_len
-        self.samples = []
-        
-        if file_list is None:
-            file_list = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
-        
-        # [修改] 预扫描计算归一化系数
-        if norm_factor is None:
-            all_acts = []
-            print("Scanning data for normalization...")
-            for f in file_list:
-                d = np.load(f)
-                all_acts.append(d['actions'])
-            all_acts = np.concatenate(all_acts, axis=0)
-            self.norm_factor = np.max(np.abs(all_acts))
-            if self.norm_factor == 0: self.norm_factor = 1.0
-            print(f"Auto-calculated Normalization Factor: {self.norm_factor}")
-        else:
-            self.norm_factor = norm_factor
-
-        print(f"Loading {len(file_list)} sequence files...")
-        self.data_cache = []
-        for f_path in file_list:
-            raw = np.load(f_path)
-            # 使用正确的系数归一化
-            actions = raw['actions'] / self.norm_factor
-            self.data_cache.append({'images': raw['images'], 'actions': actions, 'length': len(raw['images'])})
-            
-        for seq_id, item in enumerate(self.data_cache):
-            for t in range(item['length']):
-                self.samples.append((seq_id, t))
-                
-        self.H, self.W = self.data_cache[0]['images'].shape[1:]
-        self.action_dim = self.data_cache[0]['actions'].shape[1]
-        self.focal = float(raw.get('focal', 130.0))
-
-    def __len__(self): return len(self.samples)
-
-    def __getitem__(self, idx):
-        """读取一条训练样本。
-
-        Args:
-            idx: 样本索引。
-
-        Returns:
-            input_seq: 动作窗口 (seq_len, action_dim)
-            target_image_flat: 目标图像展平 (H*W,)
-        """
-        seq_id, t = self.samples[idx]
-        data = self.data_cache[seq_id]
-        actions_full = data['actions']
-        target_image = data['images'][t]
-        
-        start_idx, end_idx = t - self.seq_len + 1, t + 1
-        if start_idx >= 0:
-            input_seq = actions_full[start_idx:end_idx]
-        else:
-            valid_part = actions_full[0:end_idx]
-            padding = np.zeros((self.seq_len - len(valid_part), self.action_dim), dtype=valid_part.dtype)
-            input_seq = np.concatenate([padding, valid_part], axis=0)
-            
-        return torch.from_numpy(input_seq).float(), torch.from_numpy(target_image).float().reshape(-1)
-
-    def get_raw_actions(self, seq_id=0):
-        # 返回未归一化的原始动作，用于绘图
-        return self.data_cache[seq_id]['actions'] * self.norm_factor
-
-# ==========================================
-# 3. 训练主程序
+# 2. 训练主程序
 # ==========================================
 def train_seq_vis():
     """训练带可视化输出的序列模型并定期导出 GIF。"""

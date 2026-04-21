@@ -4,6 +4,9 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import os
 
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
 def save_as_gif(npz_path, output_gif="preview.gif"):
     data = np.load(npz_path)
     images = data['images']

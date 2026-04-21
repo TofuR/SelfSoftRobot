@@ -11,6 +11,9 @@ from tqdm import tqdm
 from src.models import model_v2
 from elastica_env import ContinuousSoftArmEnv, SimpleDistributedTorque
 
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
 # --- 全局设置 ---
 CUDA_DEVICE = 3
 os.environ["CUDA_VISIBLE_DEVICES"] = str(CUDA_DEVICE)

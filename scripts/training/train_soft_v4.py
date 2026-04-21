@@ -1,13 +1,16 @@
 import os
+import sys
 import glob
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import cv2
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 # 导入 V4 模型
 from src.models.model_seq_open_loop import RecurrentPhysicsModel

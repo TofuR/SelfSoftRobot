@@ -2,6 +2,8 @@ import numpy as np
 import os
 import time
 from tqdm import tqdm
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from elastica_env import ContinuousSoftArmEnv # 导入刚才添加的类
 
 def generate_random_walk_actions(seq_length, dim=2, min_val=-0.005, max_val=0.005, step_size=0.001):

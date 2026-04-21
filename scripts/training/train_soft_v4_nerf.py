@@ -1,16 +1,18 @@
 import os
+import sys
 import glob
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
-# 导入
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
 from func import OM_rendering
 from src.models import model_v4_nerf_pinn as model_module
 from src.utils.camera import get_rays

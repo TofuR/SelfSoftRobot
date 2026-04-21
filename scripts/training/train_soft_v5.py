@@ -1,12 +1,15 @@
 import os
+import sys
 import glob
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 # 导入
 from src.utils.rendering import OM_rendering

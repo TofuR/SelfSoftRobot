@@ -4,6 +4,8 @@ from matplotlib.widgets import Slider, Button
 import sys
 import os
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
 def view_dataset(file_path):
     # 1. 加载数据
     if not os.path.exists(file_path):

@@ -5,9 +5,15 @@ import cv2
 import os
 
 # 导入 PyElastica 和 环境配置
-from elastica_env import create_simulation, render_rod_as_image
+from elastica_env import (
+    create_simulation, render_rod_as_image,
+    CAMERA_EYE, CAMERA_CENTER, CAMERA_UP,
+)
 from elastica.timestepper.symplectic_steppers import PositionVerlet
 from elastica.timestepper import integrate
+
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 def get_camera_matrix(eye, center, up):
     """
@@ -93,11 +99,9 @@ def run_verification(driving_params):
     pos_3d = callback_data["position"][-1]
     radius_data = callback_data["radius"][-1]
     
-    # 2. 生成实际渲染图 (用于对比)
-    # 参数需与 elastica_env.py 中一致
-    cam_eye = np.array([1.0, 0.0, 0.5])
-    cam_center = np.array([0.0, 0.0, 0.25])
-    cam_up = np.array([0.0, 0.0, 1.0])
+    cam_eye = np.array(CAMERA_EYE)
+    cam_center = np.array(CAMERA_CENTER)
+    cam_up = np.array(CAMERA_UP)
     
     rgb_img = render_rod_as_image(pos_3d, radius_data, image_size=(300, 300), show_window=False)
     

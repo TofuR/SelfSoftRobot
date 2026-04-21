@@ -1,9 +1,10 @@
 import os
+import sys
 import glob
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 import matplotlib
 matplotlib.use('Agg')
@@ -11,8 +12,9 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import cv2
 
-# 导入模型 (请确保文件名正确)
-from model_seq_skip_pinn import model_v3
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
+from src.models.model_seq_skip_pinn import model_v3
 
 # --- 全局设置 ---
 CUDA_DEVICE = 3

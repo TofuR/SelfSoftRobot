@@ -2,6 +2,8 @@ import numpy as np
 import cv2
 import os
 import time
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from elastica_env import get_simulation_data_pair  # 导入我们刚才写好的仿真环境
 
 def run_debug_check():
