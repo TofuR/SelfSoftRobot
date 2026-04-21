@@ -93,3 +93,42 @@ class SoftSequenceDataset(Dataset):
     
     def get_raw_actions(self, seq_id=0):
         return self.data_cache[seq_id]['actions'] * self.norm_factor
+
+
+def load_soft_data(data_dir):
+    """加载并合并目录下所有 .npz 数据文件。
+
+    Args:
+        data_dir: 包含 `images` 与 `actions` 字段的 .npz 文件目录。
+
+    Returns:
+        images: 图像数组，形状 (N, H, W) 或 (N, H, W, C)。
+        actions: 动作数组，形状 (N, action_dim)。
+        focal: 焦距（float）。
+    """
+    files = glob.glob(os.path.join(data_dir, "*.npz"))
+    if not files:
+        raise FileNotFoundError(f"No .npz files found in {data_dir}")
+
+    print(f"Found {len(files)} data files. Loading...")
+
+    all_images = []
+    all_actions = []
+    focal = None
+
+    for f in sorted(files):
+        data = np.load(f)
+        all_images.append(data['images'])
+        all_actions.append(data['actions'])
+        if focal is None and 'focal' in data:
+            focal = float(data['focal'])
+
+    images = np.concatenate(all_images, axis=0)
+    actions = np.concatenate(all_actions, axis=0)
+
+    if focal is None or focal == 1.0:
+        height, width = images.shape[1:3]
+        focal = 0.5 * width / np.tan(0.5 * 30 * np.pi / 180)
+        print(f"Warning: Using calculated focal length: {focal}")
+
+    return images, actions, float(focal)
