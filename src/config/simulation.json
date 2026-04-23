@@ -1,0 +1,40 @@
+{
+    "_doc": "PyElastica 仿真环境参数。定义软体杆的物理属性和仿真行为。",
+
+    "rod": {
+        "n_elements": 30,
+        "base_length": 0.5,
+        "base_radius": 0.015,
+        "density": 1000.0,
+        "youngs_modulus": 1000000.0,
+        "poisson_ratio": 0.5,
+        "_doc": "CosseratRod 参数。youngs_modulus=1MPa 对应软硅胶，density=1000 对应水密度级别"
+    },
+
+    "damping": {
+        "constant": 0.1,
+        "ramp_up_time": 0.5,
+        "_doc": "constant 控制能量耗散率(防止非物理振荡)，ramp_up_time 是扭矩渐入时间(防止数值不稳定)"
+    },
+
+    "time": {
+        "dt": 0.0001,
+        "_doc": "PositionVerlet 积分步长。1e-4s 保证显式积分稳定性"
+    },
+
+    "action_space": {
+        "dim": 2,
+        "min_val": -0.005,
+        "max_val": 0.005,
+        "step_size": 0.001,
+        "_doc": "扭矩范围(N·m)。±5mN·m 对应软硅胶杆的合理弯曲范围，step_size 控制随机游走平滑度"
+    },
+
+    "collection": {
+        "num_sequences": 10,
+        "actions_per_seq": 50,
+        "steps_per_action": 500,
+        "record_interval": 50,
+        "_doc": "steps_per_action×dt=0.05s/帧，record_interval=50 即每0.005s记录一帧。总时长≈2.5s/序列"
+    }
+}
