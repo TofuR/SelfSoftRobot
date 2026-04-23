@@ -5,6 +5,8 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
@@ -13,12 +15,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 # 导入
 from src.utils.rendering import OM_rendering
+from src.utils.experiment import create_experiment
 from src.models import model_v2 # <--- 导入新模型
 from src.utils.camera import get_rays
 from src.data.dataset import SoftSequenceDataset
 
 # --- 全局设置 ---
-CUDA_DEVICE = 3
+CUDA_DEVICE = 2
 os.environ["CUDA_VISIBLE_DEVICES"] = str(CUDA_DEVICE)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Training on device: {device}")
@@ -38,11 +41,10 @@ def train_seq_vis():
     BATCH_SIZE = 4
     LR = 5e-4  # 稍微调高一点学习率
     N_EPOCHS = 50
-    VIS_INTERVAL = 1        
-    LOG_DIR = os.path.join("train_log", "train_log_seq_vis", "experiment_2")
-    
-    os.makedirs(os.path.join(LOG_DIR, "model"), exist_ok=True)
-    os.makedirs(os.path.join(LOG_DIR, "vis"), exist_ok=True)
+    VIS_INTERVAL = 1
+    BASE_LOG_DIR = os.path.join("train_log", "train_log_seq_vis")
+
+    # ── 数据 ──
 
     # 1. 划分数据
     all_files = sorted(glob.glob(os.path.join(DATA_DIR, "*.npz")))
@@ -52,10 +54,7 @@ def train_seq_vis():
     train_ds = SoftSequenceDataset(DATA_DIR, seq_len=SEQ_LEN, file_list=train_files)
     # 验证集使用训练集的 Norm 参数，保证一致性
     val_ds = SoftSequenceDataset(DATA_DIR, seq_len=SEQ_LEN, file_list=val_files, norm_factor=train_ds.norm_factor)
-    
-    # 保存 Norm 参数供推理使用
-    np.savetxt(os.path.join(LOG_DIR, "action_norm_factor.txt"), [train_ds.norm_factor])
-    
+
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE * 2, shuffle=False, num_workers=4)
     
@@ -81,6 +80,38 @@ def train_seq_vis():
     
     NEAR, FAR = 0.5, 2.5
     N_SAMPLES = 64
+
+    # ── 创建实验目录并保存配置 ──
+    config_dict = {
+        "model": "model_v2 (LSTM + Skip + NeRF)",
+        "action_dim": train_ds.action_dim,
+        "seq_len": SEQ_LEN,
+        "hidden_dim": 256,
+        "training": {
+            "lr": LR,
+            "batch_size": BATCH_SIZE,
+            "n_epochs": N_EPOCHS,
+            "optimizer": "Adam",
+        },
+        "camera": {
+            "eye": list(CAM_EYE),
+            "center": list(CAM_CENTER),
+            "up": list(CAM_UP),
+            "near": NEAR,
+            "far": FAR,
+            "n_samples": N_SAMPLES,
+        },
+        "data": {
+            "norm_factor": train_ds.norm_factor,
+            "train_files": len(train_files),
+            "val_files": len(val_files),
+            "image_size": [train_ds.H, train_ds.W],
+        },
+    }
+    LOG_DIR = create_experiment(BASE_LOG_DIR, config_dict)
+
+    # 保存 Norm 参数供推理使用
+    np.savetxt(os.path.join(LOG_DIR, "action_norm_factor.txt"), [train_ds.norm_factor])
 
     # --- 4. 核心渲染 (适配新模型接口) ---
     def run_batch(batch_actions):
