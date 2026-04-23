@@ -8,16 +8,25 @@ import cv2
 class SoftSequenceDataset(Dataset):
     """通用序列数据集：从 .npz 文件加载动作-图像序列。
 
-    支持不同模式：图像序列或单帧。
+    Args:
+        data_dir: .npz 文件目录。
+        seq_len: 时序窗口长度。
+        file_list: 指定文件列表（可选）。
+        norm_factor: 动作归一化系数（可选，自动计算）。
+        target_size: 可选 resize 目标尺寸。
+        return_pairs: 是否返回相邻帧对（用于 smoothness loss）。
     """
-    def __init__(self, data_dir, seq_len=10, file_list=None, norm_factor=None, target_size=None):
+
+    def __init__(self, data_dir, seq_len=10, file_list=None, norm_factor=None,
+                 target_size=None, return_pairs=False):
         self.seq_len = seq_len
-        self.target_size = target_size  # 如果需要 resize 图像
+        self.target_size = target_size
+        self.return_pairs = return_pairs
         self.samples = []
-        
+
         if file_list is None:
             file_list = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
-        
+
         # 归一化计算
         if norm_factor is None:
             all_acts = []
@@ -42,33 +51,50 @@ class SoftSequenceDataset(Dataset):
         for f_path in file_list:
             raw = np.load(f_path)
             actions = raw['actions'] / self.norm_factor
-            
-            # 图像处理
+
             imgs_raw = raw['images']
             if self.target_size is not None:
                 imgs_processed = []
                 for img in imgs_raw:
                     if img.max() > 1.0:
                         img = img.astype(np.float32) / 255.0
-                    img_resized = cv2.resize(img, (self.target_size, self.target_size), interpolation=cv2.INTER_AREA)
+                    img_resized = cv2.resize(img, (self.target_size, self.target_size),
+                                             interpolation=cv2.INTER_AREA)
                     imgs_processed.append(img_resized)
-                images = np.stack(imgs_processed, axis=0)[:, np.newaxis, :, :]  # (T, 1, H, W)
+                images = np.stack(imgs_processed, axis=0)[:, np.newaxis, :, :]
             else:
-                images = imgs_raw  # 保持原始
-            
+                images = imgs_raw
+
             self.data_cache.append({
-                'images': images, 
-                'actions': actions, 
-                'length': len(images)
+                'images': images,
+                'actions': actions,
+                'length': len(images),
             })
-            
+
+        # 构建样本索引
         for seq_id, item in enumerate(self.data_cache):
-            for t in range(item['length']):
-                self.samples.append((seq_id, t))
-        
-        self.H, self.W = self.data_cache[0]['images'].shape[1:3] if self.target_size else self.data_cache[0]['images'].shape[1:3]
+            T = item['length']
+            if self.return_pairs:
+                # 需要 t 和 t+1 都在范围内
+                for t in range(T - 1):
+                    self.samples.append((seq_id, t))
+            else:
+                for t in range(T):
+                    self.samples.append((seq_id, t))
+
+        self.H, self.W = self.data_cache[0]['images'].shape[1:3]
         self.action_dim = self.data_cache[0]['actions'].shape[1]
         self.focal = float(raw.get('focal', 130.0))
+
+    def _get_action_window(self, data, t):
+        """获取时间步 t 的动作窗口，不足部分零填充。"""
+        start = t - self.seq_len + 1
+        end = t + 1
+        if start >= 0:
+            return data['actions'][start:end].copy()
+        else:
+            pad = np.zeros((-start, self.action_dim), dtype=data['actions'].dtype)
+            return np.concatenate([pad, data['actions'][0:end]], axis=0)
 
     def __len__(self):
         return len(self.samples)
@@ -76,20 +102,21 @@ class SoftSequenceDataset(Dataset):
     def __getitem__(self, idx):
         seq_id, t = self.samples[idx]
         data = self.data_cache[seq_id]
-        start, end = t - self.seq_len + 1, t + 1
-        if start >= 0:
-            seq = data['actions'][start:end]
-        else:
-            pad = np.zeros((self.seq_len - (end), self.action_dim))
-            seq = np.concatenate([pad, data['actions'][0:end]], axis=0)
-        
+        seq = self._get_action_window(data, t)
+
+        if self.return_pairs:
+            seq_next = self._get_action_window(data, t + 1)
+            target_img = torch.from_numpy(data['images'][t]).float().reshape(-1)
+            target_img_next = torch.from_numpy(data['images'][t + 1]).float().reshape(-1)
+            return (torch.from_numpy(seq).float(),
+                    torch.from_numpy(seq_next).float(),
+                    target_img, target_img_next)
+
         if self.target_size:
-            # 返回图像序列
-            image_seq = data['images'][start:end]  # (Seq, 1, H, W)
+            image_seq = data['images'][t - self.seq_len + 1:t + 1]
             return torch.from_numpy(image_seq).float(), torch.from_numpy(seq).float()
-        else:
-            # 返回单帧展平
-            return torch.from_numpy(seq).float(), torch.from_numpy(data['images'][t]).float().reshape(-1)
+
+        return torch.from_numpy(seq).float(), torch.from_numpy(data['images'][t]).float().reshape(-1)
     
     def get_raw_actions(self, seq_id=0):
         return self.data_cache[seq_id]['actions'] * self.norm_factor
