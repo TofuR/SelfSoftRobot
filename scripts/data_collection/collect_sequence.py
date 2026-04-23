@@ -38,7 +38,7 @@ def collect_continuous_data():
         无返回值，结果写入磁盘文件。
     """
     # --- 配置参数 ---
-    NUM_SEQUENCES = 10       # 采集几段独立的连续轨迹
+    NUM_SEQUENCES = 10      # 采集几段独立的连续轨迹
     ACTIONS_PER_SEQ = 50    # 每段轨迹包含多少个不同的动作目标
     STEPS_PER_ACTION = 500  # 每个动作保持多少个仿真步 (0.05秒 @ 1e-4 dt)
     RECORD_INTERVAL = 50    # 每隔多少步录制一帧 (降采样，防止数据量过大)
@@ -51,7 +51,7 @@ def collect_continuous_data():
     print(f"    序列数: {NUM_SEQUENCES}, 动作数/序列: {ACTIONS_PER_SEQ}")
     print(f"    每动作仿真步数: {STEPS_PER_ACTION} (总时长: {ACTIONS_PER_SEQ * STEPS_PER_ACTION * 1e-4:.2f}s)")
     
-    # 初始化环境 (只初始化一次！)
+    # 初始化环境
     env = ContinuousSoftArmEnv(dt=1e-4)
     
     total_frames = 0
