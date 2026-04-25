@@ -1,0 +1,220 @@
+"""Canonical MSTNF (C-MSTNF) — D-NeRF 范式的形态先验 + 变形场。
+
+训练分两阶段:
+  Phase 1: 训练 CanonicalField — 用零动作数据学习机器人静止形态
+  Phase 2: 训练 DeformationField — 冻结 canonical，用运动数据学习动作变形
+
+查询流程:
+  世界空间点 → DeformationField → canonical 坐标 → CanonicalField → [vis, dens]
+"""
+
+import torch
+import torch.nn as nn
+from .layers import PositionalEncoder, MLPDecoder
+from .model_mstnf import MultiScaleEMA
+
+
+class CanonicalField(nn.Module):
+    """静态 canonical 场：空间坐标 → [visibility, density]。
+
+    不依赖任何动作信息，纯粹表示机器人在零动作下的 3D 形态。
+    """
+
+    def __init__(self, d_filter=128, n_freqs=10):
+        super().__init__()
+        self.pos_encoder = PositionalEncoder(d_input=3, n_freqs=n_freqs, log_space=True)
+        pos_enc_dim = 3 * (1 + 2 * n_freqs)
+        self.decoder = MLPDecoder(input_dim=pos_enc_dim, d_filter=d_filter, output_size=2)
+
+        # density bias = 0.0，配合 softplus 激活
+        with torch.no_grad():
+            self.decoder.net[-1].bias[1] = 0.0
+
+    def forward(self, points):
+        """查询 canonical 场。
+
+        Args:
+            points: (N, n_samples, 3)
+
+        Returns:
+            output: (N, n_samples, 2) [visibility, density]
+        """
+        return self.decoder(self.pos_encoder(points))
+
+
+class DeformationField(nn.Module):
+    """动作条件变形场：输出 3D 位移 (Δx, Δy, Δz)。
+
+    使用 MultiScaleEMA 编码动作历史，低频位置编码保证变形光滑。
+    """
+
+    def __init__(self, action_dim, window_size=20, n_scales=4, hidden_dim=128,
+                 d_filter=128, deform_n_freqs=6):
+        super().__init__()
+        self.action_dim = action_dim
+        self.hidden_dim = hidden_dim
+
+        # 时序编码器（复用 MSTNF 的 MultiScaleEMA）
+        self.temporal = MultiScaleEMA(
+            action_dim=action_dim,
+            n_scales=n_scales,
+            window_size=window_size,
+            hidden_dim=hidden_dim,
+        )
+
+        # 变形位置编码（低频，变形应光滑）
+        self.deform_encoder = PositionalEncoder(d_input=3, n_freqs=deform_n_freqs, log_space=True)
+        deform_enc_dim = 3 * (1 + 2 * deform_n_freqs)
+
+        # 变形 MLP: pos_enc + state + action → (Δx, Δy, Δz)
+        self.deform_mlp = MLPDecoder(
+            input_dim=deform_enc_dim + hidden_dim + action_dim,
+            d_filter=d_filter,
+            output_size=3,
+        )
+
+        # 位移初始化为接近零
+        with torch.no_grad():
+            self.deform_mlp.net[-1].bias.zero_()
+
+    def forward(self, points, action_window):
+        """计算变形位移。
+
+        Args:
+            points: (N_rays, n_samples, 3) 空间查询点（不含 batch 维度）。
+            action_window: (B, K, D) 动作序列窗口。
+
+        Returns:
+            displacement: (B*N_rays, n_samples, 3) 3D 位移。
+            physics_state: (B, Hidden) 物理状态（用于 smoothness loss）。
+        """
+        B, K, D = action_window.shape
+        physics_state = self.temporal(action_window)  # (B, Hidden)
+        current_action = action_window[:, -1, :]  # (B, D)
+
+        N_rays = points.shape[0]
+        n_samples = points.shape[1]
+
+        # 扩展 points 到 (B*N_rays, n_samples, 3)
+        pts_expanded = points.unsqueeze(0).expand(B, -1, -1, -1).reshape(B * N_rays, n_samples, 3)
+
+        # 位置编码
+        x_deform = self.deform_encoder(pts_expanded)  # (B*N_rays, n_samples, deform_enc_dim)
+        x_deform_flat = x_deform.reshape(-1, x_deform.shape[-1])  # (B*N_rays*n_samples, ...)
+
+        # 扩展 state: (B, Hidden) → (B*N_rays*n_samples, Hidden)
+        state_expanded = physics_state.unsqueeze(1).expand(-1, N_rays, -1).reshape(B * N_rays, self.hidden_dim)
+        state_for_mlp = state_expanded.unsqueeze(1).expand(-1, n_samples, -1).reshape(-1, self.hidden_dim)
+
+        # 扩展 action: (B, D) → (B*N_rays*n_samples, D)
+        action_expanded = current_action.unsqueeze(1).expand(-1, N_rays, -1).reshape(B * N_rays, D)
+        action_for_mlp = action_expanded.unsqueeze(1).expand(-1, n_samples, -1).reshape(-1, D)
+
+        latent = torch.cat([x_deform_flat, state_for_mlp, action_for_mlp], dim=-1)
+        displacement = self.deform_mlp(latent)  # (B*N_rays*n_samples, 3)
+        displacement = displacement.reshape(B * N_rays, n_samples, 3)
+
+        return displacement, physics_state
+
+
+class CMSTNFModel(nn.Module):
+    """Canonical MSTNF 完整模型。
+
+    包含两个子模块:
+      - canonical: CanonicalField，表示静止态形态
+      - deform: DeformationField，学习动作引起的 3D 变形
+
+    Phase 1: 只训练 canonical，使用零动作数据
+    Phase 2: 冻结 canonical，训练 deform，使用运动数据
+    """
+
+    def __init__(
+        self,
+        action_dim,
+        window_size=20,
+        n_scales=4,
+        hidden_dim=128,
+        d_filter=128,
+        n_freqs=10,
+        deform_n_freqs=6,
+    ):
+        super().__init__()
+        self.action_dim = action_dim
+        self.hidden_dim = hidden_dim
+
+        self.canonical = CanonicalField(d_filter=d_filter, n_freqs=n_freqs)
+        self.deform = DeformationField(
+            action_dim=action_dim,
+            window_size=window_size,
+            n_scales=n_scales,
+            hidden_dim=hidden_dim,
+            d_filter=d_filter,
+            deform_n_freqs=deform_n_freqs,
+        )
+
+    def forward_canonical(self, points):
+        """Phase 1 用：直接查 canonical field。
+
+        Args:
+            points: (N, n_samples, 3)
+
+        Returns:
+            output: (N, n_samples, 2) [visibility, density]
+        """
+        return self.canonical(points)
+
+    def forward(self, points, action_window):
+        """Phase 2 用：变形 → canonical。
+
+        Args:
+            points: (N_rays, n_samples, 3) 世界空间查询点。
+            action_window: (B, K, D) 动作序列窗口。
+
+        Returns:
+            output: (B*N_rays, n_samples, 2) [visibility, density]
+        """
+        B = action_window.shape[0]
+        N_rays = points.shape[0]
+        n_samples = points.shape[1]
+
+        displacement, _ = self.deform(points, action_window)  # (B*N_rays, n_samples, 3)
+        pts_expanded = points.unsqueeze(0).expand(B, -1, -1, -1).reshape(B * N_rays, n_samples, 3)
+        return self.canonical(pts_expanded + displacement)
+
+    def forward_with_state(self, points, action_window):
+        """Phase 2 用，额外返回 physics_state 用于 smoothness loss。
+
+        Returns:
+            output: (B*N_rays, n_samples, 2)
+            physics_state: (B, Hidden)
+        """
+        B = action_window.shape[0]
+        N_rays = points.shape[0]
+        n_samples = points.shape[1]
+
+        displacement, physics_state = self.deform(points, action_window)
+        pts_expanded = points.unsqueeze(0).expand(B, -1, -1, -1).reshape(B * N_rays, n_samples, 3)
+        output = self.canonical(pts_expanded + displacement)
+        return output, physics_state
+
+    def compute_smoothness(self, action_windows_t, action_windows_t1):
+        """变形场的时序平滑 loss：相邻帧变形位移应连续。"""
+        # 用一个固定查询点来衡量变形差异
+        dummy_points = torch.zeros(1, 1, 3, device=action_windows_t.device)
+        _, state_t = self.deform(dummy_points, action_windows_t)
+        _, state_t1 = self.deform(dummy_points, action_windows_t1)
+        return torch.mean((state_t1 - state_t) ** 2)
+
+    def freeze_canonical(self):
+        """冻结 canonical 参数，Phase 2 开始时调用。"""
+        for p in self.canonical.parameters():
+            p.requires_grad = False
+
+    def unfreeze_canonical(self):
+        """解冻 canonical 参数（如需要 fine-tune）。"""
+        for p in self.canonical.parameters():
+            p.requires_grad = True
+
+    def get_learned_decays(self):
+        """返回 EMA 学到的衰减率。"""
+        return self.deform.temporal.decays.detach().cpu().numpy()
