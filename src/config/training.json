@@ -2,12 +2,12 @@
     "_doc": "训练超参数。可以在不同训练脚本间共享，也可按模型覆盖。",
 
     "optimization": {
-        "lr": 0.1,
+        "lr": 0.001,
         "batch_size": 4,
-        "n_iters": 50000,
+        "n_epochs": 200,
         "scheduler": "ReduceLROnPlateau",
-        "scheduler_patience": 500,
-        "_doc": "ReduceLROnPlateau 在验证 loss 停滞时自动降低"
+        "scheduler_patience": 10,
+        "_doc": "n_epochs=训练轮数, scheduler_patience=验证loss多少epoch不下降就降学习率"
     },
 
     "normalization": {
@@ -39,5 +39,15 @@
     "logging": {
         "display_rate": 500,
         "save_rate": 2000
+    },
+
+    "canonical": {
+        "phase1_epochs": 50,
+        "phase2_epochs": 200,
+        "deform_n_freqs": 6,
+        "deform_lr": 0.0005,
+        "w_jacobian": 0.01,
+        "w_temporal_grad": 0.01,
+        "_doc": "w_jacobian=变形Jacobian惩罚权重(Smooth-CMSTNF用), w_temporal_grad=时序梯度惩罚权重"
     }
 }
