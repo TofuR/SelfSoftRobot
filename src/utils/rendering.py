@@ -16,7 +16,7 @@ def OM_rendering(raw: torch.Tensor):
         render_img: (N_rays,) 累积像素值
         alpha: (N_rays, N_samples) 每点权重
     """
-    alpha = 1.0 - torch.exp(-nn.functional.relu(raw[..., 1]))
+    alpha = 1.0 - torch.exp(-nn.functional.softplus(raw[..., 1]))
     rgb_each_point = alpha * raw[..., 0]
     render_img = torch.sum(rgb_each_point, dim=1)
     return render_img, alpha
@@ -24,7 +24,7 @@ def OM_rendering(raw: torch.Tensor):
 
 def OM_rendering_split_output(raw: torch.Tensor):
     """与 `OM_rendering` 类似但返回可见性通道，便于调试。"""
-    alpha = 1.0 - torch.exp(-nn.functional.relu(raw[..., 1]))
+    alpha = 1.0 - torch.exp(-nn.functional.softplus(raw[..., 1]))
     rgb_each_point = alpha * raw[..., 0]
     render_img = torch.sum(rgb_each_point, dim=1)
     visibility = raw[..., 0]

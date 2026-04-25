@@ -153,10 +153,10 @@ class MSTNFModel(nn.Module):
             output_size=2,
         )
 
-        # density bias: -1.0 轻度稀疏初始化
-        # -5.0 太激进，在背景主导场景中几乎无法打破对称性
+        # density bias: 0.0 中性初始化
+        # softplus 在负值区也有非零梯度，不需要负偏置来控制稀疏性
         with torch.no_grad():
-            self.decoder.net[-1].bias[1] = -1.0
+            self.decoder.net[-1].bias[1] = 0.0
 
     def encode_temporal(self, action_window):
         """编码动作窗口为物理状态。
@@ -188,7 +188,12 @@ class MSTNFModel(nn.Module):
         parts = [x_pos, state_expanded]
         if current_action is not None:
             action_expanded = current_action.unsqueeze(1).expand(-1, n_samples, -1)
-            parts.append(action_expanded)
+        else:
+            action_expanded = torch.zeros(
+                physics_state.shape[0], n_samples, self.action_dim,
+                device=physics_state.device, dtype=physics_state.dtype,
+            )
+        parts.append(action_expanded)
         latent = torch.cat(parts, dim=-1)
         return self.decoder(latent)
 
