@@ -368,6 +368,27 @@ class ContinuousSoftArmEnv:
 
         return binary_img, current_action
 
+    def get_observation_3d(self):
+        """获取当前二值图像 + 3D 节点坐标 + 半径。
+
+        Returns:
+            (binary_img, current_action, positions, radii)
+            - binary_img: 二值渲染图像。
+            - current_action: 驱动扭矩 (2,)。
+            - positions: 节点坐标 (3, N_nodes)，N_nodes=N_ELEMENTS+1。
+            - radii: 节点半径 (N_nodes,)。
+        """
+        soft_arm = self.simulation[0]
+        positions = soft_arm.position_collection.copy()
+        radii = soft_arm.radius.copy()
+
+        binary_img = render_to_binary(positions, radii)
+
+        current_torques = self.torque_force.torque_profile[:, 0]
+        current_action = np.array([current_torques[0], current_torques[1]])
+
+        return binary_img, current_action, positions, radii
+
 
 if __name__ == "__main__":
     test_params = np.array([0.1, 0.0])

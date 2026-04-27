@@ -49,5 +49,16 @@
         "w_jacobian": 0.01,
         "w_temporal_grad": 0.01,
         "_doc": "w_jacobian=变形Jacobian惩罚权重(Smooth-CMSTNF用), w_temporal_grad=时序梯度惩罚权重"
+    },
+
+    "ms_scnf": {
+        "n_coarse": 4,
+        "n_medium": 10,
+        "n_fine": 31,
+        "w_skeleton_fine": 1.0,
+        "w_skeleton_medium": 0.3,
+        "w_skeleton_coarse": 0.1,
+        "w_render": 0.5,
+        "_doc": "n_coarse/medium/fine=多尺度骨架节点数, w_skeleton_*=各级别loss权重, w_render=Phase2渲染loss权重"
     }
 }

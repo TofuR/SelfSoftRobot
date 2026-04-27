@@ -35,6 +35,9 @@
         "actions_per_seq": 50,
         "steps_per_action": 500,
         "record_interval": 50,
-        "_doc": "steps_per_action×dt=0.05s/帧，record_interval=50 即每0.005s记录一帧。总时长≈2.5s/序列"
+        "warmup_steps": 2000,
+        "canonical_steps_per_seq": 2000,
+        "batch_count": 100,
+        "_doc": "steps_per_action×dt=0.05s/帧，record_interval=50 即每0.005s记录一帧。warmup_steps=canonical/sequence采集前预热步数"
     }
 }
