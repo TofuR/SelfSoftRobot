@@ -1,4 +1,23 @@
-"""train_cmstnf.py — CMSTNF 两阶段训练入口。"""
+"""train_cmstnf.py — CMSTNF 两阶段训练入口。
+
+Usage:
+    # 完整训练 (Phase 1 + Phase 2)
+    CUDA_VISIBLE_DEVICES=2 python scripts/training/train_cmstnf.py
+
+    # 仅 Phase 1（canonical field）
+    CUDA_VISIBLE_DEVICES=2 python scripts/training/train_cmstnf.py --phase 1
+
+    # 仅 Phase 2（deformation field），需指定实验目录和 canonical 权重
+    CUDA_VISIBLE_DEVICES=2 python scripts/training/train_cmstnf.py --phase 2 \
+        --exp_dir train_log/train_cmstnf/001 \
+        --canonical_path train_log/train_cmstnf/001/phase1/model/canonical_best.pt \
+        --data_dir data/sequence_data
+
+    # 指定数据路径
+    CUDA_VISIBLE_DEVICES=2 python scripts/training/train_cmstnf.py \
+        --data_dir data/sequence_data_1d \
+        --canonical_data_dir data/canonical_data
+"""
 
 import os
 import sys

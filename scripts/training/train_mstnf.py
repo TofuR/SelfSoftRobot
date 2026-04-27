@@ -1,4 +1,11 @@
-"""train_mstnf.py — MSTNF 训练入口。"""
+"""train_mstnf.py — MSTNF 单阶段训练入口。
+
+Usage:
+    # 完整训练
+    CUDA_VISIBLE_DEVICES=3 python scripts/training/train_mstnf.py
+
+    # 指定数据路径（在文件内修改 CUDA_DEVICE 和 DATA_DIR）
+"""
 
 import os
 import sys
