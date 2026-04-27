@@ -18,10 +18,11 @@ class SoftSequenceDataset(Dataset):
     """
 
     def __init__(self, data_dir, seq_len=10, file_list=None, norm_factor=None,
-                 target_size=None, return_pairs=False):
+                 target_size=None, return_pairs=False, return_3d=False):
         self.seq_len = seq_len
         self.target_size = target_size
         self.return_pairs = return_pairs
+        self.return_3d = return_3d
         self.samples = []
 
         if file_list is None:
@@ -47,6 +48,7 @@ class SoftSequenceDataset(Dataset):
         else:
             self.norm_factor = norm_factor
 
+        self.has_3d = False
         self.data_cache = []
         for f_path in file_list:
             raw = np.load(f_path)
@@ -65,11 +67,17 @@ class SoftSequenceDataset(Dataset):
             else:
                 images = imgs_raw
 
-            self.data_cache.append({
+            entry = {
                 'images': images,
                 'actions': actions,
                 'length': len(images),
-            })
+            }
+
+            if 'positions' in raw:
+                self.has_3d = True
+                entry['positions'] = raw['positions'].astype(np.float32)
+
+            self.data_cache.append(entry)
 
         # 构建样本索引
         for seq_id, item in enumerate(self.data_cache):
@@ -85,6 +93,11 @@ class SoftSequenceDataset(Dataset):
         self.H, self.W = self.data_cache[0]['images'].shape[1:3]
         self.action_dim = self.data_cache[0]['actions'].shape[1]
         self.focal = float(raw.get('focal', 130.0))
+
+        # 读取数据自带的相机参数（可选，让训练器优先使用数据中的参数）
+        self.camera_eye = tuple(raw['camera_eye'].tolist()) if 'camera_eye' in raw else None
+        self.camera_center = tuple(raw['camera_center'].tolist()) if 'camera_center' in raw else None
+        self.camera_up = tuple(raw['camera_up'].tolist()) if 'camera_up' in raw else None
 
     def _get_action_window(self, data, t):
         """获取时间步 t 的动作窗口，不足部分零填充。"""
@@ -104,22 +117,48 @@ class SoftSequenceDataset(Dataset):
         data = self.data_cache[seq_id]
         seq = self._get_action_window(data, t)
 
+        # 构建返回值
         if self.return_pairs:
             seq_next = self._get_action_window(data, t + 1)
             target_img = torch.from_numpy(data['images'][t]).float().reshape(-1)
             target_img_next = torch.from_numpy(data['images'][t + 1]).float().reshape(-1)
-            return (torch.from_numpy(seq).float(),
-                    torch.from_numpy(seq_next).float(),
-                    target_img, target_img_next)
+            result = (
+                torch.from_numpy(seq).float(),
+                torch.from_numpy(seq_next).float(),
+                target_img, target_img_next,
+            )
+            if self.return_3d and self.has_3d:
+                result += (
+                    torch.from_numpy(data['positions'][t]).float(),
+                    torch.from_numpy(data['positions'][t + 1]).float(),
+                )
+            return result
 
         if self.target_size:
             image_seq = data['images'][t - self.seq_len + 1:t + 1]
-            return torch.from_numpy(image_seq).float(), torch.from_numpy(seq).float()
+            result = (torch.from_numpy(image_seq).float(),
+                      torch.from_numpy(seq).float())
+        else:
+            result = (torch.from_numpy(seq).float(),
+                      torch.from_numpy(data['images'][t]).float().reshape(-1))
 
-        return torch.from_numpy(seq).float(), torch.from_numpy(data['images'][t]).float().reshape(-1)
+        if self.return_3d and self.has_3d:
+            result += (torch.from_numpy(data['positions'][t]).float(),)
+
+        return result
     
     def get_raw_actions(self, seq_id=0):
         return self.data_cache[seq_id]['actions'] * self.norm_factor
+
+    def get_camera_params(self):
+        """返回数据自带的相机参数，无则返回 None（让训练器回退到 config）。"""
+        if self.camera_eye is not None:
+            return {
+                'eye': self.camera_eye,
+                'center': self.camera_center,
+                'up': self.camera_up,
+            }
+        return None
 
 
 def load_soft_data(data_dir):

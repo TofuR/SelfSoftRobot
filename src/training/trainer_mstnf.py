@@ -80,7 +80,8 @@ class MSTNFTrainer(BaseTrainer):
         train_loader = DataLoader(train_ds, batch_size=self.opt_cfg["batch_size"],
                                   shuffle=True, num_workers=4)
 
-        self.setup_camera(train_ds.H, train_ds.W, train_ds.focal)
+        self.setup_camera(train_ds.H, train_ds.W, train_ds.focal,
+                          camera_pose=train_ds.get_camera_params())
         action_dim = train_ds.action_dim
 
         model = MSTNFModel(

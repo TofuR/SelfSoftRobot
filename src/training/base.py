@@ -32,11 +32,13 @@ class BaseTrainer:
         self.H = None
         self.W = None
 
-    def setup_camera(self, H, W, focal):
+    def setup_camera(self, H, W, focal, camera_pose=None):
         self.H, self.W = H, W
         focal_t = torch.tensor(focal).float().to(self.device)
-        self.rays_o, self.rays_d = get_rays(
-            H, W, focal_t, self.cam_cfg["eye"], self.cam_cfg["center"], self.cam_cfg["up"])
+        eye = camera_pose['eye'] if camera_pose else self.cam_cfg["eye"]
+        center = camera_pose['center'] if camera_pose else self.cam_cfg["center"]
+        up = camera_pose['up'] if camera_pose else self.cam_cfg["up"]
+        self.rays_o, self.rays_d = get_rays(H, W, focal_t, eye, center, up)
         self.rays_o = self.rays_o.to(self.device)
         self.rays_d = self.rays_d.to(self.device)
 
