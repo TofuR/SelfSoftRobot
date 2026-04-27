@@ -21,13 +21,13 @@ Usage:
 
 import os
 import sys
-import argparse
-import torch
 
 CUDA_DEVICE = 2
 os.environ["CUDA_VISIBLE_DEVICES"] = str(CUDA_DEVICE)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
+import argparse
+import torch
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 from src.training.trainer_cmstnf import CMSTNFTrainer

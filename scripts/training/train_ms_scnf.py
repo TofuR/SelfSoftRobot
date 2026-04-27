@@ -16,20 +16,20 @@ Usage:
 
 import os
 import sys
-import argparse
-import torch
 
 CUDA_DEVICE = 0
 os.environ["CUDA_VISIBLE_DEVICES"] = str(CUDA_DEVICE)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
+import argparse
+import torch
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 from src.training.trainer_ms_scnf import MSSCNFTrainer
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--phase", type=int, default=None, choices=[1, 2])
-parser.add_argument("--data_dir", type=str, default="data/sequence_data_3d")
+parser.add_argument("--data_dir", type=str, default="data/seq_rz_3d")
 parser.add_argument("--skeleton_path", type=str, default=None)
 parser.add_argument("--exp_dir", type=str, default=None)
 args = parser.parse_args()

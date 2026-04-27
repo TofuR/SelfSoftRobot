@@ -87,9 +87,10 @@ SelfSoftRobot/
 │
 ├── train_log/                       # 训练日志与模型权重
 └── docs/                            # 文档
-    ├── PROJECT_HELP.md              #   本文件
+    ├── PROJECT_HELP.md              #   文件说明与运行流程（本文件）
+    ├── soft_robot_pipeline.md       #   技术管线与模型演进
+    ├── improvement_proposals.md     #   改进方案与实施状态
     ├── literature_innovations.md    #   文献创新点总结
-    ├── improvement_proposals.md     #   改进方案讨论
     └── paper_understanding.md       #   FBV-SM 论文详解
 ```
 

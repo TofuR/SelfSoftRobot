@@ -9,7 +9,6 @@ Usage:
 
 import os
 import sys
-import torch
 
 # ═══════════════════════════════════════════════════════════
 # 常用配置（直接在这里修改）
@@ -20,6 +19,7 @@ DATA_DIR = "data/sequence_data"
 os.environ["CUDA_VISIBLE_DEVICES"] = str(CUDA_DEVICE)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
+import torch
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}")
 
