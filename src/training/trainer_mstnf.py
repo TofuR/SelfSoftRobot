@@ -58,8 +58,10 @@ class MSTNFTrainer(BaseTrainer):
             return model.decode_spatial(
                 pts_chunk, physics_state.expand(N, -1), current_action.expand(N, -1))
 
-        img = self.render_full_image(fn)
-        return torch.tensor(img, device=self.device, dtype=torch.float32).reshape(-1)
+        pts, _ = sample_stratified(
+            self.rays_o, self.rays_d, self.near, self.far, self.n_samples, perturb=False)
+        rgb_map = self.render_points(fn, pts)
+        return rgb_map.reshape(-1)
 
     def train(self, data_dir="data/sequence_data"):
         all_files = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
@@ -129,8 +131,8 @@ class MSTNFTrainer(BaseTrainer):
                 gt = img_t[:, idx] if idx is not None else img_t
                 loss_recon = torch.nn.functional.mse_loss(pred_t, gt)
 
-                pred_t1, _ = self._forward(self.rays_o, self.rays_d, model, seq_t1, target_img=img_t1)
-                gt1 = img_t1[:, idx] if idx is not None else img_t1
+                pred_t1, idx1 = self._forward(self.rays_o, self.rays_d, model, seq_t1, target_img=img_t1)
+                gt1 = img_t1[:, idx1] if idx1 is not None else img_t1
                 loss_recon_next = torch.nn.functional.mse_loss(pred_t1, gt1)
 
                 loss_smooth = model.compute_smoothness(seq_t, seq_t1)

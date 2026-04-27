@@ -65,10 +65,11 @@ class BaseTrainer:
         return rgb_map
 
     def render_full_image(self, forward_fn, perturb=False):
-        pts, _ = sample_stratified(
-            self.rays_o, self.rays_d, self.near, self.far, self.n_samples, perturb=perturb)
-        rgb_map = self.render_points(forward_fn, pts)
-        return rgb_map.reshape(self.H, self.W).cpu().numpy()
+        with torch.no_grad():
+            pts, _ = sample_stratified(
+                self.rays_o, self.rays_d, self.near, self.far, self.n_samples, perturb=perturb)
+            rgb_map = self.render_points(forward_fn, pts)
+            return rgb_map.reshape(self.H, self.W).cpu().numpy()
 
     def validate_and_gif(self, forward_fn, val_ds, epoch, log_dir,
                          action_curves=None):
@@ -77,16 +78,17 @@ class BaseTrainer:
         val_loss_total = 0
         skip = max(1, len(val_ds) // 50)
 
-        for vi in range(0, len(val_ds), skip):
-            val_seq, val_img = val_ds[vi]
-            val_seq = val_seq.unsqueeze(0).to(self.device)
-            val_img_flat = val_img.to(self.device)
+        with torch.no_grad():
+            for vi in range(0, len(val_ds), skip):
+                val_seq, val_img = val_ds[vi]
+                val_seq = val_seq.unsqueeze(0).to(self.device)
+                val_img_flat = val_img.to(self.device)
 
-            pred_flat = forward_fn(val_seq)
-            val_loss_total += torch.nn.functional.mse_loss(pred_flat, val_img_flat).item()
+                pred_flat = forward_fn(val_seq)
+                val_loss_total += torch.nn.functional.mse_loss(pred_flat, val_img_flat).item()
 
-            pred_frames.append(pred_flat.reshape(self.H, self.W).cpu().numpy())
-            gt_frames.append(val_img.reshape(self.H, self.W).numpy())
+                pred_frames.append(pred_flat.reshape(self.H, self.W).cpu().numpy())
+                gt_frames.append(val_img.reshape(self.H, self.W).numpy())
 
         avg_val_loss = val_loss_total / max(len(pred_frames), 1)
         sampled_actions = action_curves[::skip] if action_curves is not None else None

@@ -145,6 +145,7 @@ class TwoPhaseTrainer(BaseTrainer):
 
         canonical_path = os.path.join(phase1_dir, "model", "canonical_best.pt")
         print(f">>> Phase 1 done! Best: {best_loss:.5f}, Weights: {canonical_path}")
+        del model
         return exp_dir, canonical_path
 
     # =========================================================================
@@ -177,7 +178,7 @@ class TwoPhaseTrainer(BaseTrainer):
         model = self._create_model(action_dim).to(self.device)
 
         if canonical_path and os.path.exists(canonical_path):
-            state = torch.load(canonical_path, map_location=self.device)
+            state = torch.load(canonical_path, map_location=self.device, weights_only=True)
             model.canonical.load_state_dict(state)
             print(f"    Loaded canonical: {canonical_path}")
         else:
