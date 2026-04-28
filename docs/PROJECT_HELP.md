@@ -88,10 +88,21 @@ SelfSoftRobot/
 ├── train_log/                       # 训练日志与模型权重
 └── docs/                            # 文档
     ├── PROJECT_HELP.md              #   文件说明与运行流程（本文件）
+    ├── project_status_report.md     #   项目状态报告
     ├── soft_robot_pipeline.md       #   技术管线与模型演进
-    ├── improvement_proposals.md     #   改进方案与实施状态
     ├── literature_innovations.md    #   文献创新点总结
-    └── paper_understanding.md       #   FBV-SM 论文详解
+    ├── papers/                      #   论文 PDF 及分析
+    │   ├── paper_understanding.md   #     FBV-SM 论文详解
+    │   ├── chen2022_paper_understanding.md  # Chen 2022 论文分析
+    │   └── shan2024_paper_understanding.md  # SoftNeRF 论文分析
+    ├── directions/                  #   研究方向文档
+    │   ├── directions_overview.md   #     方向总览
+    │   ├── direction_1~5_*.md       #     各方向详细文档
+    │   └── ...
+    └── experiments/                 #   实验分析与改进
+        ├── experiment_analysis.md   #     实验结果分析
+        ├── results_evaluation.md    #     评估结果
+        └── improvement_proposals.md #     改进方案与实施状态
 ```
 
 ---
