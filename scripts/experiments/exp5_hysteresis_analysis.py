@@ -73,7 +73,7 @@ def run_simulator_hysteresis():
             for _ in range(sim_steps_per_action):
                 env.step(steps=1)
 
-            pos = env.simulator[0].rod.position_collection.numpy()
+            pos = env.simulation[0].position_collection.copy()
             tip_x.append(pos[0, -1])
             tip_z.append(pos[2, -1])
             torques.append(torque)
@@ -517,7 +517,7 @@ def plot_comparison(results):
             aw = sample[0].unsqueeze(0).to(device)
             velocity = aw[:, -1] - aw[:, -2]
             gate_input = torch.cat([aw[:, -1], velocity], dim=-1)
-            gate = ema.direction_gate(gate_input).cpu().numpy()[0]
+            gate = ema.direction_gate(gate_input).detach().cpu().numpy()[0]
             axes[1].bar(np.arange(len(gate)) + 0.15, gate, 0.3, label='Gate (HA-EMA)', color='green', alpha=0.8)
 
     axes[1].set_xlabel('Scale Index')

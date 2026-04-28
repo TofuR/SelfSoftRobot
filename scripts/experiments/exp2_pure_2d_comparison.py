@@ -146,7 +146,8 @@ for epoch in range(args.epochs):
         gt_pos = batch[-1].permute(0, 2, 1).to(device)  # (B, 31, 3)
 
         pred_dict = model_a.predict_skeleton(aw)
-        loss_skel = model_a.compute_skeleton_loss(pred_dict, gt_pos)
+        skel_losses = model_a.compute_skeleton_loss(pred_dict, gt_pos)
+        loss_skel = skel_losses['fine'] + 0.5 * skel_losses['medium'] + 0.25 * skel_losses['coarse']
 
         # 平滑正则化
         skel_fine = pred_dict['fine']
