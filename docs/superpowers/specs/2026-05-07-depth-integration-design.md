@@ -1,7 +1,7 @@
 # 深度信息集成设计
 
 **日期：** 2026-05-07
-**状态：** 设计已批准，待实施
+**状态：** 已实现，已通过基础验证
 
 ## 概述
 
@@ -199,3 +199,87 @@ master
 2. 3D skeleton 位置误差在 Z 轴显著改善
 3. 方案 A 和方案 C 的对比实验数据
 4. 深度可视化结果清晰可解释
+
+---
+
+## 实现记录
+
+### 已完成的代码（2026-05-07）
+
+#### 分支结构
+
+```
+master (8f78547) — 共享基础设施 + 设计文档
+├── feat/depth-supervised-cmstnf (1eae992) — 方案 A
+└── feat/rgbd-neural-field (b7512b5) — 方案 C
+```
+
+#### 共享基础设施 (master)
+
+| 文件 | 改动 | 向后兼容 |
+|------|------|----------|
+| `elastica_env.py` | 新增 `render_depth_map()`, `render_to_binary_with_depth()`, `get_observation_with_depth()`, `get_observation_multiview_with_depth()` | 所有旧函数签名不变 |
+| `src/utils/rendering.py` | 新增 `OM_rendering_with_depth()`, `sample_depth_guided()` | OM_rendering/sample_stratified 等不变 |
+| `src/data/dataset.py` | 新增 `return_depth=False` 参数，加载 `depth_maps` 字段 | 默认 False，无 depth_maps 时正常降级 |
+
+#### 方案 A: Depth-supervised CMSTNF (`feat/depth-supervised-cmstnf`)
+
+| 文件 | 说明 |
+|------|------|
+| `src/training/trainer_depth_cmstnf.py` | DepthCMSTNFTrainer：Phase 2 添加深度渲染 + L1 depth loss + coarse-to-fine 引导采样 |
+| `scripts/training/train_depth_cmstnf.py` | 训练入口，`--depth_weight` / `--no_guided_sampling` 参数 |
+
+关键设计：
+- 继承 `TwoPhaseTrainer`，Phase 1 canonical 训练不变
+- Phase 2 新增：`OM_rendering_with_depth` 计算期望深度 E[d] = Σ w_i × z_i
+- 深度损失：L1 loss，仅在前景区域（depth_gt > 0.01）计算
+- 引导采样：32 点 coarse → 32 点 fine（在物体表面附近精采样）
+
+#### 方案 C: RGB-D Neural Field (`feat/rgbd-neural-field`)
+
+| 文件 | 说明 |
+|------|------|
+| `src/models/layers.py` | 新增 `DepthEncoder`（4层CNN → 全局特征向量） |
+| `src/models/model_rgbd.py` | `RGBDNeuralField` — 深度图条件化神经场，单阶段端到端 |
+| `src/training/trainer_rgbd.py` | RGBDTrainer — 深度渲染 + 多任务损失 |
+| `scripts/training/train_rgbd.py` | 训练入口 |
+
+关键设计：
+- DepthEncoder: Conv(1→16→32→64→128) + AdaptiveAvgPool + FC → 64维特征
+- 深度图作为输入条件（不仅是监督信号），与 actuator encoding 拼接后 condition 神经场
+- 单阶段训练，无两阶段分离
+- `depth_map=None` 时自动退化为纯动作条件模型
+
+### 验证结果
+
+#### 深度图渲染测试 (通过)
+
+```
+输入: 5节点弯曲杆体（Z轴 0-0.5m，X轴偏移 0-0.1m）
+binary: shape=(100,100), nonzero=250 像素
+depth:  shape=(100,100), nonzero=247 像素
+depth range: min=1.3972m, max=1.5543m, mean=1.4698m
+（相机距中心 1.5m，深度值合理）
+```
+
+#### PyTorch 函数测试 (通过)
+
+```
+OM_rendering_with_depth: rgb=(10,), depth=(10,), weights=(10,64) ✓
+sample_depth_guided: pts=(10,64,3), z_combined=(10,64) ✓
+DepthCMSTNFTrainer 初始化 ✓
+Import 链完整 ✓
+```
+
+#### 已修复的问题
+
+- PyVista 0.46.4 不支持 `get_depth_buffer()` → 使用 `get_image_depth(fill_value=nan)`
+- `get_image_depth` 需要先 `show(auto_close=False)` 触发渲染
+- 背景 NaN * 0 = NaN → 使用 `nan_to_num(nan=0.0)` 处理
+
+### 下一步
+
+1. **采集含深度图的训练数据**：修改 `collect.py` / `collect_multiview.py` 保存 `depth_maps`
+2. **运行方案 A 训练**：与原始 CMSTNF 对比深度方向误差
+3. **运行方案 C 训练**：对比方案 A，评估深度作为输入 vs 监督的效果
+4. **真实相机数据采集**：接入 RealSense D435，验证 sim-to-real
