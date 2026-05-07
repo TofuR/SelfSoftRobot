@@ -21,10 +21,14 @@
   # 从文件读取轨迹
   python scripts/data_collection/collect.py --action-x file --action-file traj.npz
 
+  # 含深度图采集（用于 Depth-CMSTNF / RGB-D 训练）
+  python scripts/data_collection/collect.py --depth
+  python scripts/data_collection/collect.py --3d --depth
+
   # 完整自定义
   python scripts/data_collection/collect.py \\
       --action-x random --action-y zero \\
-      --3d --sequences 10 --actions-per-seq 50 \\
+      --3d --depth --sequences 10 --actions-per-seq 50 \\
       --save-dir data/my_experiment
 """
 
@@ -57,13 +61,14 @@ def run_collection(schedule, args, defaults):
     record_interval = args.record_interval
     warmup_steps = args.warmup_steps
     record_3d = args.record_3d
+    record_depth = args.record_depth
     save_dir = args.save_dir
 
     os.makedirs(save_dir, exist_ok=True)
 
     mode_tag = schedule.mode_tag
     total_dur = actions_per_seq * steps_per_action * dt
-    print(f"\n>>> 采集开始: [{mode_tag}]" + (" + 3D" if record_3d else ""))
+    print(f"\n>>> 采集开始: [{mode_tag}]" + (" + 3D" if record_3d else "") + (" + Depth" if record_depth else ""))
     print(f"    序列: {n_seqs}, 动作/序列: {actions_per_seq}, "
           f"时长/序列: {total_dur:.2f}s")
     print(f"    动作模式: {', '.join(f'dim{i}={m}' for i, m in enumerate(schedule.dim_modes))}")
@@ -89,7 +94,7 @@ def run_collection(schedule, args, defaults):
 
         actions = schedule.generate()
         seq_images, seq_actions = [], []
-        seq_positions, seq_radii = [], []
+        seq_positions, seq_radii, seq_depths = [], [], []
 
         pbar = tqdm(total=actions_per_seq * steps_per_action,
                      desc=f"Seq {seq_idx + 1}/{n_seqs}")
@@ -101,7 +106,16 @@ def run_collection(schedule, args, defaults):
                 pbar.update(1)
 
                 if env.step_count % record_interval == 0:
-                    if record_3d:
+                    # 选择合适的 observation 方法
+                    if record_depth and record_3d:
+                        img, depth, act, pos, rad = env.get_observation_with_depth()
+                        seq_depths.append(depth)
+                        seq_positions.append(pos)
+                        seq_radii.append(rad)
+                    elif record_depth:
+                        img, depth, act, pos, rad = env.get_observation_with_depth()
+                        seq_depths.append(depth)
+                    elif record_3d:
                         img, act, pos, rad = env.get_observation_3d()
                         seq_positions.append(pos)
                         seq_radii.append(rad)
@@ -119,6 +133,7 @@ def run_collection(schedule, args, defaults):
             dt * record_interval, cam,
             positions=seq_positions if record_3d else None,
             radii=seq_radii if record_3d else None,
+            depth_maps=seq_depths if record_depth else None,
         )
 
         frames = len(seq_images)
@@ -172,9 +187,11 @@ def build_parser(defaults):
     col.add_argument("--warmup-steps", type=int, default=defaults["warmup_steps"],
                      help="预热步数（默认 from config）")
 
-    # 3D / 输出
+    # 3D / 深度 / 输出
     parser.add_argument("--3d", dest="record_3d", action="store_true",
                         help="保存 3D 节点坐标和半径")
+    parser.add_argument("--depth", dest="record_depth", action="store_true",
+                        help="保存深度图（z-buffer depth，与 3D 可独立使用）")
     parser.add_argument("--save-dir", type=str, default=None,
                         help="保存目录（默认自动推断）")
 

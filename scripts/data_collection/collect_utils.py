@@ -145,7 +145,7 @@ class ActionSchedule:
 # =============================================================================
 
 def save_collection(path, images, actions, dt, camera,
-                    positions=None, radii=None):
+                    positions=None, radii=None, depth_maps=None):
     """保存采集数据到 npz，始终嵌入相机参数。"""
     data = {
         "images": np.array(images),
@@ -162,6 +162,8 @@ def save_collection(path, images, actions, dt, camera,
         data["positions"] = np.array(positions)
     if radii is not None:
         data["radii"] = np.array(radii)
+    if depth_maps is not None:
+        data["depth_maps"] = np.array(depth_maps, dtype=np.float32)
     np.savez_compressed(path, **data)
 
 

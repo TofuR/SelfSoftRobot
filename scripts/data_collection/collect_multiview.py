@@ -4,11 +4,13 @@
 数据格式:
   npz:
     images_front, images_side, actions, positions (可选)
+    depth_maps_front, depth_maps_side (可选，--depth 时)
     camera_*_front, camera_*_side, focal, H, W
 
 用法:
     python scripts/data_collection/collect_multiview.py
     python scripts/data_collection/collect_multiview.py --sequences 5 --save-dir data/multiview_rr
+    python scripts/data_collection/collect_multiview.py --depth  # 含深度图
 """
 
 import sys
@@ -22,7 +24,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from elastica_env import (
     ContinuousSoftArmEnv, CAMERA_EYE, CAMERA_CENTER, CAMERA_UP,
     CAMERA_EYE_SIDE, CAMERA_CENTER_SIDE, CAMERA_UP_SIDE,
-    DEFAULT_IMAGE_SIZE,
+    DEFAULT_IMAGE_SIZE, render_to_binary_with_depth,
 )
 from collect_utils import ActionSchedule, load_defaults
 
@@ -31,6 +33,7 @@ def run_multiview_collection(schedule, args, defaults):
     cam = defaults["camera"]
     dt = defaults["dt"]
     save_dir = args.save_dir
+    record_depth = args.record_depth
     os.makedirs(save_dir, exist_ok=True)
 
     n_seqs = args.sequences
@@ -40,7 +43,7 @@ def run_multiview_collection(schedule, args, defaults):
     warmup_steps = args.warmup_steps
 
     total_dur = actions_per_seq * steps_per_action * dt
-    print(f"\n>>> 多视角采集: [{schedule.mode_tag}]")
+    print(f"\n>>> 多视角采集: [{schedule.mode_tag}]" + (" + Depth" if record_depth else ""))
     print(f"    序列: {n_seqs}, 动作/序列: {actions_per_seq}, 时长: {total_dur:.2f}s")
     print(f"    正面: eye={CAMERA_EYE}")
     print(f"    侧面: eye={CAMERA_EYE_SIDE}")
@@ -65,6 +68,7 @@ def run_multiview_collection(schedule, args, defaults):
         actions = schedule.generate()
         seq_imgs_front, seq_imgs_side = [], []
         seq_actions, seq_positions, seq_radii = [], [], []
+        seq_depths_front, seq_depths_side = [], []
 
         pbar = tqdm(total=actions_per_seq * steps_per_action,
                      desc=f"Seq {seq_idx + 1}/{n_seqs}")
@@ -76,7 +80,13 @@ def run_multiview_collection(schedule, args, defaults):
                 pbar.update(1)
 
                 if env.step_count % record_interval == 0:
-                    img_f, img_s, act, pos, rad = env.get_observation_multiview()
+                    if record_depth:
+                        img_f, dep_f, img_s, dep_s, act, pos, rad = \
+                            env.get_observation_multiview_with_depth()
+                        seq_depths_front.append(dep_f)
+                        seq_depths_side.append(dep_s)
+                    else:
+                        img_f, img_s, act, pos, rad = env.get_observation_multiview()
                     seq_imgs_front.append(img_f)
                     seq_imgs_side.append(img_s)
                     seq_actions.append(act)
@@ -103,6 +113,10 @@ def run_multiview_collection(schedule, args, defaults):
             "camera_up_side": np.array(CAMERA_UP_SIDE),
         }
 
+        if record_depth:
+            data["depth_maps_front"] = np.array(seq_depths_front, dtype=np.float32)
+            data["depth_maps_side"] = np.array(seq_depths_side, dtype=np.float32)
+
         filepath = os.path.join(save_dir, f"seq_{seq_idx:03d}_{schedule.mode_tag}_mv.npz")
         np.savez_compressed(filepath, **data)
 
@@ -125,6 +139,8 @@ def main():
     parser.add_argument("--record-interval", type=int, default=defaults["record_interval"])
     parser.add_argument("--warmup-steps", type=int, default=defaults["warmup_steps"])
     parser.add_argument("--save-dir", type=str, default="data/multiview_rr")
+    parser.add_argument("--depth", dest="record_depth", action="store_true",
+                        help="保存双视角深度图（z-buffer depth）")
     args = parser.parse_args()
 
     schedule = ActionSchedule(
