@@ -290,27 +290,22 @@ def render_depth_map(position_data, radius_data, image_size=DEFAULT_IMAGE_SIZE,
     plotter.add_mesh(tube, color="white", lighting=False)
     plotter.camera_position = [cam_eye, cam_center, cam_up]
 
-    plotter.render()
-    depth_buffer = plotter.get_depth_buffer()
+    plotter.show(auto_close=False)
+    depth_image = plotter.get_image_depth(fill_value=np.nan)
 
-    if depth_buffer is None:
+    if depth_image is None:
         plotter.close()
         H, W = image_size[1], image_size[0]
         return np.zeros((H, W), dtype=np.float32)
 
-    depth_map = depth_buffer.astype(np.float32)
+    # get_image_depth 返回负值（右手坐标系），取绝对值得到距离
+    depth_map = np.abs(depth_image.astype(np.float32))
+    depth_map = np.nan_to_num(depth_map, nan=0.0)
 
-    cam = plotter.camera
-    near = cam.clipping_range[0]
-    far = cam.clipping_range[1]
-
-    z_buf = np.clip(depth_map, 0, 1)
-    z_linear = 1.0 / (z_buf * (1.0 / far - 1.0 / near) + 1.0 / near)
-    z_linear = z_linear.astype(np.float32)
-
+    # 用二值图像掩码过滤无物体区域
     binary_img = render_to_binary(position_data, radius_data, image_size,
                                   cam_eye, cam_center, cam_up)
-    depth_final = z_linear * (binary_img > 0).astype(np.float32)
+    depth_final = depth_map * (binary_img > 0).astype(np.float32)
 
     plotter.close()
     return depth_final
