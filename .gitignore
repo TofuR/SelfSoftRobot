@@ -28,4 +28,6 @@ train_log_v3/*
 *.ckpt
 *.log
 *.pyc
+__pycache__/
+output/
 *.pdf
