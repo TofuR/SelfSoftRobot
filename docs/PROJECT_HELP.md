@@ -12,12 +12,13 @@ PyElastica 物理仿真 → PyVista 渲染图像 → 数据采集 (.npz) → 模
 
 项目目标：**仅用驱动参数（扭矩）预测软体机器人的完整 3D 形态**。
 
-当前有两套模型管线：
+当前有三套模型管线：
 
 | 管线 | 模型 | 数据需求 | 输出 |
 |------|------|---------|------|
 | C-MSTNF 系列 | MSTNF / C-MSTNF / ODE-CMSTNF / Smooth-CMSTNF | 2D 图像 + 动作 | 2D 渲染图 |
-| **MS-SCNF（新）** | MS-SCNF | **2D 图像 + 动作 + 3D 节点坐标** | **3D 骨架 + 2D 渲染图** |
+| MS-SCNF | MS-SCNF | 2D 图像 + 动作 + 3D 节点坐标 | 3D 骨架 + 2D 渲染图 |
+| **深度增强（新）** | **Depth-CMSTNF / RGB-D Neural Field** | **2D 图像 + 动作 + 深度图** | **深度感知 2D 渲染图** |
 
 ---
 
@@ -29,13 +30,14 @@ SelfSoftRobot/
 │
 ├── src/
 │   ├── models/                      # 模型定义
-│   │   ├── layers.py                #   通用层（PositionalEncoder, MLPDecoder 等）
+│   │   ├── layers.py                #   通用层（PositionalEncoder, MLPDecoder, DepthEncoder 等）
 │   │   ├── model.py                 #   FBV_SM 基线（原始论文方法）
 │   │   ├── model_mstnf.py           #   MSTNF（MultiScaleEMA 时序编码）
 │   │   ├── model_cmstnf.py          #   C-MSTNF（Canonical + Deformation）
 │   │   ├── model_ode_cmstnf.py      #   ODE-CMSTNF（Neural ODE 替代 EMA）
 │   │   ├── model_smooth_cmstnf.py   #   Smooth-CMSTNF（正则化变形场）
-│   │   └── model_ms_scnf.py         #   MS-SCNF（骨架条件神经场，新方法）
+│   │   ├── model_ms_scnf.py         #   MS-SCNF（骨架条件神经场）
+│   │   └── model_rgbd.py            #   RGB-D Neural Field（深度条件化神经场，新）
 │   ├── data/
 │   │   └── dataset.py               # SoftSequenceDataset（支持 2D/3D 数据）
 │   ├── training/
@@ -45,8 +47,10 @@ SelfSoftRobot/
 │   │   ├── trainer_cmstnf.py        #   C-MSTNF 训练器
 │   │   ├── trainer_ode_cmstnf.py    #   ODE-CMSTNF 训练器
 │   │   ├── trainer_smooth_cmstnf.py #   Smooth-CMSTNF 训练器
-│   │   ├── trainer_ms_scnf.py       #   MS-SCNF 训练器（新）
-│   │   ├── metrics_3d.py            #   3D 评估指标（新）
+│   │   ├── trainer_ms_scnf.py       #   MS-SCNF 训练器
+│   │   ├── trainer_depth_cmstnf.py  #   Depth-CMSTNF 训练器（深度监督，新）
+│   │   ├── trainer_rgbd.py          #   RGB-D Neural Field 训练器（深度输入，新）
+│   │   ├── metrics_3d.py            #   3D 评估指标
 │   │   └── rendering.py             #   旧版渲染工具
 │   ├── config/
 │   │   ├── training.json            #   训练超参数（所有模型共享）
@@ -54,20 +58,23 @@ SelfSoftRobot/
 │   │   └── simulation.json          #   仿真参数
 │   └── utils/
 │       ├── camera.py                #   get_rays（射线生成）
-│       ├── rendering.py             #   OM_rendering, sample_stratified
+│       ├── rendering.py             #   OM_rendering, sample_stratified, OM_rendering_with_depth, sample_depth_guided
 │       ├── experiment.py            #   实验目录管理 + GIF 保存
 │       └── visualization.py         #   可视化工具
 │
 ├── scripts/
 │   ├── data_collection/             # 数据采集
-│   │   ├── collect.py               #   统一采集入口（per-dim 动作控制 + --3d）
+│   │   ├── collect.py               #   统一采集入口（per-dim 动作控制 + --3d + --depth）
+│   │   ├── collect_multiview.py #   多视角采集（+ --depth）
 │   │   └── collect_utils.py         #   动作策略、保存、命名工具函数
 │   ├── training/                    # 训练入口脚本
 │   │   ├── train_mstnf.py           #   MSTNF
 │   │   ├── train_cmstnf.py          #   C-MSTNF
 │   │   ├── train_ode_cmstnf.py      #   ODE-CMSTNF
 │   │   ├── train_smooth_cmstnf.py   #   Smooth-CMSTNF
-│   │   └── train_ms_scnf.py         #   MS-SCNF（新）
+│   │   ├── train_ms_scnf.py         #   MS-SCNF
+│   │   ├── train_depth_cmstnf.py  #   Depth-CMSTNF（深度监督，新）
+│   │   └── train_rgbd.py         #   RGB-D Neural Field（深度输入，新）
 │   ├── evaluation/
 │   │   └── evaluate_3d.py           #   3D 几何评估脚本（新）
 │   └── visualization/               # 可视化工具
@@ -120,6 +127,10 @@ PyElastica 软体臂仿真 + PyVista 渲染，所有数据采集的源头。
 | `ContinuousSoftArmEnv` | 连续仿真环境，保持状态逐步推进 |
 | `env.get_observation()` | 获取二值图像 + 当前扭矩。返回 `(binary_img, action)` |
 | `env.get_observation_3d()` | 获取二值图像 + 扭矩 + **3D 节点坐标** + 半径。返回 `(img, action, positions(3,31), radii(31,))` |
+| `env.get_observation_with_depth()` | 获取二值图像 + **深度图** + 扭矩 + 3D 数据。返回 `(img, depth, action, pos, radii)` |
+| `env.get_observation_multiview_with_depth()` | 获取双视角二值图像 + **双视角深度图** + 扭矩 + 3D 数据 |
+| `render_depth_map()` | 从 PyVista z-buffer 渲染深度图（float32，单位米） |
+| `render_to_binary_with_depth()` | 同时返回二值图像和深度图 |
 | `env.set_action(torque)` | 设置驱动扭矩 |
 | `env.step(steps=N)` | 推进 N 步物理仿真 |
 | `create_simulation()` | 创建独立仿真实例（静态采集用） |
@@ -136,16 +147,19 @@ PyElastica 软体臂仿真 + PyVista 渲染，所有数据采集的源头。
 | `seq_len=20` | 时序窗口长度 |
 | `return_pairs=True` | 返回相邻帧对 `(seq_t, seq_t1, img_t, img_t1)`，用于 smoothness loss |
 | `return_3d=True` | **额外返回 3D 节点坐标**。自动检测 npz 是否含 `positions` 字段 |
+| `return_depth=True` | **额外返回深度图**。自动检测 npz 是否含 `depth_maps` 字段 |
 
 暴露的属性：`H, W, focal, action_dim`，以及 `get_camera_params()`（优先返回数据自带的相机参数，无则返回 None）。
 
 **返回格式**（随参数不同）：
 
 ```
-默认:               (seq, img)
-return_pairs:       (seq_t, seq_t1, img_t, img_t1)
-return_pairs+3d:    (seq_t, seq_t1, img_t, img_t1, pos_t, pos_t1)
-return_3d:          (seq, img, positions)
+默认:                  (seq, img)
+return_pairs:          (seq_t, seq_t1, img_t, img_t1)
+return_pairs+3d:       (seq_t, seq_t1, img_t, img_t1, pos_t, pos_t1)
+return_pairs+3d+depth: (seq_t, seq_t1, img_t, img_t1, pos_t, pos_t1, depth_t, depth_t1)
+return_3d:             (seq, img, positions)
+return_3d+depth:       (seq, img, positions, depth)
 ```
 
 其中 `positions` 形状为 `(3, 31)`，即 31 个节点的 xyz 坐标。
@@ -157,7 +171,7 @@ return_3d:          (seq, img, positions)
 | 类/函数 | 作用 |
 |---------|------|
 | `ActionSchedule` | 每个维度独立生成动作序列（zero/random/hold/file） |
-| `save_collection()` | 保存 npz，始终嵌入相机参数 |
+| `save_collection()` | 保存 npz，始终嵌入相机参数。可选保存 `depth_maps`（float32） |
 | `make_filename()` | 生成自描述文件名（含模式标签、3D 标记） |
 | `infer_save_dir()` | 根据模式自动推断保存目录 |
 | `load_defaults()` | 从 simulation.json + camera.json 读取默认参数 |
@@ -214,6 +228,13 @@ seq_000_hh_1748000000.npz        # 两维 hold (batch)
 - 部署时 `model.predict_skeleton(action_window)` 直接输出 31 个 3D 坐标
 - **两阶段训练**：Phase 1 骨架回归（3D loss），Phase 2 联合训练（3D + 2D loss）
 
+#### `model_rgbd.py` — RGB-D Neural Field（新方法）
+
+- **深度条件化神经场**：深度图通过 `DepthEncoder`（4层CNN）编码为条件特征，与动作特征拼接后 condition 神经场
+- **单阶段端到端训练**，不需要两阶段分离
+- `depth_map=None` 时自动退化为纯动作条件模型（向后兼容）
+- 查询流程：depth → DepthEncoder → f_depth; action → TemporalEMA → f_act; concat(f_depth, f_act) + 3D points → MLP → [vis, density]
+
 ### 3.5 训练器文件
 
 所有训练器继承 `BaseTrainer`（渲染、射线采样工具）。
@@ -224,7 +245,9 @@ seq_000_hh_1748000000.npz        # 两维 hold (batch)
 | `trainer_cmstnf.py` | C-MSTNF | Canonical 场 (2D loss) | Deformation 场 (2D loss) |
 | `trainer_ode_cmstnf.py` | ODE-CMSTNF | 同 C-MSTNF | 同 C-MSTNF + ODE 编码 |
 | `trainer_smooth_cmstnf.py` | Smooth-CMSTNF | 同 C-MSTNF | 同 C-MSTNF + 正则化 |
-| `trainer_ms_scnf.py` | MS-SCNF | **骨架回归 (3D loss)** | **联合训练 (3D + 2D loss)** |
+| `trainer_ms_scnf.py` | MS-SCNF | 骨架回归 (3D loss) | 联合训练 (3D + 2D loss) |
+| `trainer_depth_cmstnf.py` | **Depth-CMSTNF** | 同 C-MSTNF | **同 C-MSTNF + 深度 L1 loss + 深度引导采样** |
+| `trainer_rgbd.py` | **RGB-D Neural Field** | — | **单阶段端到端（深度作为输入条件）** |
 
 ### 3.6 配置文件：`src/config/training.json`
 
@@ -268,6 +291,13 @@ camera_up:     (3,)         相机上方向
 # 3D 数据额外字段（--3d 模式）
 positions: (T, 3, 31)       每帧的 31 个 3D 节点坐标
 radii:     (T, 31)          每帧的节点半径
+
+# 深度数据额外字段（--depth 模式）
+depth_maps: (T, H, W)       每帧的深度图（float32，单位米，无物体区域为 0.0）
+
+# 多视角深度数据（collect_multiview.py --depth）
+depth_maps_front: (T, H, W) 正面深度图
+depth_maps_side:  (T, H, W) 侧面深度图
 ```
 
 **向后兼容**：旧数据不含 camera_eye/center/up 字段，训练器会自动回退到 `camera.json` 配置。
@@ -308,6 +338,12 @@ python scripts/data_collection/collect.py --3d
 
 # 带 3D 标注的 canonical 数据
 python scripts/data_collection/collect.py --action-x zero --action-y zero --3d
+
+# 含深度图的时序数据 — 用于 Depth-CMSTNF / RGB-D 训练
+python scripts/data_collection/collect.py --depth
+
+# 含 3D + 深度图的数据
+python scripts/data_collection/collect.py --3d --depth
 ```
 
 **保存目录自动推断**：`data/seq_{模式标签}[_3d]/`
@@ -380,7 +416,43 @@ CUDA_VISIBLE_DEVICES=0 python scripts/evaluation/evaluate_3d.py \
 
 输出 4 个定量指标：Mean Node Error、Endpoint Error、Chamfer Distance、Curve Smoothness。
 
-### 5.4 快速验证 Notebook
+### 5.4 深度增强模型（Depth-CMSTNF / RGB-D Neural Field）
+
+**第一步：采集含深度图的数据**
+
+```bash
+# canonical 数据（Phase 1 用，Depth-CMSTNF 需要）
+python scripts/data_collection/collect.py --action-x zero --action-y zero --depth
+
+# 时序数据 + 深度图（Phase 2 / RGB-D 训练用）
+python scripts/data_collection/collect.py --depth
+
+# 多视角 + 深度图
+python scripts/data_collection/collect_multiview.py --depth
+```
+
+**第二步：训练**
+
+```bash
+# 方案 A：Depth-supervised CMSTNF（深度作为额外监督损失，不改变模型架构）
+CUDA_VISIBLE_DEVICES=2 python scripts/training/train_depth_cmstnf.py
+
+# 调整深度损失权重
+CUDA_VISIBLE_DEVICES=2 python scripts/training/train_depth_cmstnf.py --depth_weight 0.5
+
+# 方案 C：RGB-D Neural Field（深度图作为模型输入条件，全新架构）
+CUDA_VISIBLE_DEVICES=2 python scripts/training/train_rgbd.py
+
+# 关闭深度引导采样（只用深度损失，不用 coarse-to-fine）
+CUDA_VISIBLE_DEVICES=2 python scripts/training/train_depth_cmstnf.py --no_guided_sampling
+CUDA_VISIBLE_DEVICES=2 python scripts/training/train_rgbd.py --no_guided_sampling
+```
+
+**Depth-CMSTNF vs RGB-D 的区别**：
+- **Depth-CMSTNF**：在现有 CMSTNF 架构上添加深度监督。深度图仅用于训练时的 loss 计算和采样引导，推理时不需要深度图。适合只想在现有模型上快速提升深度方向精度的场景。
+- **RGB-D Neural Field**：全新架构，深度图作为输入条件参与 3D 重建。推理时需要深度图输入（来自真实深度相机）。更适合最终要部署深度相机的场景。
+
+### 5.5 快速验证 Notebook
 
 ```bash
 jupyter notebook notebooks/06_linear_deform_test.ipynb
@@ -392,32 +464,30 @@ jupyter notebook notebooks/07_coarse_to_fine_freq.ipynb
 ## 6. 数据依赖关系图
 
 ```
-                     elastica_env.py
-                      ┌───────────────┐
-             ┌────────┤ get_observation├────────┐
-             │        └───────────────┘        │
-             │            2D                    │  get_observation_3d()
-             │         (default)                │  (with --3d)
-             ▼                                  ▼
-  collect.py --action-x/y ...           collect.py --action-x/y ... --3d
-             │                                  │
-             ▼                                  ▼
-  data/seq_zz/                        data/seq_zz_3d/
-  data/seq_rr/                        data/seq_rr_3d/
-  data/seq_rz/                        data/seq_rz_3d/
-  (images + actions + camera)         (+ positions + radii)
-       │                                      │
-  ┌────┴─────┐                         ┌──────┴──────┐
-  │          │                         │             │
-  ▼          ▼                         ▼             ▼
-MSTNF   C-MSTNF系列               Phase 1       Phase 2
-(单阶段) (需 zz 数据)             骨架回归      联合训练
-  │          │                         │             │
-  └────┬─────┘                         └──────┬──────┘
-       │                                      │
-       ▼                                      ▼
-  2D 渲染可视化                          evaluate_3d.py
-  (人眼评估)                            (定量 3D 指标)
+                          elastica_env.py
+                 ┌──────────────┼──────────────┐
+                 │              │              │
+          get_observation  get_observation_3d  get_observation_with_depth
+                 │              │              │
+                 ▼              ▼              ▼
+           collect.py      collect.py      collect.py
+           (default)       --3d            --depth
+                 │              │              │
+                 ▼              ▼              ▼
+           data/seq_rr/   data/seq_rr_3d/ data/seq_rr/  (+ depth_maps)
+           (img+act+cam)  (+ pos+radii)   (img+act+cam+depth)
+                 │              │              │
+          ┌─────┴─────┐   ┌────┴────┐   ┌─────┴─────┐
+          │           │   │         │   │           │
+          ▼           ▼   ▼         ▼   ▼           ▼
+        MSTNF    C-MSTNF   Phase 1  Phase 2   Depth-CMSTNF  RGB-D
+        (单阶段)  系列      骨架回归  联合训练   (深度监督)   (深度输入)
+          │           │     │         │         │           │
+          └─────┬─────┘     └────┬────┘         └─────┬─────┘
+                │                │                     │
+                ▼                ▼                     ▼
+          2D 渲染可视化    evaluate_3d.py          深度误差评估
+          (人眼评估)      (定量 3D 指标)
 ```
 
 ---
