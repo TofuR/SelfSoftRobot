@@ -52,6 +52,11 @@ CAMERA_EYE = (1.5, 0.0, 0.5)
 CAMERA_CENTER = (0.0, 0.0, 0.25)
 CAMERA_UP = (0.0, 0.0, 1.0)
 
+# 第二视角（侧面，沿 -Y 方向观察 XZ 平面）
+CAMERA_EYE_SIDE = (0.0, 1.5, 0.5)
+CAMERA_CENTER_SIDE = (0.0, 0.0, 0.25)
+CAMERA_UP_SIDE = (0.0, 0.0, 1.0)
+
 
 # =============================================================================
 # 自定义力与回调
@@ -388,6 +393,26 @@ class ContinuousSoftArmEnv:
         current_action = np.array([current_torques[0], current_torques[1]])
 
         return binary_img, current_action, positions, radii
+
+    def get_observation_multiview(self):
+        """获取双视角二值图像 + 驱动扭矩（可选 3D 节点坐标 + 半径）。
+
+        Returns:
+            (img_front, img_side, current_action, positions, radii)
+        """
+        soft_arm = self.simulation[0]
+        positions = soft_arm.position_collection.copy()
+        radii = soft_arm.radius.copy()
+
+        img_front = render_to_binary(positions, radii,
+                                     cam_eye=CAMERA_EYE, cam_center=CAMERA_CENTER, cam_up=CAMERA_UP)
+        img_side = render_to_binary(positions, radii,
+                                    cam_eye=CAMERA_EYE_SIDE, cam_center=CAMERA_CENTER_SIDE, cam_up=CAMERA_UP_SIDE)
+
+        current_torques = self.torque_force.torque_profile[:, 0]
+        current_action = np.array([current_torques[0], current_torques[1]])
+
+        return img_front, img_side, current_action, positions, radii
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@
 """
 
 import numpy as np
+import torch
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 import matplotlib.animation as animation
@@ -309,6 +310,7 @@ def print_metrics(pred, gt, label=""):
         pred: (N, 3) numpy array。
         gt:   (N, 3) numpy array。
     """
+    import torch
     pred_t = torch.from_numpy(pred).float()
     gt_t = torch.from_numpy(gt).float()
 
