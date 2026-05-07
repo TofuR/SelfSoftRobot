@@ -258,6 +258,90 @@ def render_to_binary(position_data, radius_data, image_size=DEFAULT_IMAGE_SIZE,
     return binary_img
 
 
+def render_depth_map(position_data, radius_data, image_size=DEFAULT_IMAGE_SIZE,
+                     cam_eye=CAMERA_EYE, cam_center=CAMERA_CENTER, cam_up=CAMERA_UP):
+    """渲染杆体并返回深度图（z-buffer depth）。
+
+    深度值为从相机光心沿射线方向到最近物体表面的距离，单位米。
+    无物体的像素深度为 0.0。
+
+    Args:
+        position_data: 杆体节点位置，形状 (3, N_nodes)。
+        radius_data: 杆体半径数组。
+        image_size: 输出图像分辨率 (W, H)。
+        cam_eye: 相机位置。
+        cam_center: 相机注视点。
+        cam_up: 相机上方向。
+
+    Returns:
+        depth_map: 深度图数组 (H, W)，float32，单位米。无物体区域为 0.0。
+    """
+    points = position_data.T
+    n_points = points.shape[0]
+    cells = np.hstack((n_points, np.arange(n_points)))
+    poly_data = pv.PolyData(points)
+    poly_data.lines = cells
+
+    avg_radius = np.mean(radius_data)
+    tube = poly_data.tube(radius=avg_radius)
+
+    plotter = pv.Plotter(window_size=image_size, off_screen=True)
+    plotter.set_background("black")
+    plotter.add_mesh(tube, color="white", lighting=False)
+    plotter.camera_position = [cam_eye, cam_center, cam_up]
+
+    plotter.render()
+    depth_buffer = plotter.get_depth_buffer()
+
+    if depth_buffer is None:
+        plotter.close()
+        H, W = image_size[1], image_size[0]
+        return np.zeros((H, W), dtype=np.float32)
+
+    depth_map = depth_buffer.astype(np.float32)
+
+    cam = plotter.camera
+    near = cam.clipping_range[0]
+    far = cam.clipping_range[1]
+
+    z_buf = np.clip(depth_map, 0, 1)
+    z_linear = 1.0 / (z_buf * (1.0 / far - 1.0 / near) + 1.0 / near)
+    z_linear = z_linear.astype(np.float32)
+
+    binary_img = render_to_binary(position_data, radius_data, image_size,
+                                  cam_eye, cam_center, cam_up)
+    depth_final = z_linear * (binary_img > 0).astype(np.float32)
+
+    plotter.close()
+    return depth_final
+
+
+def render_to_binary_with_depth(position_data, radius_data, image_size=DEFAULT_IMAGE_SIZE,
+                                cam_eye=CAMERA_EYE, cam_center=CAMERA_CENTER, cam_up=CAMERA_UP,
+                                threshold=127):
+    """渲染杆体并返回二值图像和深度图。
+
+    Args:
+        position_data: 杆体节点位置。
+        radius_data: 杆体半径。
+        image_size: 输出图像分辨率。
+        cam_eye: 相机位置。
+        cam_center: 相机注视点。
+        cam_up: 相机上方向。
+        threshold: 二值化阈值。
+
+    Returns:
+        (binary_img, depth_map)
+        - binary_img: 二值图像 (0/1)。
+        - depth_map: 深度图 (H, W) float32，单位米。
+    """
+    binary_img = render_to_binary(position_data, radius_data, image_size,
+                                  cam_eye, cam_center, cam_up, threshold)
+    depth_map = render_depth_map(position_data, radius_data, image_size,
+                                 cam_eye, cam_center, cam_up)
+    return binary_img, depth_map
+
+
 # =============================================================================
 # 静态采集接口
 # =============================================================================
@@ -413,6 +497,45 @@ class ContinuousSoftArmEnv:
         current_action = np.array([current_torques[0], current_torques[1]])
 
         return img_front, img_side, current_action, positions, radii
+
+    def get_observation_with_depth(self):
+        """获取二值图像 + 深度图 + 驱动扭矩 + 3D 数据。
+
+        Returns:
+            (binary_img, depth_map, current_action, positions, radii)
+        """
+        soft_arm = self.simulation[0]
+        positions = soft_arm.position_collection.copy()
+        radii = soft_arm.radius.copy()
+
+        binary_img, depth_map = render_to_binary_with_depth(positions, radii)
+
+        current_torques = self.torque_force.torque_profile[:, 0]
+        current_action = np.array([current_torques[0], current_torques[1]])
+
+        return binary_img, depth_map, current_action, positions, radii
+
+    def get_observation_multiview_with_depth(self):
+        """获取双视角二值图像 + 深度图 + 驱动扭矩 + 3D 数据。
+
+        Returns:
+            (img_front, depth_front, img_side, depth_side, current_action, positions, radii)
+        """
+        soft_arm = self.simulation[0]
+        positions = soft_arm.position_collection.copy()
+        radii = soft_arm.radius.copy()
+
+        img_front, depth_front = render_to_binary_with_depth(
+            positions, radii,
+            cam_eye=CAMERA_EYE, cam_center=CAMERA_CENTER, cam_up=CAMERA_UP)
+        img_side, depth_side = render_to_binary_with_depth(
+            positions, radii,
+            cam_eye=CAMERA_EYE_SIDE, cam_center=CAMERA_CENTER_SIDE, cam_up=CAMERA_UP_SIDE)
+
+        current_torques = self.torque_force.torque_profile[:, 0]
+        current_action = np.array([current_torques[0], current_torques[1]])
+
+        return img_front, depth_front, img_side, depth_side, current_action, positions, radii
 
 
 if __name__ == "__main__":

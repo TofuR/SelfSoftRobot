@@ -18,11 +18,12 @@ class SoftSequenceDataset(Dataset):
     """
 
     def __init__(self, data_dir, seq_len=10, file_list=None, norm_factor=None,
-                 target_size=None, return_pairs=False, return_3d=False):
+                 target_size=None, return_pairs=False, return_3d=False, return_depth=False):
         self.seq_len = seq_len
         self.target_size = target_size
         self.return_pairs = return_pairs
         self.return_3d = return_3d
+        self.return_depth = return_depth
         self.samples = []
 
         if file_list is None:
@@ -49,6 +50,7 @@ class SoftSequenceDataset(Dataset):
             self.norm_factor = norm_factor
 
         self.has_3d = False
+        self.has_depth = False
         self.data_cache = []
         for f_path in file_list:
             raw = np.load(f_path)
@@ -76,6 +78,10 @@ class SoftSequenceDataset(Dataset):
             if 'positions' in raw:
                 self.has_3d = True
                 entry['positions'] = raw['positions'].astype(np.float32)
+
+            if 'depth_maps' in raw:
+                self.has_depth = True
+                entry['depth_maps'] = raw['depth_maps'].astype(np.float32)
 
             self.data_cache.append(entry)
 
@@ -117,6 +123,11 @@ class SoftSequenceDataset(Dataset):
         data = self.data_cache[seq_id]
         seq = self._get_action_window(data, t)
 
+        def _get_depth(data, t):
+            if self.has_depth and 'depth_maps' in data:
+                return torch.from_numpy(data['depth_maps'][t]).float().reshape(-1)
+            return None
+
         # 构建返回值
         if self.return_pairs:
             seq_next = self._get_action_window(data, t + 1)
@@ -132,6 +143,11 @@ class SoftSequenceDataset(Dataset):
                     torch.from_numpy(data['positions'][t]).float(),
                     torch.from_numpy(data['positions'][t + 1]).float(),
                 )
+            if self.return_depth:
+                depth_t = _get_depth(data, t)
+                depth_t1 = _get_depth(data, t + 1)
+                if depth_t is not None and depth_t1 is not None:
+                    result += (depth_t, depth_t1)
             return result
 
         if self.target_size:
@@ -144,6 +160,11 @@ class SoftSequenceDataset(Dataset):
 
         if self.return_3d and self.has_3d:
             result += (torch.from_numpy(data['positions'][t]).float(),)
+
+        if self.return_depth:
+            depth = _get_depth(data, t)
+            if depth is not None:
+                result += (depth,)
 
         return result
     
