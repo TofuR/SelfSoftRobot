@@ -18,7 +18,7 @@ PyElastica 物理仿真 → PyVista 渲染图像 → 数据采集 (.npz) → 模
 |------|------|---------|------|
 | C-MSTNF 系列 | MSTNF / C-MSTNF / ODE-CMSTNF / Smooth-CMSTNF | 2D 图像 + 动作 | 2D 渲染图 |
 | MS-SCNF | MS-SCNF | 2D 图像 + 动作 + 3D 节点坐标 | 3D 骨架 + 2D 渲染图 |
-| **深度增强（新）** | **Depth-CMSTNF / RGB-D Neural Field** | **2D 图像 + 动作 + 深度图** | **深度感知 2D 渲染图** |
+| **深度增强（新）** | **Depth-CMSTNF** | **2D 图像 + 动作 + 深度图（仅训练监督，部署时不需要）** | **深度感知 2D 渲染图** |
 
 ---
 
@@ -30,14 +30,13 @@ SelfSoftRobot/
 │
 ├── src/
 │   ├── models/                      # 模型定义
-│   │   ├── layers.py                #   通用层（PositionalEncoder, MLPDecoder, DepthEncoder 等）
+│   │   ├── layers.py                #   通用层（PositionalEncoder, MLPDecoder 等）
 │   │   ├── model.py                 #   FBV_SM 基线（原始论文方法）
 │   │   ├── model_mstnf.py           #   MSTNF（MultiScaleEMA 时序编码）
 │   │   ├── model_cmstnf.py          #   C-MSTNF（Canonical + Deformation）
 │   │   ├── model_ode_cmstnf.py      #   ODE-CMSTNF（Neural ODE 替代 EMA）
 │   │   ├── model_smooth_cmstnf.py   #   Smooth-CMSTNF（正则化变形场）
 │   │   ├── model_ms_scnf.py         #   MS-SCNF（骨架条件神经场）
-│   │   └── model_rgbd.py            #   RGB-D Neural Field（深度条件化神经场，新）
 │   ├── data/
 │   │   └── dataset.py               # SoftSequenceDataset（支持 2D/3D 数据）
 │   ├── training/
@@ -48,8 +47,7 @@ SelfSoftRobot/
 │   │   ├── trainer_ode_cmstnf.py    #   ODE-CMSTNF 训练器
 │   │   ├── trainer_smooth_cmstnf.py #   Smooth-CMSTNF 训练器
 │   │   ├── trainer_ms_scnf.py       #   MS-SCNF 训练器
-│   │   ├── trainer_depth_cmstnf.py  #   Depth-CMSTNF 训练器（深度监督，新）
-│   │   ├── trainer_rgbd.py          #   RGB-D Neural Field 训练器（深度输入，新）
+│   │   ├── trainer_depth_cmstnf.py  #   Depth-CMSTNF 训练器（深度监督）
 │   │   ├── metrics_3d.py            #   3D 评估指标
 │   │   └── rendering.py             #   旧版渲染工具
 │   ├── config/
@@ -74,7 +72,6 @@ SelfSoftRobot/
 │   │   ├── train_smooth_cmstnf.py   #   Smooth-CMSTNF
 │   │   ├── train_ms_scnf.py         #   MS-SCNF
 │   │   ├── train_depth_cmstnf.py  #   Depth-CMSTNF（深度监督，新）
-│   │   └── train_rgbd.py         #   RGB-D Neural Field（深度输入，新）
 │   ├── evaluation/
 │   │   └── evaluate_3d.py           #   3D 几何评估脚本（新）
 │   └── visualization/               # 可视化工具
@@ -228,12 +225,6 @@ seq_000_hh_1748000000.npz        # 两维 hold (batch)
 - 部署时 `model.predict_skeleton(action_window)` 直接输出 31 个 3D 坐标
 - **两阶段训练**：Phase 1 骨架回归（3D loss），Phase 2 联合训练（3D + 2D loss）
 
-#### `model_rgbd.py` — RGB-D Neural Field（新方法）
-
-- **深度条件化神经场**：深度图通过 `DepthEncoder`（4层CNN）编码为条件特征，与动作特征拼接后 condition 神经场
-- **单阶段端到端训练**，不需要两阶段分离
-- `depth_map=None` 时自动退化为纯动作条件模型（向后兼容）
-- 查询流程：depth → DepthEncoder → f_depth; action → TemporalEMA → f_act; concat(f_depth, f_act) + 3D points → MLP → [vis, density]
 
 ### 3.5 训练器文件
 
@@ -247,7 +238,6 @@ seq_000_hh_1748000000.npz        # 两维 hold (batch)
 | `trainer_smooth_cmstnf.py` | Smooth-CMSTNF | 同 C-MSTNF | 同 C-MSTNF + 正则化 |
 | `trainer_ms_scnf.py` | MS-SCNF | 骨架回归 (3D loss) | 联合训练 (3D + 2D loss) |
 | `trainer_depth_cmstnf.py` | **Depth-CMSTNF** | 同 C-MSTNF | **同 C-MSTNF + 深度 L1 loss + 深度引导采样** |
-| `trainer_rgbd.py` | **RGB-D Neural Field** | — | **单阶段端到端（深度作为输入条件）** |
 
 ### 3.6 配置文件：`src/config/training.json`
 
@@ -434,23 +424,17 @@ python scripts/data_collection/collect_multiview.py --depth
 **第二步：训练**
 
 ```bash
-# 方案 A：Depth-supervised CMSTNF（深度作为额外监督损失，不改变模型架构）
+# Depth-supervised CMSTNF（深度作为额外监督损失，不改变模型架构）
 CUDA_VISIBLE_DEVICES=2 python scripts/training/train_depth_cmstnf.py
 
 # 调整深度损失权重
 CUDA_VISIBLE_DEVICES=2 python scripts/training/train_depth_cmstnf.py --depth_weight 0.5
 
-# 方案 C：RGB-D Neural Field（深度图作为模型输入条件，全新架构）
-CUDA_VISIBLE_DEVICES=2 python scripts/training/train_rgbd.py
-
 # 关闭深度引导采样（只用深度损失，不用 coarse-to-fine）
 CUDA_VISIBLE_DEVICES=2 python scripts/training/train_depth_cmstnf.py --no_guided_sampling
-CUDA_VISIBLE_DEVICES=2 python scripts/training/train_rgbd.py --no_guided_sampling
 ```
 
-**Depth-CMSTNF vs RGB-D 的区别**：
-- **Depth-CMSTNF**：在现有 CMSTNF 架构上添加深度监督。深度图仅用于训练时的 loss 计算和采样引导，推理时不需要深度图。适合只想在现有模型上快速提升深度方向精度的场景。
-- **RGB-D Neural Field**：全新架构，深度图作为输入条件参与 3D 重建。推理时需要深度图输入（来自真实深度相机）。更适合最终要部署深度相机的场景。
+**核心设计**：深度图仅用于训练时的 loss 计算和采样引导，**推理时只需要驱动参数**，不需要深度图或任何传感器输入，完全符合自建模思想。
 
 ### 5.5 快速验证 Notebook
 
@@ -480,8 +464,8 @@ jupyter notebook notebooks/07_coarse_to_fine_freq.ipynb
           ┌─────┴─────┐   ┌────┴────┐   ┌─────┴─────┐
           │           │   │         │   │           │
           ▼           ▼   ▼         ▼   ▼           ▼
-        MSTNF    C-MSTNF   Phase 1  Phase 2   Depth-CMSTNF  RGB-D
-        (单阶段)  系列      骨架回归  联合训练   (深度监督)   (深度输入)
+        MSTNF    C-MSTNF   Phase 1  Phase 2   Depth-CMSTNF
+        (单阶段)  系列      骨架回归  联合训练   (深度监督)
           │           │     │         │         │           │
           └─────┬─────┘     └────┬────┘         └─────┬─────┘
                 │                │                     │

@@ -116,34 +116,10 @@ class VisualConvDecoder64(nn.Module):
 		return self.deconv(z)
 
 
-class DepthEncoder(nn.Module):
-	"""将单通道深度图编码为紧凑特征向量。
-
-	输入: (B, 1, H, W) 深度图
-	输出: (B, feat_dim) 全局特征向量
-	"""
-	def __init__(self, feat_dim=64):
-		super().__init__()
-		self.conv = nn.Sequential(
-			nn.Conv2d(1, 16, 3, stride=2, padding=1), nn.ReLU(),
-			nn.Conv2d(16, 32, 3, stride=2, padding=1), nn.ReLU(),
-			nn.Conv2d(32, 64, 3, stride=2, padding=1), nn.ReLU(),
-			nn.Conv2d(64, 128, 3, stride=2, padding=1), nn.ReLU(),
-		)
-		self.pool = nn.AdaptiveAvgPool2d(1)
-		self.fc = nn.Linear(128, feat_dim)
-
-	def forward(self, depth_map):
-		x = self.conv(depth_map)
-		x = self.pool(x).flatten(1)
-		return self.fc(x)
-
-
 __all__ = [
 	"PositionalEncoder",
 	"TemporalLSTMEncoder",
 	"ActuatorMLPEncoder",
 	"MLPDecoder",
 	"VisualConvDecoder64",
-	"DepthEncoder",
 ]
