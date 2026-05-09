@@ -1,0 +1,15 @@
+/data/fixed_camera/
+/data/moving_camera/
+/__pycache__
+/train_log/
+/nedf_0410/data/
+/nedf_0410/train_log/
+/nedf_0502/data/
+/nedf_0502/train_log/
+/nedf_0504_npyversion/data/
+/nedf_0504_npyversion/train_log/
+/.idea
+/backup/
+/.DS_Store
+/.pytest_cache/
+/archive/

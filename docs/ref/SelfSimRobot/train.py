@@ -1,7 +1,7 @@
 # Our implementation is based on the NeRF publicly available code from https://github.com/krrish94/nerf-pytorch/ and
 # https://github.com/bmild/nerf
 import random
-from src.models import FBV_SM, PositionalEncoder
+from model import FBV_SM, PositionalEncoder
 from func import *
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -12,34 +12,15 @@ def crop_center(
         img: torch.Tensor,
         frac: float = 0.5
 ) -> torch.Tensor:
-    r"""按比例裁剪图像中心区域。
-
-    Args:
-        img: 输入图像张量。
-        frac: 裁剪比例，默认保留中心 50%。
-
-    Returns:
-        裁剪后的图像张量。
-    """
+    r"""
+  Crop center square from image.
+  """
     h_offset = round(img.shape[0] * (frac / 2))
     w_offset = round(img.shape[1] * (frac / 2))
     return img[h_offset:-h_offset, w_offset:-w_offset]
 
 
 def init_models(d_input, d_filter, pretrained_model_pth=None, lr=5e-4, output_size=2,FLAG_PositionalEncoder = False):
-    """初始化模型与优化器。
-
-    Args:
-        d_input: 模型输入维度。
-        d_filter: 隐层通道数。
-        pretrained_model_pth: 预训练权重目录（可选）。
-        lr: 学习率。
-        output_size: 输出维度。
-        FLAG_PositionalEncoder: 是否启用位置编码。
-
-    Returns:
-        (model, optimizer)
-    """
 
     if FLAG_PositionalEncoder:
         encoder = PositionalEncoder(d_input, n_freqs=10, log_space=True)
@@ -66,15 +47,6 @@ def init_models(d_input, d_filter, pretrained_model_pth=None, lr=5e-4, output_si
 
 
 def train(model, optimizer):
-    """执行主训练循环并周期验证。
-
-    Args:
-        model: 待训练模型。
-        optimizer: 优化器。
-
-    Returns:
-        bool: 训练是否正常完成；若触发重启条件返回 False。
-    """
 
     loss_v_last = np.inf
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.1, patience=20, verbose=True)
@@ -202,7 +174,7 @@ if __name__ == "__main__":
     np.random.seed(seed_num)
     random.seed(seed_num)
     torch.manual_seed(seed_num)
-    select_data_amount = 10
+    select_data_amount = 10000
 
     DOF = 4  # the number of motors  # dof4 apr03
 
@@ -313,7 +285,7 @@ if __name__ == "__main__":
 
     for _ in range(n_restarts):
 
-        model, optimizer = init_models(d_input=DOF + 3,  # DOF + 3 -> xyz and angle2 or 3 -> xyz
+        model, optimizer = init_models(d_input=(DOF - 2) + 3,  # DOF + 3 -> xyz and angle2 or 3 -> xyz
                                        d_filter=128,
                                        output_size=2,
                                        lr=5e-4,  # 5e-4

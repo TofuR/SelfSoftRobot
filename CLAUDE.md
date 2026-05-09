@@ -14,11 +14,11 @@ The project builds on the FBV-SM (Field-Based Vision Soft Manipulation) codebase
 ```bash
 pip install -r requirements.txt
 ```
-Key dependencies: PyTorch 2.6, PyElastica (via `elastica`), PyBullet, PyVista, OpenCV. Requires CUDA GPU for training.
+Key dependencies: PyTorch 2.6, PyElastica (via `elastica`), PyVista, OpenCV. Requires CUDA GPU for training.
 
 ### Data Collection
 ```bash
-# Single-view simulation data collection (PyBullet rigid arm)
+# Soft arm data collection (PyElastica)
 python scripts/data_collection/collect.py
 
 # Multi-view data collection with 3D ground truth (PyElastica soft arm)
@@ -27,10 +27,7 @@ python scripts/data_collection/collect_multiview.py
 
 ### Training
 ```bash
-# Legacy NeRF-based training (rigid arm, single image)
-python train.py
-
-# New model training scripts (soft arm, sequence data)
+# Model training scripts (soft arm, sequence data)
 python scripts/training/train_mstnf.py
 python scripts/training/train_cmstnf.py        # Two-phase: canonical + deformation
 python scripts/training/train_ode_cmstnf.py     # Neural ODE temporal encoder
@@ -51,14 +48,10 @@ There is no formal test suite. Validation is done through notebooks and the eval
 
 ### Two Simulation Backends
 
-- **PyBullet** (`env.py`, `visualize_bullet.py`): Rigid 4-DOF robot arm. Gym environment (`FBVSM_Env`) for data collection and interactive control. URDF models in `RobotArmURDF/`.
 - **PyElastica** (`elastica_env.py`): Soft continuum arm (Cosserat rod). Two modes: static `get_simulation_data_pair()` for independent episodes, and `ContinuousSoftArmEnv` for stateful sequential simulation. Renders via PyVista to binary images.
+- **PyBullet** (reference only): The original rigid arm simulation code from the FBV-SM paper is preserved in `docs/ref/SelfSimRobot/` for reference. See `docs/papers/hu2025_paper_understanding.md` for detailed analysis.
 
-### Core Pipeline (Legacy — `train.py` / `func.py`)
-
-The original NeRF-based pipeline: joint angles + 3D ray-sampled points → MLP → [visibility, density] → OM rendering → 2D image supervision. The first 2 DOF (yaw/pitch) are handled by a deterministic rotation matrix (`Rot_Z × Rot_Y`); remaining DOF are learned by the network.
-
-### New Model Architecture (`src/models/`)
+### Model Architecture (`src/models/`)
 
 | Model | File | Key Idea |
 |-------|------|----------|
@@ -84,8 +77,7 @@ Shared layers in `layers.py`: `PositionalEncoder`, `ActuatorMLPEncoder`, `MLPDec
 
 ### Key Utilities
 
-- `func.py`: Ray generation (`get_rays`), stratified sampling, volume rendering (OM/VR/VRAT), transformation matrices — shared by legacy pipeline
-- `src/utils/rendering.py`: New volume rendering utilities (OM rendering, ray sampling)
+- `src/utils/rendering.py`: Volume rendering utilities (OM rendering, ray sampling)
 - `src/utils/camera.py`: Camera ray generation for the new pipeline
 - `src/utils/skeleton_2d.py`: 2D skeleton extraction from binary images
 - `src/utils/skeleton_viz.py`: 3D skeleton visualization and animation
