@@ -48,6 +48,10 @@ def _load_norm_factor(checkpoint_path, data_dir):
 
 def _detect_model_type(state_dict):
     """通过 checkpoint key 判断模型类型和训练阶段。"""
+    # SDF 模型: coord_encoder + fusion 是特征 key
+    for key in state_dict:
+        if 'coord_encoder' in key:
+            return 'sdf', 0
     if 'temporal' in state_dict and 'skeleton_head' in state_dict:
         # MS-SCNF phase 1: 只保存了 temporal + skeleton_head
         return 'ms_scnf', 1
@@ -93,7 +97,17 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
     if window_size is None:
         window_size = train_cfg['temporal']['window_size']
 
-    if model_type == 'ms_scnf':
+    if model_type == 'sdf':
+        from src.models.model_sdf import TemporalSDFModel
+        model = TemporalSDFModel(
+            action_dim=action_dim,
+            window_size=window_size,
+            n_scales=train_cfg['temporal']['n_scales'],
+            hidden_dim=train_cfg['temporal']['hidden_dim'],
+        ).to(device)
+        model.load_state_dict(state_dict)
+
+    elif model_type == 'ms_scnf':
         from src.models.model_ms_scnf import MSSCNFModel
         ms_cfg = train_cfg.get('ms_scnf', {})
 
