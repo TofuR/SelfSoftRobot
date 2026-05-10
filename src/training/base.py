@@ -16,10 +16,10 @@ from src.config.params import load_config, get_camera_params
 class BaseTrainer:
     """训练基类：只提供工具方法，不做 GPU 管理。"""
 
-    def __init__(self, device):
+    def __init__(self, device, config=None):
         self.device = device
         self.cam_cfg = get_camera_params()
-        self.train_cfg = load_config("training")
+        self.train_cfg = config if config is not None else load_config("training")
         self.model_cfg = self.train_cfg["model"]
         self.opt_cfg = self.train_cfg["optimization"]
 

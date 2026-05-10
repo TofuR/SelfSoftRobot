@@ -14,8 +14,8 @@ from src.data.dataset import SoftSequenceDataset
 
 
 class MSTNFTrainer(BaseTrainer):
-    def __init__(self, device):
-        super().__init__(device)
+    def __init__(self, device, config=None):
+        super().__init__(device, config=config)
         self.temp_cfg = self.train_cfg["temporal"]
         self.loss_cfg = self.train_cfg["loss_weights"]
         self.log_cfg = self.train_cfg["logging"]

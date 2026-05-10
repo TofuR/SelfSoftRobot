@@ -25,8 +25,8 @@ from src.data.dataset import SoftSequenceDataset
 class DepthCMSTNFTrainer(TwoPhaseTrainer):
     """Depth-supervised CMSTNF: 在 CMSTNF 两阶段训练基础上添加深度监督。"""
 
-    def __init__(self, device, depth_weight=0.1, use_guided_sampling=True):
-        super().__init__(device)
+    def __init__(self, device, config=None, depth_weight=0.1, use_guided_sampling=True):
+        super().__init__(device, config=config)
         self.depth_weight = depth_weight
         self.use_guided_sampling = use_guided_sampling
 

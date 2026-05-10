@@ -23,8 +23,8 @@ from src.data.dataset import SoftSequenceDataset
 class TwoPhaseTrainer(BaseTrainer):
     """两阶段训练：Phase 1 (canonical) + Phase 2 (deformation)。"""
 
-    def __init__(self, device):
-        super().__init__(device)
+    def __init__(self, device, config=None):
+        super().__init__(device, config=config)
         self.temp_cfg = self.train_cfg["temporal"]
         self.canon_cfg = self.train_cfg["canonical"]
         self.loss_cfg = self.train_cfg["loss_weights"]

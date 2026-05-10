@@ -7,7 +7,6 @@ Loss 组合:
 """
 
 import os
-import glob
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -16,7 +15,6 @@ from tqdm import tqdm
 
 from src.models.model_sdf import TemporalSDFModel
 from src.data.dataset_sdf import SDFDataset
-from src.config.params import load_config
 from src.utils.experiment import create_experiment
 
 
@@ -33,15 +31,15 @@ def sdf_gradient(pred_sdf, coords):
 class SDFTrainer:
     """3D SDF 监督训练器。"""
 
-    def __init__(self, device, w_sdf=3e3, w_normal=1e2, w_grad=5e1):
+    def __init__(self, device, config):
         self.device = device
-        self.w_sdf = w_sdf
-        self.w_normal = w_normal
-        self.w_grad = w_grad
-        self.train_cfg = load_config("training")
+        self.config = config
+        self.w_sdf = config.get("w_sdf", 3e3)
+        self.w_normal = config.get("w_normal", 1e2)
+        self.w_grad = config.get("w_grad", 5e1)
 
     def _create_model(self, action_dim):
-        temporal_cfg = self.train_cfg.get("temporal", {})
+        temporal_cfg = self.config.get("temporal", {})
         return TemporalSDFModel(
             action_dim=action_dim,
             window_size=temporal_cfg.get("window_size", 20),
@@ -80,9 +78,15 @@ class SDFTrainer:
         }
         return total, loss_dict
 
-    def train(self, data_dir="data/seq_rr_3d", n_epochs=500):
+    def train(self, data_dir="data/seq_rr_3d"):
+        opt_cfg = self.config.get("optimization", {})
+        temporal_cfg = self.config.get("temporal", {})
+        n_epochs = opt_cfg.get("n_epochs", 500)
+        lr = opt_cfg.get("lr", 5e-5)
+        window_size = temporal_cfg.get("window_size", 20)
+
         train_ds = SDFDataset(
-            data_dir, seq_len=self.train_cfg.get("temporal", {}).get("window_size", 20),
+            data_dir, seq_len=window_size,
             n_surface=300, n_near_surface=200, n_off_surface=200)
         train_loader = DataLoader(
             train_ds,
@@ -93,31 +97,22 @@ class SDFTrainer:
         model = self._create_model(action_dim)
         n_params = sum(p.numel() for p in model.parameters())
 
-        optimizer = torch.optim.Adam(
-            model.parameters(),
-            lr=self.train_cfg.get("optimization", {}).get("lr", 5e-5))
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         scheduler = torch.optim.lr_scheduler.MultiStepLR(
             optimizer, milestones=[100000], gamma=0.5)
 
-        config = {
+        log_config = dict(self.config)
+        log_config.update({
             "data_dir": data_dir,
-            "n_epochs": n_epochs,
-            "w_sdf": self.w_sdf,
-            "w_normal": self.w_normal,
-            "w_grad": self.w_grad,
             "n_params": n_params,
             "action_dim": action_dim,
-            "batch_size": 1,
-            "lr": self.train_cfg.get("optimization", {}).get("lr", 5e-5),
-            "n_surface": 300,
-            "n_near_surface": 200,
-            "n_off_surface": 200,
-        }
-        log_dir = create_experiment("train_log/train_sdf", config)
+        })
+        log_dir = create_experiment("train_log/train_sdf", log_config)
 
         print(f"\n{'='*60}")
         print(f">>> SDF 3D Supervised Training, {n_epochs} epochs")
         print(f"    Data: {data_dir}, Params: {n_params:,}")
+        print(f"    LR: {lr}, Window: {window_size}")
         print(f"    Losses: sdf={self.w_sdf}, "
               f"normal={self.w_normal}, eikonal={self.w_grad}")
         print(f"    Log: {log_dir}")

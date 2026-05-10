@@ -1,18 +1,19 @@
 """train_sdf.py — SDF 3D 监督训练入口。
 
 用法:
-    # 使用 3D 采集数据训练 SDF 模型
+    # 默认参数训练
     CUDA_VISIBLE_DEVICES=2 python scripts/training/train_sdf.py
 
     # 指定数据和 epoch 数
     CUDA_VISIBLE_DEVICES=0 python scripts/training/train_sdf.py \
         --data_dir data/seq_rr_3d --n_epochs 1000
 
-    # 调整 loss 权重
+    # 覆盖学习率和 loss 权重
     CUDA_VISIBLE_DEVICES=2 python scripts/training/train_sdf.py \
-        --w_sdf 3e3 --w_normal 1e2
+        --lr 1e-4 --w_sdf 3e3 --w_normal 1e2
 
 默认 GPU 0，可通过 CUDA_VISIBLE_DEVICES 环境变量指定。
+未指定的参数自动从 src/config/training.json 读取。
 """
 
 import os
@@ -24,23 +25,44 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 import argparse
 import torch
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+from src.config.params import load_config
+from src.utils.config_utils import resolve_config
 from src.training.trainer_sdf import SDFTrainer
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--data_dir", type=str, default="data/seq_rr_3d")
-parser.add_argument("--n_epochs", type=int, default=500)
-parser.add_argument("--w_sdf", type=float, default=3e3)
-parser.add_argument("--w_normal", type=float, default=1e2)
-parser.add_argument("--w_grad", type=float, default=5e1)
+parser.add_argument("--n_epochs", type=int, default=None)
+parser.add_argument("--lr", type=float, default=None)
+parser.add_argument("--w_sdf", type=float, default=None)
+parser.add_argument("--w_normal", type=float, default=None)
+parser.add_argument("--w_grad", type=float, default=None)
+parser.add_argument("--window_size", type=int, default=None)
+parser.add_argument("--n_scales", type=int, default=None)
+parser.add_argument("--hidden_dim", type=int, default=None)
 args = parser.parse_args()
 
+defaults = load_config("training")
+config = resolve_config(defaults, {
+    "optimization.lr": args.lr,
+    "optimization.n_epochs": args.n_epochs,
+    "temporal.window_size": args.window_size,
+    "temporal.n_scales": args.n_scales,
+    "temporal.hidden_dim": args.hidden_dim,
+    "w_sdf": args.w_sdf,
+    "w_normal": args.w_normal,
+    "w_grad": args.w_grad,
+})
+
+# 没有被 CLI 覆盖的 loss 权重使用 SDF 默认值
+if args.w_sdf is None:
+    config["w_sdf"] = 3e3
+if args.w_normal is None:
+    config["w_normal"] = 1e2
+if args.w_grad is None:
+    config["w_grad"] = 5e1
+
 print(f"Device: {device}")
-trainer = SDFTrainer(
-    device=device,
-    w_sdf=args.w_sdf,
-    w_normal=args.w_normal,
-    w_grad=args.w_grad,
-)
-trainer.train(data_dir=args.data_dir, n_epochs=args.n_epochs)
+trainer = SDFTrainer(device=device, config=config)
+trainer.train(data_dir=args.data_dir)
