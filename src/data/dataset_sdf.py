@@ -41,6 +41,10 @@ class SDFDataset(Dataset):
         if not file_list:
             raise FileNotFoundError(f"No .npz files in {data_dir}")
 
+        norm_params = self.compute_normalization_from_files(file_list)
+        self.coord_center = norm_params['coord_center']
+        self.coord_scale = norm_params['coord_scale']
+
         all_acts = []
         for f in file_list:
             d = np.load(f)
@@ -51,24 +55,6 @@ class SDFDataset(Dataset):
             self.norm_factor = np.max(np.abs(all_acts)) or 1.0
         else:
             self.norm_factor = 1.0
-
-        # 计算全局坐标范围用于归一化
-        all_pos = []
-        for f in file_list:
-            d = np.load(f)
-            if 'positions' in d:
-                all_pos.append(d['positions'])
-        if all_pos:
-            all_pos = np.concatenate(all_pos, axis=0)  # (total_T, 3, N)
-            pos_min = all_pos.reshape(3, -1).min(axis=1)
-            pos_max = all_pos.reshape(3, -1).max(axis=1)
-            center = (pos_min + pos_max) / 2
-            half_extent = (pos_max - pos_min).max() / 2 * 1.1
-            self.coord_center = center.astype(np.float32)
-            self.coord_scale = float(half_extent)
-        else:
-            self.coord_center = np.zeros(3, dtype=np.float32)
-            self.coord_scale = 1.0
 
         self.action_dim = None
         for f_path in file_list:
@@ -99,6 +85,35 @@ class SDFDataset(Dataset):
 
         print(f"SDFDataset: {len(self.samples)} samples, action_dim={self.action_dim}")
         print(f"  coord_center={self.coord_center}, coord_scale={self.coord_scale:.4f}")
+
+    @staticmethod
+    def compute_normalization(data_dir):
+        """从数据目录计算归一化参数（无需初始化整个 dataset）。"""
+        file_list = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
+        return SDFDataset.compute_normalization_from_files(file_list)
+
+    @staticmethod
+    def compute_normalization_from_files(file_list):
+        """从 npz 文件列表计算坐标归一化参数。"""
+        all_pos = []
+        for f in file_list:
+            d = np.load(f)
+            if 'positions' in d:
+                all_pos.append(d['positions'])
+        if all_pos:
+            all_pos = np.concatenate(all_pos, axis=0)
+            pos_min = all_pos.reshape(3, -1).min(axis=1)
+            pos_max = all_pos.reshape(3, -1).max(axis=1)
+            center = (pos_min + pos_max) / 2
+            half_extent = (pos_max - pos_min).max() / 2 * 1.1
+            return {
+                'coord_center': center.astype(np.float32),
+                'coord_scale': float(half_extent),
+            }
+        return {
+            'coord_center': np.zeros(3, dtype=np.float32),
+            'coord_scale': 1.0,
+        }
 
     def _get_action_window(self, data, t):
         start = t - self.seq_len + 1

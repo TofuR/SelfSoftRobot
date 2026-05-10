@@ -67,8 +67,11 @@ class SDFTrainer:
         else:
             loss_normal = torch.tensor(0.0, device=self.device)
 
-        # Eikonal: 梯度模=1
-        loss_grad = torch.abs(gradient.norm(dim=-1) - 1).mean() * self.w_grad
+        # Eikonal: SIREN w0=30 使梯度被放大 ~27000 倍，与 eikonal 不兼容，默认关闭
+        if self.w_grad > 0:
+            loss_grad = ((gradient.norm(dim=-1) - 1) ** 2).mean() * self.w_grad
+        else:
+            loss_grad = torch.tensor(0.0, device=self.device)
 
         total = loss_sdf + loss_normal + loss_grad
 
@@ -120,6 +123,14 @@ class SDFTrainer:
               f"normal={self.w_normal}, eikonal={self.w_grad}")
         print(f"    Log: {log_dir}")
         print(f"{'='*60}")
+
+        # 初始诊断：检查模型输出和梯度范围
+        with torch.no_grad():
+            test_pts = torch.randn(100, 3, device=self.device)
+            test_aw = torch.randn(1, 20, train_ds.action_dim, device=self.device) * 0.1
+            test_out = model(test_pts, test_aw)
+            print(f"  [诊断] 初始输出范围: [{test_out.min():.6f}, {test_out.max():.6f}]")
+            print("  [诊断] GT SDF 范围: ~[-0.01, 0.6] (归一化坐标)")
 
         best_loss = float("inf")
 

@@ -53,11 +53,11 @@ class TemporalSDFModel(nn.Module):
 
         half = sdf_hidden // 2
 
-        # SIREN coordinate encoder
+        # SIREN coordinate encoder（首层 w0=30，后续层 w0=1，与原始论文一致）
         self.coord_encoder = nn.Sequential(
-            SirenLayer(3, half, is_first=True),
-            SirenLayer(half, half),
-            SirenLayer(half, half),
+            SirenLayer(3, half, w0=30, is_first=True),
+            SirenLayer(half, half, w0=1),
+            SirenLayer(half, half, w0=1),
         )
 
         # EMA temporal encoder (from model_mstnf.py)
@@ -70,11 +70,11 @@ class TemporalSDFModel(nn.Module):
         )
         self.state_proj = nn.Linear(hidden_dim, half)
 
-        # SIREN fusion MLP
+        # SIREN fusion MLP（首层 w0=30，后续 w0=1）
         self.fusion = nn.Sequential(
-            SirenLayer(sdf_hidden, sdf_hidden),
-            SirenLayer(sdf_hidden, sdf_hidden),
-            SirenLayer(sdf_hidden, sdf_hidden),
+            SirenLayer(sdf_hidden, sdf_hidden, w0=30),
+            SirenLayer(sdf_hidden, sdf_hidden, w0=1),
+            SirenLayer(sdf_hidden, sdf_hidden, w0=1),
             SirenLayer(sdf_hidden, 1, is_last=True),
         )
 

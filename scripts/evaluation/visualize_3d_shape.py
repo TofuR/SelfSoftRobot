@@ -112,8 +112,12 @@ def input_float(prompt, default):
 # ──────────────────────────── 模型查询 ────────────────────────────
 
 @torch.no_grad()
-def query_sdf_model(model, action_window, bounds, grid_res, device, batch_size=100000):
-    """SDF 模型: 在 3D 网格上查询 SDF 值，用 marching cubes 提取零等值面。"""
+def query_sdf_model(model, action_window, bounds, grid_res, device,
+                    coord_center=None, coord_scale=1.0, batch_size=100000):
+    """SDF 模型: 在 3D 网格上查询 SDF 值，用 marching cubes 提取零等值面。
+
+    模型在归一化坐标 [-1,1]^3 上训练，查询前需要先归一化。
+    """
     from skimage import measure
 
     x = np.linspace(bounds[0], bounds[1], grid_res)
@@ -121,6 +125,10 @@ def query_sdf_model(model, action_window, bounds, grid_res, device, batch_size=1
     z = np.linspace(bounds[4], bounds[5], grid_res)
     xx, yy, zz = np.meshgrid(x, y, z, indexing='ij')
     coords_np = np.stack([xx.ravel(), yy.ravel(), zz.ravel()], axis=-1).astype(np.float32)
+
+    # 归一化到 [-1, 1]^3（与训练时一致）
+    if coord_center is not None:
+        coords_np = (coords_np - coord_center[None, :]) / coord_scale
 
     sdf_all = np.zeros(len(coords_np), dtype=np.float32)
     n_batches = (len(coords_np) + batch_size - 1) // batch_size
@@ -147,15 +155,18 @@ def query_sdf_model(model, action_window, bounds, grid_res, device, batch_size=1
 
     # 尝试 marching cubes 提取零等值面
     if sdf_all.min() <= 0 <= sdf_all.max():
-        spacing = (
-            (bounds[1] - bounds[0]) / (grid_res - 1),
-            (bounds[3] - bounds[2]) / (grid_res - 1),
-            (bounds[5] - bounds[4]) / (grid_res - 1),
-        )
+        # spacing 基于归一化空间的网格
+        norm_min = (np.array([bounds[0], bounds[2], bounds[4]]) - coord_center) / coord_scale
+        norm_max = (np.array([bounds[1], bounds[3], bounds[5]]) - coord_center) / coord_scale
+        spacing = tuple((norm_max - norm_min) / (grid_res - 1))
         verts, faces, normals, _ = measure.marching_cubes(sdf_grid, level=0.0, spacing=spacing)
-        verts[:, 0] += bounds[0]
-        verts[:, 1] += bounds[2]
-        verts[:, 2] += bounds[4]
+        # 顶点在归一化空间，反归一化回世界坐标
+        verts[:, 0] = verts[:, 0] + norm_min[0]
+        verts[:, 1] = verts[:, 1] + norm_min[1]
+        verts[:, 2] = verts[:, 2] + norm_min[2]
+        # 反归一化到世界坐标
+        if coord_center is not None:
+            verts = verts * coord_scale + coord_center[None, :]
         result['vertices'] = verts
         result['faces'] = faces
     else:
@@ -454,7 +465,12 @@ def main():
     pred_skeleton = None
 
     if model_type == 'sdf':
-        result = query_sdf_model(model, action_window, bounds, grid_res, device)
+        # SDF 模型在归一化坐标 [-1,1]^3 上训练，需要归一化参数
+        from src.data.dataset_sdf import SDFDataset
+        norm_params = SDFDataset.compute_normalization(os.path.dirname(npz_path))
+        result = query_sdf_model(model, action_window, bounds, grid_res, device,
+                                  coord_center=norm_params['coord_center'],
+                                  coord_scale=norm_params['coord_scale'])
         if result['vertices'] is not None:
             print(f"  提取到 {len(result['vertices'])} 个顶点, {len(result['faces'])} 个三角面")
     else:
