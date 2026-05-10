@@ -19,8 +19,8 @@ Usage:
 import os
 import sys
 
-CUDA_DEVICE = 2
-os.environ["CUDA_VISIBLE_DEVICES"] = str(CUDA_DEVICE)
+if "CUDA_VISIBLE_DEVICES" not in os.environ:
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 import argparse

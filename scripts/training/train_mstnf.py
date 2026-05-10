@@ -2,9 +2,7 @@
 
 Usage:
     # 完整训练
-    CUDA_VISIBLE_DEVICES=3 python scripts/training/train_mstnf.py
-
-    # 指定数据路径（在文件内修改 CUDA_DEVICE 和 DATA_DIR）
+    CUDA_VISIBLE_DEVICES=0 python scripts/training/train_mstnf.py
 """
 
 import os
@@ -13,10 +11,10 @@ import sys
 # ═══════════════════════════════════════════════════════════
 # 常用配置（直接在这里修改）
 # ═══════════════════════════════════════════════════════════
-CUDA_DEVICE = 3
 DATA_DIR = "data/sequence_data"
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str(CUDA_DEVICE)
+if "CUDA_VISIBLE_DEVICES" not in os.environ:
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 import torch
