@@ -34,9 +34,10 @@ class SDFTrainer:
     def __init__(self, device, config):
         self.device = device
         self.config = config
-        self.w_sdf = config.get("w_sdf", 3e3)
-        self.w_normal = config.get("w_normal", 1e2)
-        self.w_grad = config.get("w_grad", 5e1)
+        sdf_cfg = config.get("sdf", {})
+        self.w_sdf = sdf_cfg.get("w_sdf", 3e3)
+        self.w_normal = sdf_cfg.get("w_normal", 1e2)
+        self.w_grad = sdf_cfg.get("w_grad", 5e1)
 
     def _create_model(self, action_dim):
         temporal_cfg = self.config.get("temporal", {})
@@ -87,7 +88,9 @@ class SDFTrainer:
 
         train_ds = SDFDataset(
             data_dir, seq_len=window_size,
-            n_surface=300, n_near_surface=200, n_off_surface=200)
+            n_surface=self.config.get("sdf", {}).get("n_surface", 300),
+            n_near_surface=self.config.get("sdf", {}).get("n_near_surface", 200),
+            n_off_surface=self.config.get("sdf", {}).get("n_off_surface", 200))
         train_loader = DataLoader(
             train_ds,
             batch_size=1,

@@ -2,14 +2,14 @@
 
 用法:
     # 默认参数训练
-    CUDA_VISIBLE_DEVICES=2 python scripts/training/train_sdf.py
+    CUDA_VISIBLE_DEVICES=0 python scripts/training/train_sdf.py
 
     # 指定数据和 epoch 数
     CUDA_VISIBLE_DEVICES=0 python scripts/training/train_sdf.py \
-        --data_dir data/seq_rr_3d --n_epochs 1000
+        --data_dir data/seq_rz_3d --n_epochs 1000
 
     # 覆盖学习率和 loss 权重
-    CUDA_VISIBLE_DEVICES=2 python scripts/training/train_sdf.py \
+    CUDA_VISIBLE_DEVICES=0 python scripts/training/train_sdf.py \
         --lr 1e-4 --w_sdf 3e3 --w_normal 1e2
 
 默认 GPU 0，可通过 CUDA_VISIBLE_DEVICES 环境变量指定。
@@ -32,7 +32,7 @@ from src.training.trainer_sdf import SDFTrainer
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--data_dir", type=str, default="data/seq_rr_3d")
+parser.add_argument("--data_dir", type=str, default="data/seq_rz_3d")
 parser.add_argument("--n_epochs", type=int, default=None)
 parser.add_argument("--lr", type=float, default=None)
 parser.add_argument("--w_sdf", type=float, default=None)
@@ -41,6 +41,12 @@ parser.add_argument("--w_grad", type=float, default=None)
 parser.add_argument("--window_size", type=int, default=None)
 parser.add_argument("--n_scales", type=int, default=None)
 parser.add_argument("--hidden_dim", type=int, default=None)
+parser.add_argument("--n_surface", type=int, default=None,
+                    help="表面采样点数 (default: 300)")
+parser.add_argument("--n_near_surface", type=int, default=None,
+                    help="近表面采样点数 (default: 200)")
+parser.add_argument("--n_off_surface", type=int, default=None,
+                    help="远表面均匀采样点数 (default: 200)")
 args = parser.parse_args()
 
 defaults = load_config("training")
@@ -50,18 +56,13 @@ config = resolve_config(defaults, {
     "temporal.window_size": args.window_size,
     "temporal.n_scales": args.n_scales,
     "temporal.hidden_dim": args.hidden_dim,
-    "w_sdf": args.w_sdf,
-    "w_normal": args.w_normal,
-    "w_grad": args.w_grad,
+    "sdf.w_sdf": args.w_sdf,
+    "sdf.w_normal": args.w_normal,
+    "sdf.w_grad": args.w_grad,
+    "sdf.n_surface": args.n_surface,
+    "sdf.n_near_surface": args.n_near_surface,
+    "sdf.n_off_surface": args.n_off_surface,
 })
-
-# 没有被 CLI 覆盖的 loss 权重使用 SDF 默认值
-if args.w_sdf is None:
-    config["w_sdf"] = 3e3
-if args.w_normal is None:
-    config["w_normal"] = 1e2
-if args.w_grad is None:
-    config["w_grad"] = 5e1
 
 print(f"Device: {device}")
 trainer = SDFTrainer(device=device, config=config)

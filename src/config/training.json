@@ -60,5 +60,15 @@
         "w_skeleton_coarse": 0.1,
         "w_render": 0.5,
         "_doc": "n_coarse/medium/fine=多尺度骨架节点数, w_skeleton_*=各级别loss权重, w_render=Phase2渲染loss权重"
+    },
+
+    "sdf": {
+        "n_surface": 300,
+        "n_near_surface": 200,
+        "n_off_surface": 200,
+        "w_sdf": 3000.0,
+        "w_normal": 100.0,
+        "w_grad": 50.0,
+        "_doc": "n_surface/near/off=三类采样点数, w_sdf=SDF L1回归权重, w_normal=法向量一致性权重, w_grad=Eikonal约束权重"
     }
 }
