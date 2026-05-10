@@ -12,13 +12,14 @@ PyElastica 物理仿真 → PyVista 渲染图像 → 数据采集 (.npz) → 模
 
 项目目标：**仅用驱动参数（扭矩）预测软体机器人的完整 3D 形态**。
 
-当前有三套模型管线：
+当前有四套模型管线：
 
 | 管线 | 模型 | 核心创新 | 数据需求 | 输出 |
 |------|------|---------|---------|------|
 | C-MSTNF 系列 | MSTNF / C-MSTNF / ODE-CMSTNF / Smooth-CMSTNF | 多尺度时序编码 + D-NeRF 变形场 | 2D 图像 + 动作 | 2D 渲染图 |
 | MS-SCNF | MS-SCNF | 显式骨架回归 + 骨架条件密度场 | 2D 图像 + 动作 + 3D 节点坐标 | 3D 骨架 + 2D 渲染图 |
 | **深度增强** | **Depth-CMSTNF** | 深度图作为额外监督信号 | **2D 图像 + 动作 + 深度图（仅训练监督，部署时不需要）** | **深度感知 2D 渲染图** |
+| **SDF 3D** | **TemporalSDF** | SIREN 坐标编码 + 3D SDF 直接监督 | **3D 节点坐标 + 动作（无需 2D 图像）** | **3D SDF 场** |
 
 ---
 
@@ -37,8 +38,10 @@ SelfSoftRobot/
 │   │   ├── model_ode_cmstnf.py      #   ODE-CMSTNF（Neural ODE 替代 EMA）
 │   │   ├── model_smooth_cmstnf.py   #   Smooth-CMSTNF（正则化变形场）
 │   │   ├── model_ms_scnf.py         #   MS-SCNF（骨架条件神经场）
+│   │   ├── model_sdf.py             #   TemporalSDF（SIREN + EMA 时序 SDF）
 │   ├── data/
 │   │   └── dataset.py               # SoftSequenceDataset（支持 2D/3D 数据）
+│   │   └── dataset_sdf.py           # SDFDataset（3D SDF 监督采样）
 │   ├── training/
 │   │   ├── base.py                  #   BaseTrainer（渲染、射线采样等共享工具）
 │   │   ├── two_phase_trainer.py     #   TwoPhaseTrainer（Phase1+Phase2 基类）
@@ -48,6 +51,7 @@ SelfSoftRobot/
 │   │   ├── trainer_smooth_cmstnf.py #   Smooth-CMSTNF 训练器
 │   │   ├── trainer_ms_scnf.py       #   MS-SCNF 训练器
 │   │   ├── trainer_depth_cmstnf.py  #   Depth-CMSTNF 训练器（深度监督）
+│   │   ├── trainer_sdf.py           #   TemporalSDF 训练器（3D SDF 监督）
 │   │   ├── metrics_3d.py            #   3D 评估指标
 │   │   └── rendering.py             #   旧版渲染工具
 │   ├── config/
@@ -58,6 +62,7 @@ SelfSoftRobot/
 │       ├── camera.py                #   get_rays（射线生成）
 │       ├── rendering.py             #   OM_rendering, sample_stratified, OM_rendering_with_depth, sample_depth_guided
 │       ├── experiment.py            #   实验目录管理 + GIF 保存
+│       ├── config_utils.py          #   CLI 参数覆盖 + 配置合并工具
 │       └── visualization.py         #   可视化工具
 │
 ├── scripts/
@@ -72,6 +77,7 @@ SelfSoftRobot/
 │   │   ├── train_smooth_cmstnf.py   #   Smooth-CMSTNF
 │   │   ├── train_ms_scnf.py         #   MS-SCNF
 │   │   ├── train_depth_cmstnf.py  #   Depth-CMSTNF（深度监督，新）
+│   │   ├── train_sdf.py             #   TemporalSDF（3D SDF 监督）
 │   ├── evaluation/
 │   │   └── evaluate_3d.py           #   3D 几何评估脚本（新）
 │   └── visualization/               # 可视化工具
@@ -382,6 +388,65 @@ action_window: (B, K=20, D=2) → MultiScaleEMA → physics_state: (B, 128)
 
 ---
 
+#### `model_sdf.py` — TemporalSDF（Temporal SDF）
+
+**名字来源**：**Temporal** **S**igned **D**istance **F**ield。带时序编码的有符号距离场。
+
+**核心思想**：与前面所有模型不同，TemporalSDF **不通过体渲染和 2D 图像做监督**，而是直接用 3D 点云的 SDF 值做监督。模型用 SIREN（周期性激活函数）作为坐标编码器，天然适合学习光滑的距离场。
+
+**独特优势**：
+- 不需要 2D 图像作为训练数据，只需要 3D 节点坐标
+- 直接输出 SDF 值，SDF=0 的零等值面就是机器人表面
+- SIREN 的 sin 激活天然保证 SDF 场的光滑性和可微性
+
+**数据流**：
+```
+3D 查询坐标 coords: (N, 3)
+  │
+  ↓ SIREN Coordinate Encoder (3 层 sin 激活)
+  │   SirenLayer(3 → 128, is_first=True)  — 第一层用特殊初始化
+  │   SirenLayer(128 → 128)
+  │   SirenLayer(128 → 128)
+  ↓
+  spatial_feat: (N, 128)
+
+action_window: (B, K=20, D=2)
+  │
+  ↓ MultiScaleEMA → temporal_state: (B, 128)
+  ↓ Linear(128 → 128)
+  ↓
+  state_feat: (B, 128)
+
+融合:
+  [spatial_feat(广播), state_feat(广播)] → concat → (B*N, 256)
+  ↓
+  SIREN Fusion MLP (3 层 + 输出层)
+  SirenLayer(256 → 256) × 3
+  SirenLayer(256 → 1, is_last=True)  — 线性输出
+  ↓
+  sdf: (B*N, 1)  — 有符号距离值
+```
+
+**Loss 组合**：
+```
+1. SDF L1 regression: |pred_sdf - gt_sdf|（表面点=0，off-surface 点=真实距离）
+2. Normal constraint:  法向量一致性（仅表面点，cosine similarity）
+3. Eikonal constraint: |∇SDF| = 1（梯度模等于 1，SDF 的基本性质）
+```
+
+**训练数据采样**（`dataset_sdf.py`）：
+```
+每帧数据:
+  - on-surface 点 (300): 杆体表面采样，SDF = 0
+  - near-surface 点 (200): 表面附近偏置采样，有精确 SDF 值
+  - off-surface 点 (200): 扩大空间均匀采样，有精确 SDF 值
+  - 坐标归一化到 [-1, 1]^3
+```
+
+**训练**：单阶段，直接 3D 监督，不需要体渲染。
+
+---
+
 #### Depth-CMSTNF（无独立模型文件）
 
 **名字来源**：**Depth**-supervised **C**anonical **M**STNF。用深度图增强监督的 C-MSTNF。
@@ -414,11 +479,12 @@ action_window: (B, K=20, D=2) → MultiScaleEMA → physics_state: (B, 128)
 | `MLPDecoder` | 通用解码 MLP：`input → 2d → 2d → d → d/2 → output`，density 用 softplus 激活 |
 | `MultiScaleEMA` | 多尺度指数移动平均：用 N 个可学习衰减率分别做 EMA，再加权拼接 |
 | `TemporalLSTMEncoder` | LSTM 时序编码器（旧版，已被 EMA 替代） |
+| `SirenLayer`（model_sdf.py） | SIREN 层：`sin(w0 · (Wx + b))`，周期性激活天然适合光滑场学习 |
 
 
 ### 3.5 训练器文件
 
-所有训练器继承 `BaseTrainer`（渲染、射线采样工具）。
+所有训练器继承 `BaseTrainer`（渲染、射线采样工具）。`trainer_sdf.py` 是唯一不继承 BaseTrainer 的独立训练器，因为它不需要体渲染。
 
 | 文件 | 模型 | Phase 1 内容 | Phase 2 内容 |
 |------|------|-------------|-------------|
@@ -428,6 +494,7 @@ action_window: (B, K=20, D=2) → MultiScaleEMA → physics_state: (B, 128)
 | `trainer_smooth_cmstnf.py` | Smooth-CMSTNF | 同 C-MSTNF | 同 C-MSTNF + 正则化 |
 | `trainer_ms_scnf.py` | MS-SCNF | 骨架回归 (3D loss) | 联合训练 (3D + 2D loss) |
 | `trainer_depth_cmstnf.py` | **Depth-CMSTNF** | 同 C-MSTNF | **同 C-MSTNF + 深度 L1 loss + 深度引导采样** |
+| `trainer_sdf.py` | **TemporalSDF** | — | **单阶段，3D SDF 监督（SDF + 法向量 + Eikonal loss）** |
 
 ### 3.6 配置文件：`src/config/training.json`
 
