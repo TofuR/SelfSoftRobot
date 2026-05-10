@@ -344,25 +344,58 @@ physics_state: (B, 128)
 
 **数据流**：
 ```
-action_window: (B, K, D) → MultiScaleEMA → physics_state: (B, 128)
+action_window: (B, K=20, D=2) → MultiScaleEMA → physics_state: (B, 128)
   │
-  ├──→ SkeletonHead → 多尺度 3D 骨架:
-  │      coarse:  (B, 4, 3)   — 粗粒度（4 个控制点）
-  │      medium:  (B, 10, 3)  — 中粒度
-  │      fine:    (B, 31, 3)  — 细粒度（完整 31 节点）
+  ↓ SkeletonHead
+  │   physics_state → 共享 trunk MLP → feat: (B, 256)
+  │   ├── coarse_head:  Linear(256, 12)  → reshape → (B, 4, 3)   粗骨架
+  │   ├── medium_head:  Linear(256, 30)  → reshape → (B, 10, 3)  中骨架
+  │   └── fine_head:    Linear(256, 93)  → reshape → (B, 31, 3)  细骨架
+  │   （三个并行线性头共享 trunk，输出不同粒度的 3D 节点坐标）
+  ↓
+  skeleton = fine: (B, 31, 3)
+
+3D 查询点 points: (N_rays, N_samples, 3)
   │
-  └──→ 与 3D 查询点一起:
-       [pos_enc, skeleton_distance_enc, physics_state, action]
-         → SkeletonConditionedDensity → [vis, density]
-         → 体渲染 → 2D 图像
+  ↓ SkeletonConditionedDensity
+  │   1. 计算查询点到骨架线段的距离:
+  │      skeleton 相邻节点构成 30 条线段
+  │      对每个查询点，找最近线段 → dist: (B*N, N_samples)
+  │
+  │   2. 双路位置编码:
+  │      dist  → PE(d_input=1, n_freqs=6) → dist_enc:  (B*N, N_samples, 13)
+  │      pts   → PE(d_input=3, n_freqs=4) → pos_enc:   (B*N, N_samples, 27)
+  │
+  │   3. 拼接 + 解码:
+  │      [dist_enc, pos_enc] → MLPDecoder → (B*N, N_samples, 2) [vis, density]
+  ↓
+  体渲染 → 2D 图像
 ```
 
 **独特优势**：
 - `model.predict_skeleton(action_window)` 可直接输出 31 个 3D 节点坐标，无需渲染
-- 多尺度预测：coarse-to-fine 课程式学习
-- 骨架距离编码：查询点到骨架线段的距离 → 位置相关的密度先验
+- 多尺度预测：三个并行线性头共享 trunk，coarse-to-fine 课程式学习
+- 骨架距离编码：查询点到最近骨架线段的距离作为密度先验（距骨架近 → 密度高）
+- `SkeletonConditionedDensity` 不直接用 `physics_state` 或 `action`——所有动作信息都通过骨架间接传递
 
 **训练**：两阶段。Phase 1 骨架回归（3D L2 loss）；Phase 2 联合训练（渲染 loss + 骨架 loss）。
+
+---
+
+#### Depth-CMSTNF（无独立模型文件）
+
+**名字来源**：**Depth**-supervised **C**anonical **M**STNF。用深度图增强监督的 C-MSTNF。
+
+**核心思想**：Depth-CMSTNF **没有独立的模型文件**，它直接复用 `model_cmstnf.py` 的 `CMSTNFModel`，模型架构与 C-MSTNF 完全相同。创新点在训练策略层面——利用深度图提供额外的三维监督信号。
+
+**与 C-MSTNF 的区别**（仅在 `trainer_depth_cmstnf.py` 中）：
+```
+额外训练策略:
+  1. 深度 L1 loss:  |E[depth] - depth_gt|（渲染期望深度与 GT 深度图的差异）
+  2. 深度引导采样:  用 GT 深度图集中采样点在物体表面附近（coarse-to-fine）
+```
+
+**关键设计**：深度图仅用于训练时的 loss 和采样引导，**推理时只需要驱动参数**，不需要深度图或任何传感器输入。
 
 ---
 
