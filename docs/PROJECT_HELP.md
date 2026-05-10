@@ -14,11 +14,11 @@ PyElastica 物理仿真 → PyVista 渲染图像 → 数据采集 (.npz) → 模
 
 当前有三套模型管线：
 
-| 管线 | 模型 | 数据需求 | 输出 |
-|------|------|---------|------|
-| C-MSTNF 系列 | MSTNF / C-MSTNF / ODE-CMSTNF / Smooth-CMSTNF | 2D 图像 + 动作 | 2D 渲染图 |
-| MS-SCNF | MS-SCNF | 2D 图像 + 动作 + 3D 节点坐标 | 3D 骨架 + 2D 渲染图 |
-| **深度增强（新）** | **Depth-CMSTNF** | **2D 图像 + 动作 + 深度图（仅训练监督，部署时不需要）** | **深度感知 2D 渲染图** |
+| 管线 | 模型 | 核心创新 | 数据需求 | 输出 |
+|------|------|---------|---------|------|
+| C-MSTNF 系列 | MSTNF / C-MSTNF / ODE-CMSTNF / Smooth-CMSTNF | 多尺度时序编码 + D-NeRF 变形场 | 2D 图像 + 动作 | 2D 渲染图 |
+| MS-SCNF | MS-SCNF | 显式骨架回归 + 骨架条件密度场 | 2D 图像 + 动作 + 3D 节点坐标 | 3D 骨架 + 2D 渲染图 |
+| **深度增强** | **Depth-CMSTNF** | 深度图作为额外监督信号 | **2D 图像 + 动作 + 深度图（仅训练监督，部署时不需要）** | **深度感知 2D 渲染图** |
 
 ---
 
@@ -195,35 +195,192 @@ seq_000_hh_1748000000.npz        # 两维 hold (batch)
 
 ### 3.4 模型文件
 
-#### `model_mstnf.py` — MSTNF（基线时序模型）
+所有模型的核心思想相同：**输入驱动参数（actuator inputs），在 3D 空间中查询神经场，输出该点的属性（可见度/密度/SDF），通过体渲染（volume rendering）生成 2D 图像作为监督信号**。
 
-- 核心：`MultiScaleEMA` 时序编码器，用可学习衰减率的 EMA 替代 LSTM
-- 输入：动作窗口 (B, 20, 2) → 物理状态 (B, 128)
-- 空间查询：位置编码 + 物理状态 + 当前动作 → [vis, density]
-- **单阶段训练**，不需要 canonical 数据
+```
+驱动参数 ──→ 时序编码器 ──→ 物理状态向量
+                              │
+3D 查询点 ──→ 位置编码 ──────→  空间解码器 ──→ [vis, density] 或 SDF
+                              │              │
+                         当前动作 ──────────→│
+                                           ↓
+                                    体渲染 → 2D 图像（训练监督）
+```
 
-#### `model_cmstnf.py` — C-MSTNF（Canonical + Deformation）
+> **核心约定**：模型输入只有驱动参数和 3D 查询点。图像、深度图等仅作为训练时的监督信号，不直接输入模型。
 
-- D-NeRF 范式：`CanonicalField`（零动作静止态）+ `DeformationField`（动作条件变形）
-- 查询流程：世界点 → 变形 MLP → canonical 坐标 → canonical 场 → [vis, density]
-- **两阶段训练**：Phase 1 用零动作数据训练 canonical，Phase 2 冻结 canonical 训练变形
+---
 
-#### `model_ode_cmstnf.py` — ODE-CMSTNF
+#### `model.py` — FBV_SM（Field-Based Volumetric Soft body Model）
 
-- 与 C-MSTNF 相同架构，仅将 MultiScaleEMA 替换为 Neural ODE
-- ODE 积分保证状态轨迹连续，理论上可捕捉阻尼振荡
+**名字来源**：FBV-SM 论文（Hu et al. 2025）的原始基线模型。
+
+**核心思想**：最简单的神经场——输入一个点的完整特征（位置 + 动作拼接），直接 MLP 预测该点的可见度和密度。
+
+**数据流**：
+```
+输入 x: (N, 5)  [xyz(3) + action(2)]
+  ├── x[:, :3] → PositionalEncoder(n_freqs=10) → (N, 63)
+  ├── x[:, 3:] → ActuatorMLPEncoder → (N, 63)
+  └── concat → MLPDecoder → (N, 2) [visibility, density]
+```
+
+**训练**：单阶段，MSE 重建 loss。
+
+---
+
+#### `model_mstnf.py` — MSTNF（Multi-Scale Temporal Neural Field）
+
+**名字来源**：**M**ulti-**S**cale **T**emporal **N**eural **F**ield。多尺度时序神经场。
+
+**核心思想**：引入时序建模。用一个动作历史窗口（最近 K 帧）代替单帧动作，通过 MultiScaleEMA 编码器提取物理状态。EMA（指数移动平均）用多个可学习衰减率捕获不同时间尺度的历史影响。
+
+**数据流**：
+```
+action_window: (B, K=20, D=2)  — 最近 20 帧的驱动参数
+  │
+  ↓ MultiScaleEMA (4 个可学习衰减率)
+  │ → 加权平均 → MLP
+  ↓
+physics_state: (B, 128)
+
+3D 查询点 points: (N_rays, N_samples, 3)
+  │
+  ↓ PositionalEncoder(n_freqs=10)
+  ↓
+  pos_enc: (N_rays, N_samples, 63)
+
+融合: [pos_enc, physics_state(广播), current_action] → MLPDecoder
+  ↓
+output: (N_rays, N_samples, 2) [visibility, density]
+  ↓
+体渲染 → 2D 图像
+```
+
+**训练**：单阶段，MSE 重建 + 下一帧预测 + 时序平滑 loss。
+
+---
+
+#### `model_cmstnf.py` — C-MSTNF（Canonical MSTNF）
+
+**名字来源**：**C**anonical **M**ulti-**S**cale **T**emporal **N**eural **F**ield。引入规范场（canonical field）概念的 MSTNF。
+
+**核心思想**：D-NeRF 范式——将神经场分解为两个部分：
+- **Canonical Field**（规范场）：零动作下的静止形态，是机器人"默认形状"
+- **Deformation Field**（变形场）：根据当前动作将查询点映射回规范空间
+
+查询时先变形再查规范场：`world_point → deformation MLP → canonical_point → canonical MLP → [vis, density]`
+
+**数据流**：
+```
+Phase 1 — Canonical Field:
+  points: (N, N_samples, 3)
+    → PositionalEncoder → MLPDecoder → [vis, density]
+  （用零动作数据训练，学习默认形状）
+
+Phase 2 — Deformation Field:
+  action_window: (B, K, D) → MultiScaleEMA → physics_state: (B, 128)
+
+  points: (N, N_samples, 3)
+    → PositionalEncoder(n_freqs=6) → deform_features: (N, N_samples, 39)
+
+  [deform_features, physics_state, current_action] → deform_MLP → displacement: (N, N_samples, 3)
+
+  canonical_points = points + displacement
+  → canonical_field(canonical_points) → [vis, density]
+  → 体渲染 → 2D 图像
+```
+
+**训练**：两阶段。Phase 1 用零动作数据训练规范场；Phase 2 冻结规范场，只训练变形场。
+
+---
+
+#### `model_ode_cmstnf.py` — ODE-CMSTNF（ODE-based Canonical MSTNF）
+
+**名字来源**：用 **ODE**（常微分方程）替代 EMA 做时序编码的 C-MSTNF。
+
+**核心思想**：EMA 是离散的时序编码，ODE-CMSTNF 用 Neural ODE（具体为阻尼弹簧模型）替代。ODE 积分天然保证状态轨迹在时间上连续，理论上能捕捉软体臂的阻尼振荡动力学。
+
+**与 C-MSTNF 的唯一区别**——时序编码器：
+```
+action_window: (B, K, D)
+  │
+  ↓ ODETemporalEncoder (RK4 积分)
+  │   状态: [position(hidden/2), velocity(hidden/2)]
+  │   动力学: ds/dt = f(s, action)
+  │   具体: ds_pos/dt = s_vel
+  │         ds_vel/dt = -k·s_pos - c·s_vel + B·action
+  │   (阻尼弹簧: k=刚度, c=阻尼, B=外力增益)
+  ↓
+physics_state: (B, 128)
+```
+
+其余架构（规范场 + 变形场）与 C-MSTNF 完全相同。
+
+---
 
 #### `model_smooth_cmstnf.py` — Smooth-CMSTNF
 
-- 与 C-MSTNF 相同架构，变形 MLP 增加 spectral norm + Jacobian 惩罚
-- 目的：限制变形场的 Lipschitz 常数，抑制高频跳变
+**名字来源**：对变形场施加 **Smooth**ness（平滑性）约束的 C-MSTNF。
 
-#### `model_ms_scnf.py` — MS-SCNF（新方法）
+**核心思想**：C-MSTNF 的变形场可能产生高频跳变（微小的动作变化导致巨大的形状变化）。Smooth-CMSTNF 通过两种手段约束变形场的 Lipschitz 常数：
+1. **Spectral Normalization**：限制变形 MLP 每层权重矩阵的谱范数
+2. **Jacobian / Gradient Penalty**：显式惩罚变形场对空间坐标和时间变化的剧烈梯度
 
-- **骨架回归**：`SkeletonHead` 预测多尺度 3D 骨架（coarse 4节点 / medium 10节点 / fine 31节点）
-- **骨架条件密度场**：`SkeletonConditionedDensity` 根据查询点到骨架曲线的距离计算密度
-- 部署时 `model.predict_skeleton(action_window)` 直接输出 31 个 3D 坐标
-- **两阶段训练**：Phase 1 骨架回归（3D loss），Phase 2 联合训练（3D + 2D loss）
+**与 C-MSTNF 的区别**：
+```
+额外 loss:
+  - Jacobian penalty: mean((∂displacement/∂x)²) — 空间平滑性
+  - Temporal gradient penalty: ||D(x,a_t) - D(x,a_{t+1})||² / ||a_t - a_{t+1}||²
+```
+
+---
+
+#### `model_ms_scnf.py` — MS-SCNF（Multi-Scale Skeleton-Conditioned Neural Field）
+
+**名字来源**：**M**ulti-**S**cale **S**keleton-**C**onditioned **N**eural **F**ield。多尺度骨架条件神经场。
+
+**核心思想**：所有前面的模型都是在隐空间中学习形状——没有显式的 3D 输出。MS-SCNF 引入**骨架回归头**，直接从物理状态预测软体臂的 3D 骨架曲线，然后用骨架作为几何先验条件化密度场。
+
+**数据流**：
+```
+action_window: (B, K, D) → MultiScaleEMA → physics_state: (B, 128)
+  │
+  ├──→ SkeletonHead → 多尺度 3D 骨架:
+  │      coarse:  (B, 4, 3)   — 粗粒度（4 个控制点）
+  │      medium:  (B, 10, 3)  — 中粒度
+  │      fine:    (B, 31, 3)  — 细粒度（完整 31 节点）
+  │
+  └──→ 与 3D 查询点一起:
+       [pos_enc, skeleton_distance_enc, physics_state, action]
+         → SkeletonConditionedDensity → [vis, density]
+         → 体渲染 → 2D 图像
+```
+
+**独特优势**：
+- `model.predict_skeleton(action_window)` 可直接输出 31 个 3D 节点坐标，无需渲染
+- 多尺度预测：coarse-to-fine 课程式学习
+- 骨架距离编码：查询点到骨架线段的距离 → 位置相关的密度先验
+
+**训练**：两阶段。Phase 1 骨架回归（3D L2 loss）；Phase 2 联合训练（渲染 loss + 骨架 loss）。
+
+---
+
+#### `model.py` — FBV_SM（遗留基线）
+
+来自 FBV-SM 原始论文，输入 (xyz + action) 拼接后直接 MLP，无时序建模。仅作参考对比。
+
+---
+
+#### 共享层：`layers.py`
+
+| 组件 | 作用 |
+|------|------|
+| `PositionalEncoder` | 正弦余弦位置编码：`x → [x, sin(2^0·x), cos(2^0·x), ..., sin(2^{L-1}·x), cos(2^{L-1}·x)]` |
+| `ActuatorMLPEncoder` | 动作参数 MLP 编码器，将低维动作映射到高维特征空间 |
+| `MLPDecoder` | 通用解码 MLP：`input → 2d → 2d → d → d/2 → output`，density 用 softplus 激活 |
+| `MultiScaleEMA` | 多尺度指数移动平均：用 N 个可学习衰减率分别做 EMA，再加权拼接 |
+| `TemporalLSTMEncoder` | LSTM 时序编码器（旧版，已被 EMA 替代） |
 
 
 ### 3.5 训练器文件
@@ -483,6 +640,6 @@ jupyter notebook notebooks/07_coarse_to_fine_freq.ipynb
 - **参数来源**：`collect.py` 的默认值从 `simulation.json` + `camera.json` 读取，CLI 参数可覆盖。
 - **文件命名**：输出文件名包含模式标签（如 `zz`、`rr`、`rz`）和 3D 标记，一目了然。
 - **保存目录**：自动推断为 `data/seq_{模式标签}[_3d]/`，可用 `--save-dir` 覆盖。
-- **GPU 选择**：各训练脚本顶部都有 `CUDA_DEVICE` 变量，修改为可用 GPU 编号。
+- **GPU 选择**：通过环境变量指定，如 `CUDA_VISIBLE_DEVICES=2 python scripts/training/train_mstnf.py`。脚本默认 GPU 0。
 - **动作归一化**：训练时自动计算归一化因子并保存到 `action_norm_factor.txt`，推理时需加载。
 - **根目录旧文件**：`env.py`、`func.py`、`train.py`、`predefined.py` 来自原始 FBV-SM 论文，与当前 PyElastica 管线无关，仅供参考。
