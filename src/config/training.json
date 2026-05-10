@@ -63,12 +63,12 @@
     },
 
     "sdf": {
-        "n_surface": 300,
-        "n_near_surface": 200,
-        "n_off_surface": 200,
-        "w_sdf": 3000.0,
-        "w_normal": 100.0,
-        "w_grad": 50.0,
-        "_doc": "n_surface/near/off=三类采样点数, w_sdf=SDF L1回归权重, w_normal=法向量一致性权重, w_grad=Eikonal约束权重"
+        "n_surface": 600,
+        "n_near_surface": 400,
+        "n_off_surface": 400,
+        "w_sdf": 1.0,
+        "w_normal": 0.01,
+        "w_grad": 0.0,
+        "_doc": "w_sdf=SDF L1回归权重, w_normal=法向量一致性权重, w_grad=Eikonal权重(设为0关闭。SIREN w0=30放大梯度27000倍，eikonal不兼容)"
     }
 }
