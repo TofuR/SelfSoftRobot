@@ -1,11 +1,9 @@
 """SDF Trainer — 3D 点云监督训练 TemporalSDFModel。
 
-Loss 组合（来自 Chen 2022）:
-  1. SDF constraint:   表面点 SDF=0
-  2. Interior constraint: 内部点惩罚
-  3. Normal constraint: 法向量一致性
-  4. Grad constraint (Eikonal): SDF 梯度模=1
-  5. Temporal smoothness: EMA 状态连续性
+Loss 组合:
+  1. SDF regression:  |pred_sdf - gt_sdf| L1 回归（表面点=0，off-surface 点=真实距离）
+  2. Normal constraint: 法向量一致性（仅表面点）
+  3. Grad constraint (Eikonal): SDF 梯度模=1
 """
 
 import os
@@ -19,6 +17,7 @@ from tqdm import tqdm
 from src.models.model_sdf import TemporalSDFModel
 from src.data.dataset_sdf import SDFDataset
 from src.config.params import load_config
+from src.utils.experiment import create_experiment
 
 
 def sdf_gradient(pred_sdf, coords):
@@ -34,14 +33,11 @@ def sdf_gradient(pred_sdf, coords):
 class SDFTrainer:
     """3D SDF 监督训练器。"""
 
-    def __init__(self, device, w_sdf=3e3, w_inter=1e2, w_normal=1e2,
-                 w_grad=5e1, w_smooth=1e-2):
+    def __init__(self, device, w_sdf=3e3, w_normal=1e2, w_grad=5e1):
         self.device = device
         self.w_sdf = w_sdf
-        self.w_inter = w_inter
         self.w_normal = w_normal
         self.w_grad = w_grad
-        self.w_smooth = w_smooth
         self.train_cfg = load_config("training")
 
     def _create_model(self, action_dim):
@@ -61,30 +57,24 @@ class SDFTrainer:
 
         gradient = sdf_gradient(pred_sdf, coords)
 
-        sdf_constraint = torch.where(
-            gt_sdf != -1, pred_sdf, torch.zeros_like(pred_sdf))
-        loss_sdf = torch.abs(sdf_constraint).mean() * self.w_sdf
+        # SDF L1 回归: 所有点（表面=0, off-surface=真实有符号距离）
+        loss_sdf = torch.abs(pred_sdf - gt_sdf).mean() * self.w_sdf
 
-        inter_constraint = torch.where(
-            gt_sdf != -1,
-            torch.zeros_like(pred_sdf),
-            torch.exp(-1e2 * torch.abs(pred_sdf)))
-        loss_inter = inter_constraint.mean() * self.w_inter
+        # 法向量 loss: 仅表面点 (gt_sdf == 0)
+        is_surface = (gt_sdf.abs() < 1e-6).float()
+        if is_surface.sum() > 0:
+            cos_sim = F.cosine_similarity(gradient, gt_normals, dim=-1)[..., None]
+            loss_normal = (is_surface * (1 - cos_sim)).sum() / (is_surface.sum() + 1e-8) * self.w_normal
+        else:
+            loss_normal = torch.tensor(0.0, device=self.device)
 
-        normal_constraint = torch.where(
-            gt_sdf != -1,
-            1 - F.cosine_similarity(gradient, gt_normals, dim=-1)[..., None],
-            torch.zeros_like(gradient[..., :1]))
-        loss_normal = normal_constraint.mean() * self.w_normal
+        # Eikonal: 梯度模=1
+        loss_grad = torch.abs(gradient.norm(dim=-1) - 1).mean() * self.w_grad
 
-        grad_constraint = torch.abs(gradient.norm(dim=-1) - 1)
-        loss_grad = grad_constraint.mean() * self.w_grad
-
-        total = loss_sdf + loss_inter + loss_normal + loss_grad
+        total = loss_sdf + loss_normal + loss_grad
 
         loss_dict = {
             'sdf': loss_sdf.item(),
-            'inter': loss_inter.item(),
             'normal': loss_normal.item(),
             'eikonal': loss_grad.item(),
         }
@@ -93,10 +83,10 @@ class SDFTrainer:
     def train(self, data_dir="data/seq_rr_3d", n_epochs=500):
         train_ds = SDFDataset(
             data_dir, seq_len=self.train_cfg.get("temporal", {}).get("window_size", 20),
-            n_surface=300, n_off_surface=300)
+            n_surface=300, n_near_surface=200, n_off_surface=200)
         train_loader = DataLoader(
             train_ds,
-            batch_size=self.train_cfg.get("optimization", {}).get("batch_size", 4),
+            batch_size=1,
             shuffle=True, num_workers=4)
 
         action_dim = train_ds.action_dim
@@ -109,13 +99,26 @@ class SDFTrainer:
         scheduler = torch.optim.lr_scheduler.MultiStepLR(
             optimizer, milestones=[100000], gamma=0.5)
 
-        log_dir = f"train_log/train_sdf/exp_{n_epochs}ep"
-        os.makedirs(os.path.join(log_dir, "model"), exist_ok=True)
+        config = {
+            "data_dir": data_dir,
+            "n_epochs": n_epochs,
+            "w_sdf": self.w_sdf,
+            "w_normal": self.w_normal,
+            "w_grad": self.w_grad,
+            "n_params": n_params,
+            "action_dim": action_dim,
+            "batch_size": 1,
+            "lr": self.train_cfg.get("optimization", {}).get("lr", 5e-5),
+            "n_surface": 300,
+            "n_near_surface": 200,
+            "n_off_surface": 200,
+        }
+        log_dir = create_experiment("train_log/train_sdf", config)
 
         print(f"\n{'='*60}")
         print(f">>> SDF 3D Supervised Training, {n_epochs} epochs")
         print(f"    Data: {data_dir}, Params: {n_params:,}")
-        print(f"    Losses: sdf={self.w_sdf}, inter={self.w_inter}, "
+        print(f"    Losses: sdf={self.w_sdf}, "
               f"normal={self.w_normal}, eikonal={self.w_grad}")
         print(f"    Log: {log_dir}")
         print(f"{'='*60}")
@@ -131,9 +134,9 @@ class SDFTrainer:
             pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{n_epochs}")
             for action_window, coords, gt_sdf, gt_normals in pbar:
                 action_window = action_window.to(self.device)
-                coords = coords.to(self.device).reshape(-1, 3).requires_grad_(True)
-                gt_sdf = gt_sdf.to(self.device).reshape(-1)
-                gt_normals = gt_normals.to(self.device).reshape(-1, 3)
+                coords = coords.to(self.device).squeeze(0).requires_grad_(True)
+                gt_sdf = gt_sdf.to(self.device).squeeze(0)
+                gt_normals = gt_normals.to(self.device).squeeze(0)
 
                 loss, loss_dict = self.compute_loss(
                     model, coords, action_window, gt_sdf, gt_normals)
