@@ -469,10 +469,15 @@ def export_html_animation(all_results, output_path, model_type, threshold,
 
 def export_gif(all_results, output_path, model_type, threshold,
                all_gt=None, all_pred=None, frame_indices=None, fps=8):
-    """将多帧渲染为 GIF 动画。"""
-    import plotly.graph_objects as go
+    """将多帧渲染为 GIF 动画（需要 kaleido）。"""
+    try:
+        import plotly.graph_objects as go
+        import kaleido  # noqa: F401
+    except ImportError:
+        print("  跳过 GIF: 需要 kaleido (pip install kaleido)")
+        return
     from PIL import Image
-    import io, tempfile
+    import io
 
     n_frames = len(all_results)
     if frame_indices is None:
