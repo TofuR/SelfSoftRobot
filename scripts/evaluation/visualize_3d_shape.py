@@ -469,12 +469,11 @@ def export_html_animation(all_results, output_path, model_type, threshold,
 
 def export_gif(all_results, output_path, model_type, threshold,
                all_gt=None, all_pred=None, frame_indices=None, fps=8):
-    """将多帧渲染为 GIF 动画（需要 kaleido）。"""
+    """将多帧渲染为 GIF 动画（需要 kaleido + Chrome）。"""
     try:
         import plotly.graph_objects as go
-        import kaleido  # noqa: F401
     except ImportError:
-        print("  跳过 GIF: 需要 kaleido (pip install kaleido)")
+        print("  跳过 GIF: 需要 plotly")
         return
     from PIL import Image
     import io
@@ -499,7 +498,11 @@ def export_gif(all_results, output_path, model_type, threshold,
             width=600, height=500,
             margin=dict(l=0, r=0, t=30, b=0),
         )
-        img_bytes = fig.to_image(format='png', scale=1)
+        try:
+            img_bytes = fig.to_image(format='png', scale=1)
+        except Exception as e:
+            print(f"  跳过 GIF: 渲染失败 ({type(e).__name__}: {e})")
+            return
         images.append(Image.open(io.BytesIO(img_bytes)))
 
     # 保存 GIF
