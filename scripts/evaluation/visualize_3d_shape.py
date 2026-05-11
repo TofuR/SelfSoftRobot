@@ -344,14 +344,179 @@ def export_png(result, output_path, model_type, threshold=None, gt_skeleton=None
     print(f"  PNG:  {os.path.relpath(output_path, PROJECT_ROOT)}")
 
 
+def _make_frame_traces(result, model_type, threshold, gt_skeleton, pred_skeleton):
+    """为单帧生成 Plotly traces 列表。"""
+    import plotly.graph_objects as go
+    traces = []
+
+    if model_type == 'sdf':
+        if result.get('vertices') is not None:
+            verts, faces = result['vertices'], result['faces']
+            traces.append(go.Mesh3d(
+                x=verts[:, 0], y=verts[:, 1], z=verts[:, 2],
+                i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
+                color='lightblue', opacity=0.8,
+            ))
+        elif result.get('sdf_grid') is not None:
+            grid = result['sdf_grid']
+            x, y, z = result['x'], result['y'], result['z']
+            X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+            values = grid.ravel()
+            vmin, vmax = values.min(), values.max()
+            norm = (values - vmin) / (vmax - vmin + 1e-8)
+            traces.append(go.Volume(
+                x=X.ravel(), y=Y.ravel(), z=Z.ravel(),
+                value=norm, isomin=0.0, isomax=1.0,
+                opacity=0.3, surface_count=10, colorscale='RdBu_r',
+            ))
+    elif result.get('points') is not None:
+        pts = result['points']
+        dens = result['density']
+        mask = dens > threshold
+        if mask.any():
+            traces.append(go.Scatter3d(
+                x=pts[mask, 0], y=pts[mask, 1], z=pts[mask, 2],
+                mode='markers',
+                marker=dict(size=1.5, color=dens[mask], colorscale='Viridis', opacity=0.6),
+            ))
+
+    if gt_skeleton is not None:
+        traces.append(go.Scatter3d(
+            x=gt_skeleton[0], y=gt_skeleton[1], z=gt_skeleton[2],
+            mode='lines+markers',
+            marker=dict(size=4, color='red'),
+            line=dict(color='red', width=3),
+        ))
+
+    if pred_skeleton is not None:
+        traces.append(go.Scatter3d(
+            x=pred_skeleton[0], y=pred_skeleton[1], z=pred_skeleton[2],
+            mode='lines+markers',
+            marker=dict(size=4, color='blue'),
+            line=dict(color='blue', width=3),
+        ))
+
+    return traces
+
+
+def export_html_animation(all_results, output_path, model_type, threshold,
+                          all_gt=None, all_pred=None, frame_indices=None):
+    """Plotly 动画 HTML — 带拖动条切换帧。"""
+    import plotly.graph_objects as go
+
+    n_frames = len(all_results)
+    if frame_indices is None:
+        frame_indices = list(range(n_frames))
+
+    # 第一帧作为初始
+    init_traces = _make_frame_traces(
+        all_results[0], model_type, threshold,
+        all_gt[0] if all_gt else None,
+        all_pred[0] if all_pred else None,
+    )
+
+    fig = go.Figure(data=init_traces)
+
+    # 添加所有帧
+    frames = []
+    for i in range(n_frames):
+        ft = _make_frame_traces(
+            all_results[i], model_type, threshold,
+            all_gt[i] if all_gt else None,
+            all_pred[i] if all_pred else None,
+        )
+        frames.append(go.Frame(data=ft, name=f'frame_{i}'))
+    fig.frames = frames
+
+    # 滑动条
+    sliders = [dict(
+        active=0,
+        y=-0.05,
+        xanchor='left',
+        len=1.0,
+        currentvalue=dict(font=dict(size=14), prefix='帧: ', visible=True, xanchor='center'),
+        steps=[dict(
+            label=f'{frame_indices[i]}',
+            method='animate',
+            args=[[f'frame_{i}'], dict(mode='immediate', frame=dict(duration=0, redraw=True))],
+        ) for i in range(n_frames)],
+    )]
+
+    # 播放/暂停按钮
+    updatemenus = [dict(
+        type='buttons',
+        showactive=False,
+        y=-0.05,
+        x=0.0,
+        buttons=[
+            dict(label='▶', method='animate',
+                 args=[None, dict(frame=dict(duration=200, redraw=True), fromcurrent=True)]),
+            dict(label='⏸', method='animate',
+                 args=[[None], dict(frame=dict(duration=0, redraw=False), mode='immediate')]),
+        ],
+    )]
+
+    fig.update_layout(
+        title=f'{model_type.upper()} — 3D Shape Animation ({n_frames} frames)',
+        scene=dict(aspectmode='data'),
+        width=900, height=700,
+        sliders=sliders,
+        updatemenus=updatemenus,
+    )
+    fig.write_html(output_path)
+    print(f"  HTML动画: {os.path.relpath(output_path, PROJECT_ROOT)}")
+
+
+def export_gif(all_results, output_path, model_type, threshold,
+               all_gt=None, all_pred=None, frame_indices=None, fps=8):
+    """将多帧渲染为 GIF 动画。"""
+    import plotly.graph_objects as go
+    from PIL import Image
+    import io, tempfile
+
+    n_frames = len(all_results)
+    if frame_indices is None:
+        frame_indices = list(range(n_frames))
+
+    # 统一 axis range（用第一帧的 bounds）
+    # 先渲染所有帧为图片
+    images = []
+    for i in range(n_frames):
+        traces = _make_frame_traces(
+            all_results[i], model_type, threshold,
+            all_gt[i] if all_gt else None,
+            all_pred[i] if all_pred else None,
+        )
+        fig = go.Figure(data=traces)
+        fig.update_layout(
+            title=f'Frame {frame_indices[i]}',
+            scene=dict(aspectmode='data'),
+            width=600, height=500,
+            margin=dict(l=0, r=0, t=30, b=0),
+        )
+        img_bytes = fig.to_image(format='png', scale=1)
+        images.append(Image.open(io.BytesIO(img_bytes)))
+
+    # 保存 GIF
+    images[0].save(
+        output_path,
+        save_all=True, append_images=images[1:],
+        duration=int(1000 / fps), loop=0,
+    )
+    print(f"  GIF: {os.path.relpath(output_path, PROJECT_ROOT)} ({n_frames} frames, {fps} fps)")
+
+
 # ──────────────────────────── 主流程 ────────────────────────────
 
-def compute_bounds(data_path, frame_idx):
-    """从数据文件计算查询空间的边界。"""
+def compute_bounds(data_path, frame_idx=None):
+    """从数据文件计算查询空间的边界。frame_idx=None 时用所有帧。"""
     d = np.load(data_path)
     pos = d['positions']
     if pos.ndim == 3:
-        pos = pos[frame_idx]  # (3, N_nodes)
+        if frame_idx is not None:
+            pos = pos[frame_idx]
+        else:
+            pos = pos.reshape(3, -1)
 
     center = pos.mean(axis=-1)
     extent = np.abs(pos - center[:, None]).max(axis=-1)
@@ -436,11 +601,16 @@ def main():
     if npz_path is None:
         return
 
-    # ── Step 5: 选择帧 ──
+    # ── Step 5: 选择帧范围 ──
     d = np.load(npz_path)
     n_frames = d['actions'].shape[0]
-    frame_idx = input_int(f"[4] 选择帧 (0-{n_frames-1})", n_frames // 2)
-    frame_idx = max(0, min(frame_idx, n_frames - 1))
+    print(f"\n[4] 帧范围 (共 {n_frames} 帧)")
+    start_frame = input_int("  起始帧", 0)
+    end_frame = input_int(f"  结束帧 (含, max {n_frames-1})", min(start_frame + 49, n_frames - 1))
+    step = input_int("  帧间隔 (skip)", max(1, (end_frame - start_frame) // 50))
+    frame_indices = list(range(start_frame, end_frame + 1, step))
+    n_vis = len(frame_indices)
+    print(f"  将可视化 {n_vis} 帧: {frame_indices[0]}-{frame_indices[-1]} (step={step})")
 
     # ── Step 6: 查询参数 ──
     grid_res = input_int("[5] 网格分辨率", 40)
@@ -448,50 +618,74 @@ def main():
     if model_type != 'sdf':
         threshold = input_float("[6] 密度阈值 (NeRF)", 0.5)
 
-    # ── Step 7: 准备数据 ──
-    bounds = compute_bounds(npz_path, frame_idx)
-    action_window = get_action_window(npz_path, frame_idx, window_size, norm_factor)
-    action_window = action_window.to(device)
-    gt_skeleton = get_gt_skeleton(npz_path, frame_idx)
+    # ── Step 7: 准备统一 bounds（覆盖所有帧） ──
+    bounds = compute_bounds(npz_path, frame_idx=None)
 
-    print(f"\n查询空间: [{bounds[0]:.3f}, {bounds[1]:.3f}] x "
-          f"[{bounds[2]:.3f}, {bounds[3]:.3f}] x [{bounds[4]:.3f}, {bounds[5]:.3f}]")
-    print(f"网格: {grid_res}^3 = {grid_res**3:,} 个查询点")
-
-    # ── Step 8: 查询模型 ──
-    print(f"\n查询模型 ({model_type})...")
+    # ── Step 8: 逐帧查询模型 ──
     exp_name = os.path.basename(os.path.dirname(os.path.dirname(ckpt_path)))
-    base_name = f"{model_type}_{exp_name}_frame{frame_idx}"
-    pred_skeleton = None
+    base_name = f"{model_type}_{exp_name}_frames{start_frame}-{end_frame}"
 
+    # SDF 归一化参数（只需算一次）
+    norm_params = None
     if model_type == 'sdf':
-        # SDF 模型在归一化坐标 [-1,1]^3 上训练，需要归一化参数
         from src.data.dataset_sdf import SDFDataset
         norm_params = SDFDataset.compute_normalization(os.path.dirname(npz_path))
-        result = query_sdf_model(model, action_window, bounds, grid_res, device,
-                                  coord_center=norm_params['coord_center'],
-                                  coord_scale=norm_params['coord_scale'])
-        if result['vertices'] is not None:
-            print(f"  提取到 {len(result['vertices'])} 个顶点, {len(result['faces'])} 个三角面")
-    else:
-        result = query_nerf_model(model, action_window, bounds, grid_res, device)
-        mask = result['density'] > threshold
-        print(f"  阈值 {threshold}: {mask.sum()}/{len(result['density'])} 个点")
 
-    # MS-SCNF 可以额外预测骨架
-    if model_type == 'ms_scnf' and hasattr(model, 'predict_skeleton'):
-        with torch.no_grad():
-            skel_dict = model.predict_skeleton(action_window)
-            pred_skeleton = skel_dict['fine'][0].cpu().numpy().T  # (3, N)
-        print(f"  预测骨架: {pred_skeleton.shape[1]} 个节点")
+    print(f"\n查询模型 ({model_type}), {n_vis} 帧...")
+    print(f"  空间: [{bounds[0]:.3f}, {bounds[1]:.3f}] x "
+          f"[{bounds[2]:.3f}, {bounds[3]:.3f}] x [{bounds[4]:.3f}, {bounds[5]:.3f}]")
+    print(f"  网格: {grid_res}^3 = {grid_res**3:,} 点/帧")
+
+    all_results = []
+    all_gt = []
+    all_pred = []
+
+    for vis_i, fidx in enumerate(frame_indices):
+        action_window = get_action_window(npz_path, fidx, window_size, norm_factor)
+        action_window = action_window.to(device)
+        gt_skeleton = get_gt_skeleton(npz_path, fidx)
+        pred_skeleton = None
+
+        if model_type == 'sdf':
+            result = query_sdf_model(model, action_window, bounds, grid_res, device,
+                                      coord_center=norm_params['coord_center'],
+                                      coord_scale=norm_params['coord_scale'])
+        else:
+            result = query_nerf_model(model, action_window, bounds, grid_res, device)
+
+        if model_type == 'ms_scnf' and hasattr(model, 'predict_skeleton'):
+            with torch.no_grad():
+                skel_dict = model.predict_skeleton(action_window)
+                pred_skeleton = skel_dict['fine'][0].cpu().numpy().T
+
+        all_results.append(result)
+        all_gt.append(gt_skeleton)
+        all_pred.append(pred_skeleton)
+
+        # 进度
+        n_verts = len(result['vertices']) if result.get('vertices') is not None else 0
+        print(f"  [{vis_i+1}/{n_vis}] frame {fidx}: {n_verts} vertices", end='\r')
+
+    print(f"\n  完成 {n_vis} 帧查询")
 
     # ── Step 9: 输出 ──
-    html_path = os.path.join(output_dir, f"{base_name}.html")
-    png_path = os.path.join(output_dir, f"{base_name}.png")
-
     print(f"\n生成可视化...")
-    export_html(result, html_path, model_type, threshold, gt_skeleton, pred_skeleton)
-    export_png(result, png_path, model_type, threshold, gt_skeleton, pred_skeleton)
+
+    # 动画 HTML（带拖动条）
+    html_path = os.path.join(output_dir, f"{base_name}.html")
+    export_html_animation(all_results, html_path, model_type, threshold,
+                          all_gt, all_pred, frame_indices)
+
+    # 单帧 PNG（中间帧）
+    mid = n_vis // 2
+    png_path = os.path.join(output_dir, f"{base_name}_mid.png")
+    export_png(all_results[mid], png_path, model_type, threshold,
+               all_gt[mid], all_pred[mid])
+
+    # GIF 动画
+    gif_path = os.path.join(output_dir, f"{base_name}.gif")
+    export_gif(all_results, gif_path, model_type, threshold,
+               all_gt, all_pred, frame_indices)
 
     print(f"\n完成!")
 
