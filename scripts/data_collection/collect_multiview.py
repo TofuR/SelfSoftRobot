@@ -1,11 +1,17 @@
 """collect_multiview.py — 多视角数据采集。
 
 采集双视角（正面+侧面）图像，同时保存 3D GT 用于评估。
-数据格式:
+数据格式（数组索引式，可扩展到任意视角数）:
   npz:
-    images_front, images_side, actions, positions (可选)
-    depth_maps_front, depth_maps_side (可选，--depth 时)
-    camera_*_front, camera_*_side, focal, H, W
+    images:          (N, V, H, W)  V 个视角的二值图
+    depths:          (N, V, H, W)  V 个视角深度图（--depth 时）
+    actions:         (N, D)
+    positions:       (N, 3, 31)    可选
+    camera_params:   (V, 10)       [eye(3), center(3), up(3), focal(1)]
+    view_names:      ['front', 'side', ...]
+    focal, H, W
+
+同时保留旧格式（images_front 等）以兼容现有代码（--legacy）。
 
 用法:
     python scripts/data_collection/collect_multiview.py
@@ -27,6 +33,7 @@ from elastica_env import (
     DEFAULT_IMAGE_SIZE, render_to_binary_with_depth,
 )
 from collect_utils import ActionSchedule, load_defaults
+from src.utils.camera_system import MultiCameraSystem
 
 
 def run_multiview_collection(schedule, args, defaults):
@@ -96,23 +103,44 @@ def run_multiview_collection(schedule, args, defaults):
         pbar.close()
 
         H, W = DEFAULT_IMAGE_SIZE
+
+        # 新格式: images/depths 为 (N, V, H, W) 数组
+        view_names = ['front', 'side']
+        images = np.stack([seq_imgs_front, seq_imgs_side], axis=1)  # (N, V, H, W)
+
+        # 相机参数: (V, 10) 数组
+        cam_system = MultiCameraSystem([
+            {'eye': CAMERA_EYE, 'center': CAMERA_CENTER, 'up': CAMERA_UP,
+             'focal': cam['focal'], 'H': H, 'W': W},
+            {'eye': CAMERA_EYE_SIDE, 'center': CAMERA_CENTER_SIDE, 'up': CAMERA_UP_SIDE,
+             'focal': cam['focal'], 'H': H, 'W': W},
+        ])
+
         data = {
-            "images_front": np.array(seq_imgs_front),
-            "images_side": np.array(seq_imgs_side),
+            "images": np.array(images, dtype=np.float32),
             "actions": np.array(seq_actions),
             "positions": np.array(seq_positions),
             "radii": np.array(seq_radii),
             "dt": dt * record_interval,
             "focal": cam["focal"],
             "H": H, "W": W,
-            "camera_eye_front": np.array(CAMERA_EYE),
-            "camera_center_front": np.array(CAMERA_CENTER),
-            "camera_up_front": np.array(CAMERA_UP),
-            "camera_eye_side": np.array(CAMERA_EYE_SIDE),
-            "camera_center_side": np.array(CAMERA_CENTER_SIDE),
-            "camera_up_side": np.array(CAMERA_UP_SIDE),
+            "camera_params": cam_system.get_camera_params_array(),
+            "view_names": np.array(view_names),
         }
 
+        if record_depth:
+            depths = np.stack([seq_depths_front, seq_depths_side], axis=1)  # (N, V, H, W)
+            data["depths"] = np.array(depths, dtype=np.float32)
+
+        # 保留旧格式字段以兼容
+        data["images_front"] = np.array(seq_imgs_front)
+        data["images_side"] = np.array(seq_imgs_side)
+        data["camera_eye_front"] = np.array(CAMERA_EYE)
+        data["camera_center_front"] = np.array(CAMERA_CENTER)
+        data["camera_up_front"] = np.array(CAMERA_UP)
+        data["camera_eye_side"] = np.array(CAMERA_EYE_SIDE)
+        data["camera_center_side"] = np.array(CAMERA_CENTER_SIDE)
+        data["camera_up_side"] = np.array(CAMERA_UP_SIDE)
         if record_depth:
             data["depth_maps_front"] = np.array(seq_depths_front, dtype=np.float32)
             data["depth_maps_side"] = np.array(seq_depths_side, dtype=np.float32)

@@ -70,5 +70,19 @@
         "w_normal": 0.01,
         "w_grad": 0.0,
         "_doc": "w_sdf=SDF L1回归权重, w_normal=法向量一致性权重, w_grad=Eikonal权重(设为0关闭。SIREN w0=30放大梯度27000倍，eikonal不兼容)"
+    },
+
+    "multiview": {
+        "w_depth": 0.1,
+        "w_recon_per_view": 1.0,
+        "n_rays_per_view": 512,
+        "n_samples": 64,
+        "fg_ratio": 0.5,
+        "near": 0.5,
+        "far": 2.5,
+        "use_depth_guided_sampling": false,
+        "n_coarse": 32,
+        "n_fine": 32,
+        "_doc": "w_depth=深度loss权重, w_recon_per_view=每视角重建权重, n_rays_per_view=每视角采样射线数, fg_ratio=前景射线比例"
     }
 }
