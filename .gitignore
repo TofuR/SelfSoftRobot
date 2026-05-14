@@ -33,3 +33,4 @@ __pycache__/
 output/
 *.pdf
 docs/ref/*
+.claude/

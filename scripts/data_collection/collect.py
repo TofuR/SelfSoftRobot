@@ -21,7 +21,7 @@
   # 从文件读取轨迹
   python scripts/data_collection/collect.py --action-x file --action-file traj.npz
 
-  # 含深度图采集（用于 Depth-CMSTNF / RGB-D 训练）
+  # 含深度图采集（用于 Depth-CMSTNF 训练）
   python scripts/data_collection/collect.py --depth
   python scripts/data_collection/collect.py --3d --depth
 

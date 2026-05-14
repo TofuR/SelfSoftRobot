@@ -4,7 +4,7 @@
     "optimization": {
         "lr": 0.001,
         "batch_size": 4,
-        "n_epochs": 200,
+        "n_epochs": 500,
         "scheduler": "ReduceLROnPlateau",
         "scheduler_patience": 10,
         "_doc": "n_epochs=训练轮数, scheduler_patience=验证loss多少epoch不下降就降学习率"
@@ -43,7 +43,7 @@
 
     "canonical": {
         "phase1_epochs": 50,
-        "phase2_epochs": 200,
+        "phase2_epochs": 500,
         "deform_n_freqs": 6,
         "deform_lr": 0.0005,
         "w_jacobian": 0.01,
@@ -63,9 +63,9 @@
     },
 
     "sdf": {
-        "n_surface": 600,
-        "n_near_surface": 400,
-        "n_off_surface": 400,
+        "n_surface": 1000,
+        "n_near_surface": 1000,
+        "n_off_surface": 1000,
         "w_sdf": 1.0,
         "w_normal": 0.01,
         "w_grad": 0.0,

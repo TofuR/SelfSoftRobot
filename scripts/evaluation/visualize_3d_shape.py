@@ -213,14 +213,27 @@ def query_nerf_model(model, action_window, bounds, grid_res, device, n_samples=1
 
 # ──────────────────────────── 可视化输出 ────────────────────────────
 
-def export_html(result, output_path, model_type, threshold=None, gt_skeleton=None, pred_skeleton=None):
+def export_html(result, output_path, model_type, threshold=None, gt_skeleton=None, pred_skeleton=None,
+                sdf_mode='mesh'):
     """Plotly 交互式 HTML。"""
     import plotly.graph_objects as go
 
     fig = go.Figure()
 
     if model_type == 'sdf':
-        if result.get('vertices') is not None:
+        if sdf_mode == 'pointcloud' and result.get('sdf_grid') is not None:
+            grid = result['sdf_grid']
+            x, y, z = result['x'], result['y'], result['z']
+            X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+            mask = grid.ravel() <= 0
+            if mask.any():
+                fig.add_trace(go.Scatter3d(
+                    x=X.ravel()[mask], y=Y.ravel()[mask], z=Z.ravel()[mask],
+                    mode='markers',
+                    marker=dict(size=1.5, color='lightblue', opacity=0.6),
+                    name='SDF pointcloud',
+                ))
+        elif result.get('vertices') is not None:
             # 有零等值面 → mesh
             verts, faces = result['vertices'], result['faces']
             fig.add_trace(go.Mesh3d(
@@ -287,7 +300,8 @@ def export_html(result, output_path, model_type, threshold=None, gt_skeleton=Non
     print(f"  HTML: {os.path.relpath(output_path, PROJECT_ROOT)}")
 
 
-def export_png(result, output_path, model_type, threshold=None, gt_skeleton=None, pred_skeleton=None):
+def export_png(result, output_path, model_type, threshold=None, gt_skeleton=None, pred_skeleton=None,
+               sdf_mode='mesh'):
     """PyVista offscreen PNG。"""
     try:
         import pyvista as pv
@@ -299,7 +313,17 @@ def export_png(result, output_path, model_type, threshold=None, gt_skeleton=None
     plotter = pv.Plotter(off_screen=True, window_size=(1200, 900))
 
     if model_type == 'sdf':
-        if result.get('vertices') is not None:
+        if sdf_mode == 'pointcloud' and result.get('sdf_grid') is not None:
+            grid = result['sdf_grid']
+            x, y, z = result['x'], result['y'], result['z']
+            X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+            mask = grid.ravel() <= 0
+            if mask.any():
+                pts = np.stack([X.ravel()[mask], Y.ravel()[mask], Z.ravel()[mask]], axis=-1)
+                cloud = pv.PolyData(pts)
+                plotter.add_mesh(cloud, color='lightblue', point_size=3,
+                                 render_points_as_spheres=True, opacity=0.6)
+        elif result.get('vertices') is not None:
             verts, faces = result['vertices'], result['faces']
             faces_pv = np.column_stack([np.full(len(faces), 3), faces]).ravel()
             mesh = pv.PolyData(verts, faces_pv)
@@ -344,13 +368,28 @@ def export_png(result, output_path, model_type, threshold=None, gt_skeleton=None
     print(f"  PNG:  {os.path.relpath(output_path, PROJECT_ROOT)}")
 
 
-def _make_frame_traces(result, model_type, threshold, gt_skeleton, pred_skeleton):
-    """为单帧生成 Plotly traces 列表。"""
+def _make_frame_traces(result, model_type, threshold, gt_skeleton, pred_skeleton,
+                       sdf_mode='mesh'):
+    """为单帧生成 Plotly traces 列表。
+
+    sdf_mode: 'mesh' (marching cubes 面片) 或 'pointcloud' (SDF<=0 的点云)
+    """
     import plotly.graph_objects as go
     traces = []
 
     if model_type == 'sdf':
-        if result.get('vertices') is not None:
+        if sdf_mode == 'pointcloud' and result.get('sdf_grid') is not None:
+            grid = result['sdf_grid']
+            x, y, z = result['x'], result['y'], result['z']
+            X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+            mask = grid.ravel() <= 0
+            if mask.any():
+                traces.append(go.Scatter3d(
+                    x=X.ravel()[mask], y=Y.ravel()[mask], z=Z.ravel()[mask],
+                    mode='markers',
+                    marker=dict(size=1.5, color='lightblue', opacity=0.6),
+                ))
+        elif result.get('vertices') is not None:
             verts, faces = result['vertices'], result['faces']
             traces.append(go.Mesh3d(
                 x=verts[:, 0], y=verts[:, 1], z=verts[:, 2],
@@ -400,7 +439,7 @@ def _make_frame_traces(result, model_type, threshold, gt_skeleton, pred_skeleton
 
 
 def export_html_animation(all_results, output_path, model_type, threshold,
-                          all_gt=None, all_pred=None, frame_indices=None):
+                          all_gt=None, all_pred=None, frame_indices=None, sdf_mode='mesh'):
     """Plotly 动画 HTML — 带拖动条切换帧。"""
     import plotly.graph_objects as go
 
@@ -413,6 +452,7 @@ def export_html_animation(all_results, output_path, model_type, threshold,
         all_results[0], model_type, threshold,
         all_gt[0] if all_gt else None,
         all_pred[0] if all_pred else None,
+        sdf_mode=sdf_mode,
     )
 
     fig = go.Figure(data=init_traces)
@@ -424,6 +464,7 @@ def export_html_animation(all_results, output_path, model_type, threshold,
             all_results[i], model_type, threshold,
             all_gt[i] if all_gt else None,
             all_pred[i] if all_pred else None,
+            sdf_mode=sdf_mode,
         )
         frames.append(go.Frame(data=ft, name=f'frame_{i}'))
     fig.frames = frames
@@ -468,7 +509,7 @@ def export_html_animation(all_results, output_path, model_type, threshold,
 
 
 def export_gif(all_results, output_path, model_type, threshold,
-               all_gt=None, all_pred=None, frame_indices=None, fps=8):
+               all_gt=None, all_pred=None, frame_indices=None, fps=8, sdf_mode='mesh'):
     """将多帧渲染为 GIF 动画（需要 kaleido + Chrome）。"""
     try:
         import plotly.graph_objects as go
@@ -490,6 +531,7 @@ def export_gif(all_results, output_path, model_type, threshold,
             all_results[i], model_type, threshold,
             all_gt[i] if all_gt else None,
             all_pred[i] if all_pred else None,
+            sdf_mode=sdf_mode,
         )
         fig = go.Figure(data=traces)
         fig.update_layout(
@@ -623,7 +665,16 @@ def main():
     # ── Step 6: 查询参数 ──
     grid_res = input_int("[5] 网格分辨率", 40)
     threshold = 0.5
-    if model_type != 'sdf':
+    sdf_mode = 'mesh'
+    if model_type == 'sdf':
+        print("\n[6] SDF 可视化模式:")
+        print("  1. mesh (marching cubes 三维面片)")
+        print("  2. pointcloud (SDF<=0 的点云)")
+        mode_choice = input("  > [1]: ").strip()
+        if mode_choice == '2':
+            sdf_mode = 'pointcloud'
+        print(f"  选择: {sdf_mode}")
+    else:
         threshold = input_float("[6] 密度阈值 (NeRF)", 0.5)
 
     # ── Step 7: 准备统一 bounds（覆盖所有帧） ──
@@ -682,18 +733,18 @@ def main():
     # 动画 HTML（带拖动条）
     html_path = os.path.join(output_dir, f"{base_name}.html")
     export_html_animation(all_results, html_path, model_type, threshold,
-                          all_gt, all_pred, frame_indices)
+                          all_gt, all_pred, frame_indices, sdf_mode=sdf_mode)
 
     # 单帧 PNG（中间帧）
     mid = n_vis // 2
     png_path = os.path.join(output_dir, f"{base_name}_mid.png")
     export_png(all_results[mid], png_path, model_type, threshold,
-               all_gt[mid], all_pred[mid])
+               all_gt[mid], all_pred[mid], sdf_mode=sdf_mode)
 
     # GIF 动画
     gif_path = os.path.join(output_dir, f"{base_name}.gif")
     export_gif(all_results, gif_path, model_type, threshold,
-               all_gt, all_pred, frame_indices)
+               all_gt, all_pred, frame_indices, sdf_mode=sdf_mode)
 
     print(f"\n完成!")
 
