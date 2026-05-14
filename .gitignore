@@ -34,3 +34,4 @@ output/
 *.pdf
 docs/ref/*
 .claude/
+docs/
