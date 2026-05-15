@@ -13,6 +13,7 @@ EMA 是对输入的线性加权求和，天然满足 Lipschitz 连续性——�
 import torch
 import torch.nn as nn
 from .layers import PositionalEncoder, MLPDecoder
+from src.training.spec import PhaseSpec, TrainingSpec
 
 
 class MultiScaleEMA(nn.Module):
@@ -118,6 +119,11 @@ class MSTNFModel(nn.Module):
         d_filter: 空间 MLP 隐层维度。
         n_freqs: 位置编码频率数。
     """
+
+    training_spec = TrainingSpec(
+        phases=[PhaseSpec("full", forward_attr="forward", data_mode="sequence",
+                          active_losses=["recon", "depth", "smooth"])],
+    )
 
     def __init__(
         self,

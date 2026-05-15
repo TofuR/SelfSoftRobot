@@ -13,6 +13,7 @@ import torch
 import torch.nn as nn
 from .layers import PositionalEncoder, MLPDecoder
 from .model_cmstnf import CanonicalField
+from src.training.spec import PhaseSpec, TrainingSpec
 
 
 class DampedSpringODE(nn.Module):
@@ -136,6 +137,17 @@ class ODECMSTNFModel(nn.Module):
 
     与 CMSTNFModel 完全相同的空间结构，仅时序编码器从 EMA 换为 ODE。
     """
+
+    training_spec = TrainingSpec(
+        phases=[
+            PhaseSpec("canonical", freeze_modules=["deform_encoder", "deform_mlp"],
+                      forward_attr="forward_canonical", data_mode="canonical",
+                      active_losses=["recon"]),
+            PhaseSpec("deformation", freeze_modules=["canonical"],
+                      forward_attr="forward", data_mode="sequence",
+                      active_losses=["recon", "depth", "smooth"]),
+        ],
+    )
 
     def __init__(self, action_dim, window_size=20, hidden_dim=128,
                  d_filter=128, n_freqs=10, deform_n_freqs=6):

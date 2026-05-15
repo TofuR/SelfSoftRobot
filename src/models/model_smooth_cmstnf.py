@@ -14,6 +14,7 @@ from torch.nn.utils import spectral_norm
 from .layers import PositionalEncoder, MLPDecoder
 from .model_mstnf import MultiScaleEMA
 from .model_cmstnf import CanonicalField
+from src.training.spec import PhaseSpec, TrainingSpec
 
 
 class SpectralMLPDecoder(nn.Module):
@@ -46,6 +47,17 @@ class SmoothCMSTNFModel(nn.Module):
 
     与 CMSTNFModel 接口完全一致，额外提供正则化方法。
     """
+
+    training_spec = TrainingSpec(
+        phases=[
+            PhaseSpec("canonical", freeze_modules=["deform"],
+                      forward_attr="forward_canonical", data_mode="canonical",
+                      active_losses=["recon"]),
+            PhaseSpec("deformation", freeze_modules=["canonical"],
+                      forward_attr="forward", data_mode="sequence",
+                      active_losses=["recon", "depth", "smooth"]),
+        ],
+    )
 
     def __init__(self, action_dim, window_size=20, n_scales=4, hidden_dim=128,
                  d_filter=128, n_freqs=10, deform_n_freqs=6):

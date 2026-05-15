@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 from .layers import PositionalEncoder, MLPDecoder
 from .model_mstnf import MultiScaleEMA
+from src.training.spec import PhaseSpec, TrainingSpec
 
 
 class CanonicalField(nn.Module):
@@ -127,6 +128,17 @@ class CMSTNFModel(nn.Module):
     Phase 1: 只训练 canonical，使用零动作数据
     Phase 2: 冻结 canonical，训练 deform，使用运动数据
     """
+
+    training_spec = TrainingSpec(
+        phases=[
+            PhaseSpec("canonical", freeze_modules=["deform"],
+                      forward_attr="forward_canonical", data_mode="canonical",
+                      active_losses=["recon"]),
+            PhaseSpec("deformation", freeze_modules=["canonical"],
+                      forward_attr="forward", data_mode="sequence",
+                      active_losses=["recon", "depth", "smooth"]),
+        ],
+    )
 
     def __init__(
         self,

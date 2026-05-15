@@ -17,6 +17,7 @@ import torch
 import torch.nn as nn
 from .layers import PositionalEncoder, MLPDecoder
 from .model_mstnf import MultiScaleEMA
+from src.training.spec import PhaseSpec, TrainingSpec
 
 
 class SkeletonHead(nn.Module):
@@ -166,6 +167,15 @@ class MSSCNFModel(nn.Module):
       - compute_smoothness(t, t1) → scalar
       - predict_skeleton(action_window) → dict of skeletons
     """
+
+    training_spec = TrainingSpec(
+        phases=[
+            PhaseSpec("skeleton", forward_attr="forward", data_mode="sequence",
+                      active_losses=["skeleton"]),
+            PhaseSpec("joint", forward_attr="forward", data_mode="sequence",
+                      active_losses=["skeleton", "recon", "smooth"]),
+        ],
+    )
 
     def __init__(
         self,
