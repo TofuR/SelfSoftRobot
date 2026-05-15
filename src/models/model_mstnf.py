@@ -197,6 +197,29 @@ class MSTNFModel(nn.Module):
         latent = torch.cat(parts, dim=-1)
         return self.decoder(latent)
 
+    def forward(self, points, action_window):
+        """统一前向接口，兼容 MultiViewTrainer 调用约定。
+
+        Args:
+            points: (N_rays, n_samples, 3) 3D 查询点。
+            action_window: (B, K, D) 动作序列窗口。
+
+        Returns:
+            output: (B*N_rays, n_samples, 2) [visibility, density]
+        """
+        B = action_window.shape[0]
+        N_rays = points.shape[0]
+        n_samples = points.shape[1]
+
+        physics_state = self.temporal(action_window)  # (B, Hidden)
+        current_action = action_window[:, -1, :]       # (B, D)
+
+        pts_expanded = points.unsqueeze(0).expand(B, -1, -1, -1).reshape(B * N_rays, n_samples, 3)
+        state_expanded = physics_state.unsqueeze(1).expand(-1, N_rays, -1).reshape(B * N_rays, self.hidden_dim)
+        action_expanded = current_action.unsqueeze(1).expand(-1, N_rays, -1).reshape(B * N_rays, self.action_dim)
+
+        return self.decode_spatial(pts_expanded, state_expanded, action_expanded)
+
     def compute_smoothness(self, action_windows_t, action_windows_t1):
         """时序平滑 loss（委托给 temporal encoder）。"""
         return self.temporal.compute_smoothness(action_windows_t, action_windows_t1)
