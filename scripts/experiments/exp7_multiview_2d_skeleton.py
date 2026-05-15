@@ -64,7 +64,7 @@ if not args.skip_collection:
     print('\n>>> Step 1: 采集多视角数据...')
     cmd = [
         sys.executable,
-        'scripts/data_collection/collect_multiview.py',
+        'scripts/data_collection/collect.py',
         '--action-x', 'random', '--action-y', 'random',
         '--sequences', str(args.sequences),
         '--actions-per-seq', str(args.actions_per_seq),
