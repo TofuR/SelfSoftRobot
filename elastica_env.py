@@ -12,11 +12,7 @@ import cv2
 from collections import defaultdict
 from tqdm import tqdm
 
-# --- PyVista 全局设置 ---
-pv.set_plot_theme("document")
-pv.OFF_SCREEN = True
-
-# --- PyElastica 模块导入 ---
+from config.params import get_camera_params, get_all_camera_params, get_simulation_params
 from elastica.modules import BaseSystemCollection, Constraints, Forcing, CallBacks, Damping
 from elastica.rod.cosserat_rod import CosseratRod
 from elastica.boundary_conditions import OneEndFixedBC
@@ -26,36 +22,47 @@ from elastica.callback_functions import CallBackBaseClass
 from elastica.timestepper.symplectic_steppers import PositionVerlet
 from elastica.timestepper import integrate
 
-# =============================================================================
-# 物理参数常量
-# =============================================================================
-N_ELEMENTS = 30            # 杆体离散单元数
-ROD_LENGTH = 0.5           # 杆体长度 (m)
-ROD_RADIUS = 0.015         # 杆体半径 (m)
-ROD_DENSITY = 1000.0       # 密度 (kg/m³)
-YOUNGS_MODULUS = 1e6        # 杨氏模量 (Pa)
-POISSON_RATIO = 0.5        # 泊松比
-SHEAR_MODULUS = YOUNGS_MODULUS / (4.0 * (1.0 + POISSON_RATIO))
-
-ROD_START_POS = np.zeros(3)
-ROD_DIRECTION = np.array([0.0, 0.0, 1.0])
-ROD_NORMAL = np.array([1.0, 0.0, 0.0])
-
-DAMPING_CONSTANT = 0.1     # 阻尼系数
-RAMP_UP_TIME = 0.5         # 扭矩渐升时间 (s)
+# --- PyVista 全局设置 ---
+pv.set_plot_theme("document")
+pv.OFF_SCREEN = True
 
 # =============================================================================
-# 渲染 / 相机参数常量
+# 从配置文件加载参数
 # =============================================================================
-DEFAULT_IMAGE_SIZE = (100, 100)
-CAMERA_EYE = (1.5, 0.0, 0.5)
-CAMERA_CENTER = (0.0, 0.0, 0.25)
-CAMERA_UP = (0.0, 0.0, 1.0)
+_sim_cfg = get_simulation_params()
+_cam_cfg = get_camera_params()
+_all_cameras = get_all_camera_params()
 
-# 第二视角（侧面，沿 -Y 方向观察 XZ 平面）
-CAMERA_EYE_SIDE = (0.0, 1.5, 0.5)
-CAMERA_CENTER_SIDE = (0.0, 0.0, 0.25)
-CAMERA_UP_SIDE = (0.0, 0.0, 1.0)
+N_ELEMENTS = _sim_cfg["n_elements"]
+ROD_LENGTH = _sim_cfg["base_length"]
+ROD_RADIUS = _sim_cfg["base_radius"]
+ROD_DENSITY = _sim_cfg["density"]
+YOUNGS_MODULUS = _sim_cfg["youngs_modulus"]
+POISSON_RATIO = _sim_cfg["poisson_ratio"]
+SHEAR_MODULUS = _sim_cfg["shear_modulus"]
+
+ROD_START_POS = np.array(_sim_cfg["start_position"])
+ROD_DIRECTION = np.array(_sim_cfg["direction"])
+ROD_NORMAL = np.array(_sim_cfg["normal"])
+
+DAMPING_CONSTANT = _sim_cfg["damping_constant"]
+RAMP_UP_TIME = _sim_cfg["ramp_up_time"]
+
+DEFAULT_IMAGE_SIZE = (_cam_cfg["W"], _cam_cfg["H"])
+
+# 所有相机参数列表: [(eye, center, up), ...]
+ALL_CAMERAS = [(c["eye"], c["center"], c["up"]) for c in _all_cameras]
+N_VIEWS = len(ALL_CAMERAS)
+
+# 主相机（向后兼容单视角代码）
+CAMERA_EYE = ALL_CAMERAS[0][0]
+CAMERA_CENTER = ALL_CAMERAS[0][1]
+CAMERA_UP = ALL_CAMERAS[0][2]
+
+# 第二视角（向后兼容，仅 2 视角旧代码使用）
+CAMERA_EYE_SIDE = ALL_CAMERAS[1][0] if N_VIEWS > 1 else CAMERA_EYE
+CAMERA_CENTER_SIDE = ALL_CAMERAS[1][1] if N_VIEWS > 1 else CAMERA_CENTER
+CAMERA_UP_SIDE = ALL_CAMERAS[1][2] if N_VIEWS > 1 else CAMERA_UP
 
 
 # =============================================================================
@@ -474,24 +481,29 @@ class ContinuousSoftArmEnv:
         return binary_img, current_action, positions, radii
 
     def get_observation_multiview(self):
-        """获取双视角二值图像 + 驱动扭矩（可选 3D 节点坐标 + 半径）。
+        """获取所有视角二值图像 + 驱动扭矩 + 3D 数据。
 
         Returns:
-            (img_front, img_side, current_action, positions, radii)
+            (images_list, current_action, positions, radii)
+            - images_list: list of V 个二值图像
+            - current_action: 驱动扭矩 (2,)
+            - positions: 节点坐标 (3, N_nodes)
+            - radii: 节点半径 (N_nodes,)
         """
         soft_arm = self.simulation[0]
         positions = soft_arm.position_collection.copy()
         radii = soft_arm.radius.copy()
 
-        img_front = render_to_binary(positions, radii,
-                                     cam_eye=CAMERA_EYE, cam_center=CAMERA_CENTER, cam_up=CAMERA_UP)
-        img_side = render_to_binary(positions, radii,
-                                    cam_eye=CAMERA_EYE_SIDE, cam_center=CAMERA_CENTER_SIDE, cam_up=CAMERA_UP_SIDE)
+        images_list = []
+        for eye, center, up in ALL_CAMERAS:
+            img = render_to_binary(positions, radii,
+                                   cam_eye=eye, cam_center=center, cam_up=up)
+            images_list.append(img)
 
         current_torques = self.torque_force.torque_profile[:, 0]
         current_action = np.array([current_torques[0], current_torques[1]])
 
-        return img_front, img_side, current_action, positions, radii
+        return images_list, current_action, positions, radii
 
     def get_observation_with_depth(self):
         """获取二值图像 + 深度图 + 驱动扭矩 + 3D 数据。
@@ -511,26 +523,33 @@ class ContinuousSoftArmEnv:
         return binary_img, depth_map, current_action, positions, radii
 
     def get_observation_multiview_with_depth(self):
-        """获取双视角二值图像 + 深度图 + 驱动扭矩 + 3D 数据。
+        """获取所有视角二值图像 + 深度图 + 驱动扭矩 + 3D 数据。
 
         Returns:
-            (img_front, depth_front, img_side, depth_side, current_action, positions, radii)
+            (images_list, depths_list, current_action, positions, radii)
+            - images_list: list of V 个二值图像
+            - depths_list: list of V 个深度图
+            - current_action: 驱动扭矩 (2,)
+            - positions: 节点坐标 (3, N_nodes)
+            - radii: 节点半径 (N_nodes,)
         """
         soft_arm = self.simulation[0]
         positions = soft_arm.position_collection.copy()
         radii = soft_arm.radius.copy()
 
-        img_front, depth_front = render_to_binary_with_depth(
-            positions, radii,
-            cam_eye=CAMERA_EYE, cam_center=CAMERA_CENTER, cam_up=CAMERA_UP)
-        img_side, depth_side = render_to_binary_with_depth(
-            positions, radii,
-            cam_eye=CAMERA_EYE_SIDE, cam_center=CAMERA_CENTER_SIDE, cam_up=CAMERA_UP_SIDE)
+        images_list = []
+        depths_list = []
+        for eye, center, up in ALL_CAMERAS:
+            img, dep = render_to_binary_with_depth(
+                positions, radii,
+                cam_eye=eye, cam_center=center, cam_up=up)
+            images_list.append(img)
+            depths_list.append(dep)
 
         current_torques = self.torque_force.torque_profile[:, 0]
         current_action = np.array([current_torques[0], current_torques[1]])
 
-        return img_front, depth_front, img_side, depth_side, current_action, positions, radii
+        return images_list, depths_list, current_action, positions, radii
 
 
 if __name__ == "__main__":
