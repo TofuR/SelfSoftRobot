@@ -16,10 +16,10 @@
     },
 
     "temporal": {
-        "window_size": 20,
+        "window_size": 40,
         "n_scales": 4,
         "hidden_dim": 128,
-        "_doc": "window_size=20帧≈0.1s 历史，覆盖软体机器人动态响应时间。n_scales=4个EMA尺度捕捉多时间尺度动力学"
+        "_doc": "window_size=40帧≈0.2s 历史，覆盖软体机器人动态响应时间。n_scales=4个EMA尺度捕捉多时间尺度动力学"
     },
 
     "loss_weights": {

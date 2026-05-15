@@ -13,7 +13,7 @@
         --lr 1e-4 --w_sdf 3e3 --w_normal 1e2
 
 默认 GPU 0，可通过 CUDA_VISIBLE_DEVICES 环境变量指定。
-未指定的参数自动从 src/config/training.json 读取。
+未指定的参数自动从 config/training.json 读取。
 """
 
 import os
@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 import argparse
 import torch
-from src.config.params import load_config
+from config.params import load_config
 from src.utils.config_utils import resolve_config
 from src.training.trainer_sdf import SDFTrainer
 

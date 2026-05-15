@@ -263,7 +263,7 @@ def cmd_render(args):
 
     cam_params = ds.get_camera_params()
     if cam_params is None:
-        from src.config.params import get_camera_params
+        from config.params import get_camera_params
         cam_params = get_camera_params()
 
     H, W = ds.H, ds.W
