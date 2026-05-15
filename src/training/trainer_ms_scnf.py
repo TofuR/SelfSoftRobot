@@ -44,6 +44,10 @@ class MSSCNFTrainer(BaseTrainer):
             n_medium=self.ms_cfg.get("n_medium", 10),
             n_fine=self.ms_cfg.get("n_fine", 31),
             deform_n_freqs=self.canon_cfg["deform_n_freqs"],
+            skeleton_mode=self.ms_cfg.get("skeleton_mode", "point"),
+            fourier_n_freq=self.ms_cfg.get("fourier_n_freq", 8),
+            bspline_n_ctrl=self.ms_cfg.get("bspline_n_ctrl", 10),
+            catmullrom_n_ctrl=self.ms_cfg.get("catmullrom_n_ctrl", 10),
         )
 
     # =========================================================================
@@ -92,6 +96,7 @@ class MSSCNFTrainer(BaseTrainer):
         if exp_dir is None:
             config_dict = {
                 "model": self._model_name(),
+                "skeleton": model.skeleton_config(),
                 "phase1": {"data": data_dir, "lr": self.opt_cfg["lr"],
                            "n_epochs": n_epochs},
             }
@@ -100,8 +105,9 @@ class MSSCNFTrainer(BaseTrainer):
         phase1_dir = self.make_phase_dirs(exp_dir, "phase1")
 
         n_trainable = sum(p.numel() for p in trainable)
+        skel_mode = self.ms_cfg.get("skeleton_mode", "point")
         print(f"\n{'='*60}")
-        print(f">>> Phase 1: Skeleton Regression, {n_epochs} epochs")
+        print(f">>> Phase 1: Skeleton Regression ({skel_mode}), {n_epochs} epochs")
         print(f"    Data: {data_dir} ({len(all_files)} files)")
         print(f"    Nodes: {n_fine}, Trainable: {n_trainable:,}")
         print(f"    Log: {phase1_dir}")

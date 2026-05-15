@@ -59,7 +59,11 @@
         "w_skeleton_medium": 0.3,
         "w_skeleton_coarse": 0.1,
         "w_render": 0.5,
-        "_doc": "n_coarse/medium/fine=多尺度骨架节点数, w_skeleton_*=各级别loss权重, w_render=Phase2渲染loss权重"
+        "skeleton_mode": "fourier",
+        "fourier_n_freq": 8,
+        "bspline_n_ctrl": 10,
+        "catmullrom_n_ctrl": 10,
+        "_doc": "skeleton_mode=point|fourier|bspline|catmullrom, fourier_n_freq=Fourier频率数, bspline/catmullrom_n_ctrl=控制点数"
     },
 
     "sdf": {

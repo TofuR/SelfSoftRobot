@@ -122,6 +122,10 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
             n_medium=ms_cfg.get('n_medium', 10),
             n_fine=ms_cfg.get('n_fine', 31),
             deform_n_freqs=train_cfg['canonical']['deform_n_freqs'],
+            skeleton_mode=ms_cfg.get('skeleton_mode', 'point'),
+            fourier_n_freq=ms_cfg.get('fourier_n_freq', 8),
+            bspline_n_ctrl=ms_cfg.get('bspline_n_ctrl', 10),
+            catmullrom_n_ctrl=ms_cfg.get('catmullrom_n_ctrl', 10),
         ).to(device)
 
         if phase == 1:
