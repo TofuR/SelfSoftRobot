@@ -22,7 +22,7 @@ from src.utils.rendering import (
     sample_stratified, sample_depth_guided,
 )
 from src.utils.experiment import create_experiment
-from src.config.params import load_config
+from config.params import load_config
 
 
 class MultiViewTrainer:
@@ -145,35 +145,43 @@ class MultiViewTrainer:
 
     def train_step(self, action_window, images_list, depths_list=None,
                    action_window_next=None, images_next_list=None):
-        """单个训练 step。
+        """单个训练 step（支持 batched 输入）。
+
+        遍历 batch 维度逐样本渲染，累加 loss 用于 backward。
 
         Args:
-            action_window: (1, K, D) 当前帧 action
-            images_list: list of V 个 (H*W,) 目标图像
-            depths_list: list of V 个 (H*W,) 深度图（可选）
-            action_window_next: (1, K, D) 下一帧 action
-            images_next_list: list of V 个 (H*W,) 下一帧图像
+            action_window: (B, K, D) 当前帧 action
+            images_list: list of V 个 (B, H*W) 目标图像
+            depths_list: list of V 个 (B, H*W) 深度图（可选）
+            action_window_next: (B, K, D) 下一帧 action
+            images_next_list: list of V 个 (B, H*W) 下一帧图像
 
         Returns:
-            dict of losses
+            dict of losses (averaged over batch × views)
         """
         action_window = action_window.to(self.device)
+        B = action_window.shape[0]
 
         total_recon = torch.tensor(0.0, device=self.device)
         total_depth = torch.tensor(0.0, device=self.device)
 
-        for v in range(self.n_views):
-            img_v = images_list[v].to(self.device)
-            dep_v = (depths_list[v].to(self.device)
-                     if depths_list and depths_list[v] is not None else None)
+        for b in range(B):
+            aw_b = action_window[b:b + 1]  # (1, K, D)
+            imgs_b = [img[b].to(self.device) for img in images_list]
+            deps_b = None
+            if depths_list:
+                deps_b = [(d[b].to(self.device) if d is not None else None)
+                          for d in depths_list]
 
-            loss_recon, loss_depth, _ = self._render_view(
-                action_window, v, img_v, target_depth=dep_v)
-            total_recon = total_recon + loss_recon
-            total_depth = total_depth + loss_depth
+            for v in range(self.n_views):
+                dep_v = deps_b[v] if deps_b else None
+                loss_recon, loss_depth, _ = self._render_view(
+                    aw_b, v, imgs_b[v], target_depth=dep_v)
+                total_recon = total_recon + loss_recon
+                total_depth = total_depth + loss_depth
 
-        total_recon = total_recon / self.n_views * self.w_recon
-        total_depth = total_depth / self.n_views * self.w_depth
+        total_recon = total_recon / (B * self.n_views) * self.w_recon
+        total_depth = total_depth / (B * self.n_views) * self.w_depth
 
         losses = {'recon': total_recon, 'depth': total_depth}
 
@@ -197,9 +205,13 @@ class MultiViewTrainer:
             indices = np.random.choice(len(val_loader), n_eval, replace=False)
             for idx in indices:
                 batch = val_loader[idx]
-                action_window = batch[0]
-                images_list = batch[1]
-                losses = self.train_step(action_window, images_list)
+                action_window = batch[0].unsqueeze(0)  # (1, K, D)
+                images_list = [img.unsqueeze(0) for img in batch[1]]  # (1, H*W)
+                depths_list = None
+                if len(batch) > 2 and batch[2] is not None:
+                    depths_list = [d.unsqueeze(0) for d in batch[2]]
+                losses = self.train_step(action_window, images_list,
+                                         depths_list=depths_list)
                 total_loss += losses['total'].item()
 
         self.model.train()

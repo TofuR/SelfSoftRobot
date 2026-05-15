@@ -3,15 +3,15 @@
 用法:
     # MSTNF 多视角训练
     CUDA_VISIBLE_DEVICES=0 python scripts/training/train_multiview.py \
-        --model mstnf --data_dir data/exp7_multiview
+        --model mstnf --data_dir data/seq_rz_c2_sk
 
     # CMSTNF 多视角训练（含深度）
     CUDA_VISIBLE_DEVICES=0 python scripts/training/train_multiview.py \
-        --model cmstnf --data_dir data/exp7_multiview --depth
+        --model cmstnf --data_dir data/seq_rz_c2_sk --depth
 
     # 覆盖参数
     CUDA_VISIBLE_DEVICES=0 python scripts/training/train_multiview.py \
-        --model mstnf --data_dir data/exp7_multiview \
+        --model mstnf --data_dir data/seq_rz_c2_sk \
         --lr 1e-4 --n_epochs 300 --w_depth 0.2
 
 支持模型: mstnf, cmstnf, smooth_cmstnf
@@ -31,7 +31,7 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.config.params import load_config
+from config.params import load_config
 from src.utils.config_utils import resolve_config
 from src.utils.experiment import create_experiment
 from src.data.dataset_multiview_depth import MultiViewDepthDataset
@@ -218,7 +218,12 @@ def train(args):
             val_indices = np.random.choice(len(val_ds), n_val_samples, replace=False)
             for vi in val_indices:
                 batch = val_ds[vi]
-                v_losses = trainer.train_step(batch[0], batch[1], batch[2])
+                aw = batch[0].unsqueeze(0)  # (1, K, D)
+                imgs = [img.unsqueeze(0) for img in batch[1]]  # list of (1, H*W)
+                deps = None
+                if batch[2] is not None:
+                    deps = [d.unsqueeze(0) for d in batch[2]]
+                v_losses = trainer.train_step(aw, imgs, deps)
                 val_loss += v_losses["total"].item()
         val_loss /= max(n_val_samples, 1)
         scheduler.step(val_loss)
