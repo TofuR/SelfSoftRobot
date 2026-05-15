@@ -8,7 +8,7 @@ import glob
 import numpy as np
 import torch
 
-from src.config.params import load_config
+from config.params import load_config
 
 
 def _infer_action_dim(data_dir):

@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from src.utils.camera import get_rays
 from src.utils.rendering import OM_rendering, sample_stratified
 from src.utils.experiment import create_experiment, save_gif
-from src.config.params import load_config, get_camera_params
+from config.params import load_config, get_camera_params
 
 
 class BaseTrainer:

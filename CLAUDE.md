@@ -22,7 +22,8 @@ Key dependencies: PyTorch 2.6, PyElastica (via `elastica`), PyVista, OpenCV. Req
 python scripts/data_collection/collect.py
 
 # Multi-view data collection with 3D ground truth (PyElastica soft arm)
-python scripts/data_collection/collect_multiview.py
+# Camera count is auto-detected from config/camera.json
+python scripts/data_collection/collect.py --3d
 ```
 
 ### Training

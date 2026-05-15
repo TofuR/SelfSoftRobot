@@ -10,7 +10,7 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-from src.config.params import load_config, get_camera_params
+from config.params import load_config, get_camera_params
 
 
 # =============================================================================
@@ -171,32 +171,31 @@ def save_collection(path, images, actions, dt, camera,
 # 文件命名
 # =============================================================================
 
-def make_filename(seq_idx, mode_tag, has_3d, timestamp=None):
+def make_filename(seq_idx, mode_tag, n_views, has_sk, timestamp=None):
     """生成自描述文件名。
 
     示例:
-      seq_000_rz_1748000000.npz        # random + zero
-      seq_000_rr_3d_1748000000.npz     # 两维 random + 3D
-      seq_000_zz_1748000000.npz        # 两维 zero (canonical)
-      seq_000_rh_1748000000.npz        # random + hold
+      seq_000_rz_c1_1748000000.npz        # random + zero, 1 相机
+      seq_000_rr_c2_sk_1748000000.npz     # 两维 random, 2 相机 + 骨架
+      seq_000_zz_c3_1748000000.npz        # 两维 zero, 3 相机
     """
     ts = timestamp or int(time.time())
-    tag = f"seq_{seq_idx:03d}_{mode_tag}"
-    if has_3d:
-        tag += "_3d"
+    tag = f"seq_{seq_idx:03d}_{mode_tag}_c{n_views}"
+    if has_sk:
+        tag += "_sk"
     return f"{tag}_{ts}.npz"
 
 
-def infer_save_dir(mode_tag, has_3d, user_dir=None):
-    """根据动作模式和是否 3D 推断保存目录。
+def infer_save_dir(mode_tag, n_views, has_sk, user_dir=None):
+    """根据动作模式、相机数和是否含骨架推断保存目录。
 
     示例:
-      data/seq_rr/          # 两维 random
-      data/seq_rr_3d/       # 两维 random + 3D
-      data/seq_zz/          # 两维 zero (canonical)
-      data/seq_rz/          # random + zero
+      data/seq_rr_c1/          # 两维 random, 1 相机
+      data/seq_rr_c2_sk/       # 两维 random, 2 相机 + 骨架
+      data/seq_zz_c1/          # 两维 zero, 1 相机
+      data/seq_rz_c2/          # random + zero, 2 相机
     """
     if user_dir:
         return user_dir
-    suffix = "_3d" if has_3d else ""
-    return f"data/seq_{mode_tag}{suffix}"
+    suffix = "_sk" if has_sk else ""
+    return f"data/seq_{mode_tag}_c{n_views}{suffix}"

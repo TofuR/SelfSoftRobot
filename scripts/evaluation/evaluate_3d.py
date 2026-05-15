@@ -41,7 +41,7 @@ from src.data.dataset import SoftSequenceDataset
 def evaluate_ms_scnf(checkpoint, data_dir, phase, device):
     """评估 MS-SCNF 模型。"""
     from src.models.model_ms_scnf import MSSCNFModel
-    from src.config.params import load_config
+    from config.params import load_config
 
     train_cfg = load_config("training")
     ms_cfg = train_cfg.get("ms_scnf", {})

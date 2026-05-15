@@ -8,7 +8,10 @@
         "density": 1000.0,
         "youngs_modulus": 1000000.0,
         "poisson_ratio": 0.5,
-        "_doc": "CosseratRod 参数。youngs_modulus=1MPa 对应软硅胶，density=1000 对应水密度级别"
+        "start_position": [0.0, 0.0, 0.0],
+        "direction": [0.0, 0.0, 1.0],
+        "normal": [1.0, 0.0, 0.0],
+        "_doc": "CosseratRod 参数。start_position/direction/normal 定义杆体初始朝向（沿Z轴），youngs_modulus=1MPa 对应软硅胶"
     },
 
     "damping": {

@@ -16,7 +16,7 @@ Usage:
     CUDA_VISIBLE_DEVICES=0 python scripts/training/train_smooth_cmstnf.py \
         --w_jacobian 0.05 --w_temporal_grad 0.05
 
-未指定的参数自动从 src/config/training.json 读取。
+未指定的参数自动从 config/training.json 读取。
 """
 
 import os
@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 import argparse
 import torch
-from src.config.params import load_config
+from config.params import load_config
 from src.utils.config_utils import resolve_config
 from src.training.trainer_smooth_cmstnf import SmoothCMSTNFTrainer
 
