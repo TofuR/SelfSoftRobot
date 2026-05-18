@@ -153,7 +153,6 @@ class SDFTrainer:
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-                scheduler.step()
 
                 epoch_loss += loss.item()
                 for k, v in loss_dict.items():
@@ -164,6 +163,7 @@ class SDFTrainer:
                 pbar.set_postfix(avg_losses)
 
             avg_epoch = epoch_loss / max(n_batches, 1)
+            scheduler.step()
 
             if avg_epoch < best_loss:
                 best_loss = avg_epoch
