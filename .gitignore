@@ -32,6 +32,6 @@ train_log_v3/*
 __pycache__/
 output/
 *.pdf
-docs/ref/*
 .claude/
-docs/
+docs/ref/
+docs/papers/*.pdf

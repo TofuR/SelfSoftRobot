@@ -62,17 +62,7 @@ def create_model(model_type, action_dim, config):
             n_freqs=model_cfg["n_freqs"],
         )
     elif model_type == "smooth_cmstnf":
-        from src.models.model_smooth_cmstnf import SmoothCMSTNFModel
-        can_cfg = config["canonical"]
-        return SmoothCMSTNFModel(
-            action_dim=action_dim,
-            window_size=temp_cfg["window_size"],
-            n_scales=temp_cfg["n_scales"],
-            hidden_dim=temp_cfg["hidden_dim"],
-            d_filter=model_cfg["d_filter"],
-            n_freqs=model_cfg["n_freqs"],
-            deform_n_freqs=can_cfg["deform_n_freqs"],
-        )
+        raise ValueError("smooth_cmstnf 已归档到 docs/archived/smooth_cmstnf/，如需使用请恢复文件")
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
