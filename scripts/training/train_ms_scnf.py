@@ -1,13 +1,13 @@
-"""train_ms_scnf.py — MS-SCNF 两阶段训练入口。
+"""train_ms_scnf.py -- MS-SCNF two-phase training via UnifiedTrainer.
 
 Usage:
-    # 完整训练 (Phase 1: Skeleton + Phase 2: Joint)
+    # Full training (Phase 1: Skeleton + Phase 2: Joint)
     CUDA_VISIBLE_DEVICES=0 python scripts/training/train_ms_scnf.py
 
-    # 仅 Phase 1（骨架回归）
+    # Phase 1 only (skeleton regression)
     CUDA_VISIBLE_DEVICES=0 python scripts/training/train_ms_scnf.py --phase 1
 
-    # 仅 Phase 2（联合训练）
+    # Phase 2 only (joint training)
     CUDA_VISIBLE_DEVICES=0 python scripts/training/train_ms_scnf.py --phase 2 \
         --exp_dir train_log/train_ms_scnf/001 \
         --skeleton_path train_log/train_ms_scnf/001/phase1/model/phase1_best.pt
@@ -21,11 +21,24 @@ if "CUDA_VISIBLE_DEVICES" not in os.environ:
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 import argparse
+import glob
+import numpy as np
 import torch
-from src.config.args import add_common_args, add_two_phase_args, resolve_training_config
-from src.training.trainer_ms_scnf import MSSCNFTrainer
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from src.config.args import add_common_args, add_two_phase_args, resolve_training_config
+from src.training.trainer_unified import UnifiedTrainer
+from src.training.view_strategy import SingleViewStrategy
+
+
+def detect_action_dim(data_dir):
+    npz_files = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
+    if not npz_files:
+        raise FileNotFoundError(f"No data in {data_dir}")
+    sample = np.load(npz_files[0])
+    if 'actions' in sample:
+        return sample['actions'].shape[-1]
+    raise ValueError(f"No 'actions' field in {npz_files[0]}")
+
 
 parser = argparse.ArgumentParser()
 add_common_args(parser, data_dir_default="data/seq_rz_3d")
@@ -44,13 +57,83 @@ config = resolve_training_config({
     "ms_scnf.w_render": args.w_render,
 })
 
-print(f"Device: {device}")
-trainer = MSSCNFTrainer(device=device, config=config)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-if args.phase == 1:
-    trainer.train_phase1(exp_dir=args.exp_dir, data_dir=args.data_dir)
-elif args.phase == 2:
-    trainer.train_phase2(exp_dir=args.exp_dir, phase1_path=args.skeleton_path,
-                         data_dir=args.data_dir)
-else:
-    trainer.train(data_dir=args.data_dir)
+# -- Auto-detect action_dim --
+action_dim = detect_action_dim(args.data_dir)
+
+# -- Create model --
+from src.models.model_ms_scnf import MSSCNFModel
+
+temp_cfg = config["temporal"]
+model_cfg = config["model"]
+ms_cfg = config.get("ms_scnf", {})
+canon_cfg = config.get("canonical", {})
+
+model = MSSCNFModel(
+    action_dim=action_dim,
+    window_size=temp_cfg["window_size"],
+    n_scales=temp_cfg["n_scales"],
+    hidden_dim=temp_cfg["hidden_dim"],
+    d_filter=model_cfg["d_filter"],
+    n_freqs=model_cfg["n_freqs"],
+    n_coarse=ms_cfg.get("n_coarse", 4),
+    n_medium=ms_cfg.get("n_medium", 10),
+    n_fine=ms_cfg.get("n_fine", 31),
+    deform_n_freqs=canon_cfg.get("deform_n_freqs", 6),
+    skeleton_mode=ms_cfg.get("skeleton_mode", "point"),
+    fourier_n_freq=ms_cfg.get("fourier_n_freq", 8),
+    bspline_n_ctrl=ms_cfg.get("bspline_n_ctrl", 10),
+    catmullrom_n_ctrl=ms_cfg.get("catmullrom_n_ctrl", 10),
+).to(device)
+
+spec = model.training_spec
+print("\nModel: MS-SCNF")
+print(f"  Action dim: {action_dim}")
+print(f"  Phases: {[p.name for p in spec.phases]}")
+
+# -- ViewStrategy for rendering phases --
+from src.training.dataset_factory import create_dataset
+
+rendering_phase = next((p for p in spec.phases if p.supervision_mode == "rendering"), None)
+view_strat = None
+if rendering_phase is not None:
+    ds = create_dataset(rendering_phase.dataset_type, args.data_dir, config, rendering_phase)
+    if hasattr(ds, 'get_camera_params'):
+        params = ds.get_camera_params()
+        if params:
+            view_strat = SingleViewStrategy(
+                params.get('H', 64), params.get('W', 64), params.get('focal', 130.0),
+                {'eye': params['eye'], 'center': params['center'], 'up': params['up']})
+    elif hasattr(ds, 'H') and hasattr(ds, 'W'):
+        view_strat = SingleViewStrategy(
+            ds.H, ds.W, ds.focal,
+            ds.get_camera_params() if hasattr(ds, 'get_camera_params') else None)
+
+# -- data_dirs --
+data_dirs = {"sequence": args.data_dir}
+
+# -- Phase selection via n_epochs_per_phase --
+n_epochs_per_phase = None
+if args.phase is not None:
+    n_epochs_per_phase = {}
+    for p in spec.phases:
+        if args.phase == 1 and p.name == "skeleton":
+            n_epochs_per_phase[p.name] = config["optimization"]["n_epochs"]
+        elif args.phase == 2 and p.name == "joint":
+            n_epochs_per_phase[p.name] = config["optimization"]["n_epochs"]
+        else:
+            n_epochs_per_phase[p.name] = 0
+elif spec.is_two_phase:
+    can_cfg = config.get("canonical", {})
+    n_epochs_per_phase = {}
+    for p in spec.phases:
+        if p.name in ("canonical", "skeleton"):
+            n_epochs_per_phase[p.name] = can_cfg.get("phase1_epochs", 50)
+        else:
+            n_epochs_per_phase[p.name] = args.n_epochs or config["optimization"]["n_epochs"]
+
+# -- Train --
+trainer = UnifiedTrainer(model, view_strat, config=config)
+exp_dir = args.exp_dir
+trainer.train(data_dirs, exp_dir=exp_dir, n_epochs_per_phase=n_epochs_per_phase)
