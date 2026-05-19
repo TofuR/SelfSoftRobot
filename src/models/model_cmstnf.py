@@ -133,10 +133,12 @@ class CMSTNFModel(nn.Module):
         phases=[
             PhaseSpec("canonical", freeze_modules=["deform"],
                       forward_attr="forward_canonical", data_mode="canonical",
-                      active_losses=["recon"]),
+                      active_losses=["recon"],
+                      save_modules=["canonical"]),
             PhaseSpec("deformation", freeze_modules=["canonical"],
                       forward_attr="forward", data_mode="sequence",
-                      active_losses=["recon", "depth", "smooth"]),
+                      active_losses=["recon", "smooth"],
+                      load_modules={"canonical": "canonical"}),
         ],
     )
 
@@ -211,11 +213,22 @@ class CMSTNFModel(nn.Module):
 
     def compute_smoothness(self, action_windows_t, action_windows_t1):
         """变形场的时序平滑 loss：相邻帧变形位移应连续。"""
-        # 用一个固定查询点来衡量变形差异
         dummy_points = torch.zeros(1, 1, 3, device=action_windows_t.device)
         _, state_t = self.deform(dummy_points, action_windows_t)
         _, state_t1 = self.deform(dummy_points, action_windows_t1)
         return torch.mean((state_t1 - state_t) ** 2)
+
+    def compute_losses(self, batch: dict, phase_spec) -> dict:
+        """模型层 loss 计算。处理 "smooth" loss。"""
+        losses = {}
+        active = set(phase_spec.active_losses)
+
+        if "smooth" in active and batch.get("action_window_next") is not None:
+            aw_t = batch["action_window"]
+            aw_t1 = batch["action_window_next"]
+            losses["smooth"] = self.compute_smoothness(aw_t, aw_t1)
+
+        return losses
 
     def freeze_canonical(self):
         """冻结 canonical 参数，Phase 2 开始时调用。"""

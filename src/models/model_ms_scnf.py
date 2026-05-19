@@ -71,12 +71,59 @@ class MSSCNFModel(nn.Module, TemporalMixin, SkeletonMixin):
 
     training_spec = TrainingSpec(
         phases=[
-            PhaseSpec("skeleton", forward_attr="forward", data_mode="sequence",
-                      active_losses=["skeleton"]),
-            PhaseSpec("joint", forward_attr="forward", data_mode="sequence",
-                      active_losses=["skeleton", "recon", "smooth"]),
+            PhaseSpec("skeleton", freeze_modules=["density"],
+                      supervision_mode="skeleton", dataset_type="sequence",
+                      dataset_kwargs={"return_3d": True, "return_pairs": False},
+                      active_losses=["skeleton"],
+                      save_modules=["temporal", "skeleton_head"]),
+            PhaseSpec("joint",
+                      dataset_kwargs={"return_3d": True, "return_pairs": True},
+                      active_losses=["skeleton", "recon", "smooth"],
+                      load_modules={"temporal": "skeleton", "skeleton_head": "skeleton"}),
         ],
     )
+
+    # Loss weights for skeleton multi-scale weighting
+    _w_skeleton_fine = 1.0
+    _w_skeleton_medium = 0.3
+    _w_skeleton_coarse = 0.1
+
+    def compute_losses(self, batch, phase_spec):
+        """模型层 loss 计算：skeleton + smooth（recon 由 ViewStrategy 处理）。
+
+        Args:
+            batch: 统一 dict batch。
+            phase_spec: 当前 PhaseSpec。
+
+        Returns:
+            dict[str, torch.Tensor]: loss 名到标量 Tensor 的映射。
+        """
+        losses = {}
+        active = set(phase_spec.active_losses)
+        device = self.temporal.decays.device
+
+        if "skeleton" in active:
+            aw = batch["action_window"].to(device)
+            gt_positions = batch["gt_positions"].to(device)
+            # GT positions: (B, 3, N) → permute to (B, N, 3)
+            if gt_positions.shape[-1] != 3 and gt_positions.shape[1] == 3:
+                gt_positions = gt_positions.permute(0, 2, 1)
+
+            pred_dict = self.predict_skeleton(aw)
+            skel_losses = self.compute_skeleton_loss(pred_dict, gt_positions)
+
+            losses["skeleton"] = (
+                self._w_skeleton_fine * skel_losses["fine"]
+                + self._w_skeleton_medium * skel_losses["medium"]
+                + self._w_skeleton_coarse * skel_losses["coarse"]
+            )
+
+        if "smooth" in active and "action_window_next" in batch and batch["action_window_next"] is not None:
+            aw_t = batch["action_window"].to(device)
+            aw_t1 = batch["action_window_next"].to(device)
+            losses["smooth"] = self.compute_smoothness(aw_t, aw_t1)
+
+        return losses
 
     def __init__(
         self,
