@@ -17,6 +17,7 @@ skeleton_mode 选择骨架参数化方式（详见 skeleton_heads.py）：
 import torch
 import torch.nn as nn
 from .layers import PositionalEncoder, MLPDecoder
+from .mixins import TemporalMixin, SkeletonMixin
 from .model_mstnf import MultiScaleEMA
 from .skeleton_heads import (
     SkeletonHead, SKELETON_MODES, create_skeleton_head,
@@ -61,7 +62,7 @@ class SkeletonConditionedDensity(nn.Module):
         return self.decoder(latent)
 
 
-class MSSCNFModel(nn.Module):
+class MSSCNFModel(nn.Module, TemporalMixin, SkeletonMixin):
     """MS-SCNF 完整模型。
 
     skeleton_mode 选择骨架参数化：
@@ -128,24 +129,6 @@ class MSSCNFModel(nn.Module):
 
         self.canonical = nn.Module()
 
-    def skeleton_config(self):
-        """返回骨架配置 dict，用于保存到实验 log。"""
-        cfg = {"skeleton_mode": self.skeleton_mode, "n_fine": self.n_fine}
-        if self.skeleton_mode == "fourier":
-            cfg["fourier_n_freq"] = self.skeleton_head.n_freq
-        elif self.skeleton_mode == "bspline":
-            cfg["bspline_n_ctrl"] = self.skeleton_head.n_ctrl
-        elif self.skeleton_mode == "catmullrom":
-            cfg["catmullrom_n_ctrl"] = self.skeleton_head.n_ctrl
-        return cfg
-
-    def encode(self, action_window):
-        return self.temporal(action_window)
-
-    def predict_skeleton(self, action_window):
-        state = self.encode(action_window)
-        return self.skeleton_head(state)
-
     def forward(self, points, action_window):
         state = self.encode(action_window)
         skel_dict = self.skeleton_head(state)
@@ -158,23 +141,5 @@ class MSSCNFModel(nn.Module):
         device = points.device
         return torch.zeros(N, n_samples, 2, device=device)
 
-    def compute_skeleton_loss(self, pred_dict, gt_positions):
-        losses = {}
-        losses['fine'] = ((pred_dict['fine'] - gt_positions) ** 2).mean()
-
-        gt_medium = downsample_skeleton(gt_positions, pred_dict['medium'].shape[-2])
-        losses['medium'] = ((pred_dict['medium'] - gt_medium) ** 2).mean()
-
-        gt_coarse = downsample_skeleton(gt_positions, pred_dict['coarse'].shape[-2])
-        losses['coarse'] = ((pred_dict['coarse'] - gt_coarse) ** 2).mean()
-
-        return losses
-
-    def compute_smoothness(self, action_windows_t, action_windows_t1):
-        return self.temporal.compute_smoothness(action_windows_t, action_windows_t1)
-
     def freeze_canonical(self):
         pass
-
-    def get_learned_decays(self):
-        return self.temporal.decays.detach().cpu().numpy()

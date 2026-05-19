@@ -25,37 +25,16 @@
 
 import torch
 import torch.nn as nn
-import numpy as np
 
+from .layers import SirenLayer, PositionalEncoder
+from .mixins import TemporalMixin, SkeletonMixin
 from .model_mstnf import MultiScaleEMA
 from .skeleton_heads import (
     create_skeleton_head, downsample_skeleton, point_to_segment_distance,
 )
 
 
-class SirenLayer(nn.Module):
-    """SIREN layer: sin(w0 * (Wx + b))."""
-
-    def __init__(self, in_f, out_f, w0=30, is_first=False, is_last=False):
-        super().__init__()
-        self.in_f = in_f
-        self.w0 = w0
-        self.linear = nn.Linear(in_f, out_f)
-        self.is_first = is_first
-        self.is_last = is_last
-        self.init_weights()
-
-    def init_weights(self):
-        b = 1 / self.in_f if self.is_first else np.sqrt(6 / self.in_f) / self.w0
-        with torch.no_grad():
-            self.linear.weight.uniform_(-b, b)
-
-    def forward(self, x):
-        x = self.linear(x)
-        return x if self.is_last else torch.sin(self.w0 * x)
-
-
-class SkeletonSDFModel(nn.Module):
+class SkeletonSDFModel(nn.Module, TemporalMixin, SkeletonMixin):
     """参数化骨架 + 截面 SDF 模型。
 
     Args:
@@ -107,7 +86,8 @@ class SkeletonSDFModel(nn.Module):
         self.skeleton_head = create_skeleton_head(skeleton_mode, **skel_kwargs)
 
         if sdf_residual:
-            pos_enc_dim = 3 * (1 + 2 * 4)  # 27
+            self.pos_encoder = PositionalEncoder(d_input=3, n_freqs=4, log_space=True)
+            pos_enc_dim = self.pos_encoder.d_output  # 27
             self.state_proj = nn.Linear(hidden_dim, 32)
             input_dim = 1 + pos_enc_dim + 32  # 60
             self.sdf_net = nn.Sequential(
@@ -116,31 +96,6 @@ class SkeletonSDFModel(nn.Module):
                 SirenLayer(sdf_hidden, sdf_hidden, w0=1),
                 SirenLayer(sdf_hidden, 1, is_last=True),
             )
-
-    def skeleton_config(self):
-        cfg = {"skeleton_mode": self.skeleton_mode, "n_fine": self.n_fine,
-               "rod_radius": self.rod_radius}
-        if self.skeleton_mode == "fourier":
-            cfg["fourier_n_freq"] = self.skeleton_head.n_freq
-        elif self.skeleton_mode == "bspline":
-            cfg["bspline_n_ctrl"] = self.skeleton_head.n_ctrl
-        elif self.skeleton_mode == "catmullrom":
-            cfg["catmullrom_n_ctrl"] = self.skeleton_head.n_ctrl
-        return cfg
-
-    def encode(self, action_window):
-        return self.temporal(action_window)
-
-    def predict_skeleton(self, action_window):
-        return self.skeleton_head(self.encode(action_window))
-
-    def _positional_encode(self, x, n_freqs=4):
-        enc = [x]
-        for k in range(n_freqs):
-            freq = 2 ** k * x
-            enc.append(torch.sin(freq))
-            enc.append(torch.cos(freq))
-        return torch.cat(enc, dim=-1)
 
     def forward(self, query_points, action_window):
         """预测查询点的 SDF 值。
@@ -168,7 +123,7 @@ class SkeletonSDFModel(nn.Module):
             return sdf_prior.unsqueeze(-1)
 
         state_feat = self.state_proj(state)
-        pos_enc = self._positional_encode(pts, n_freqs=4)
+        pos_enc = self.pos_encoder(pts)
 
         sdf_in = torch.cat([
             sdf_prior.unsqueeze(-1),
@@ -179,18 +134,3 @@ class SkeletonSDFModel(nn.Module):
 
         residual = self.sdf_net(sdf_in)
         return sdf_prior.unsqueeze(-1) + residual
-
-    def compute_skeleton_loss(self, pred_dict, gt_positions):
-        losses = {}
-        losses['fine'] = ((pred_dict['fine'] - gt_positions) ** 2).mean()
-        gt_medium = downsample_skeleton(gt_positions, pred_dict['medium'].shape[-2])
-        losses['medium'] = ((pred_dict['medium'] - gt_medium) ** 2).mean()
-        gt_coarse = downsample_skeleton(gt_positions, pred_dict['coarse'].shape[-2])
-        losses['coarse'] = ((pred_dict['coarse'] - gt_coarse) ** 2).mean()
-        return losses
-
-    def compute_smoothness(self, action_windows_t, action_windows_t1):
-        return self.temporal.compute_smoothness(action_windows_t, action_windows_t1)
-
-    def get_learned_decays(self):
-        return self.temporal.decays.detach().cpu().numpy()

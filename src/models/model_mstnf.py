@@ -13,6 +13,7 @@ EMA 是对输入的线性加权求和，天然满足 Lipschitz 连续性——�
 import torch
 import torch.nn as nn
 from .layers import PositionalEncoder, MLPDecoder
+from .mixins import TemporalMixin
 from src.training.spec import PhaseSpec, TrainingSpec
 
 
@@ -104,7 +105,7 @@ class MultiScaleEMA(nn.Module):
         return torch.mean((s_t1 - s_t) ** 2)
 
 
-class MSTNFModel(nn.Module):
+class MSTNFModel(nn.Module, TemporalMixin):
     """Multi-Scale Temporal Neural Field 完整模型。
 
     时序编码: 动作窗口 → MultiScaleEMA → physics_state
@@ -165,15 +166,8 @@ class MSTNFModel(nn.Module):
             self.decoder.net[-1].bias[1] = 0.0
 
     def encode_temporal(self, action_window):
-        """编码动作窗口为物理状态。
-
-        Args:
-            action_window: (Batch, Window, Action_Dim)
-
-        Returns:
-            physics_state: (Batch, Hidden_Dim)
-        """
-        return self.temporal(action_window)
+        """编码动作窗口为物理状态（向后兼容别名，推荐使用 encode()）。"""
+        return self.encode(action_window)
 
     def decode_spatial(self, points, physics_state, current_action=None):
         """查询空间场。
@@ -225,11 +219,3 @@ class MSTNFModel(nn.Module):
         action_expanded = current_action.unsqueeze(1).expand(-1, N_rays, -1).reshape(B * N_rays, self.action_dim)
 
         return self.decode_spatial(pts_expanded, state_expanded, action_expanded)
-
-    def compute_smoothness(self, action_windows_t, action_windows_t1):
-        """时序平滑 loss（委托给 temporal encoder）。"""
-        return self.temporal.compute_smoothness(action_windows_t, action_windows_t1)
-
-    def get_learned_decays(self):
-        """返回当前学到的衰减率（用于分析/可视化）。"""
-        return self.temporal.decays.detach().cpu().numpy()

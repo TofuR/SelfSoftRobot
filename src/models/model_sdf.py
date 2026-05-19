@@ -11,32 +11,12 @@ Architecture:
 
 import torch
 import torch.nn as nn
-import numpy as np
+
+from .layers import SirenLayer
+from .mixins import TemporalMixin
 
 
-class SirenLayer(nn.Module):
-    """SIREN layer: sin(w0 * (Wx + b))."""
-
-    def __init__(self, in_f, out_f, w0=30, is_first=False, is_last=False):
-        super().__init__()
-        self.in_f = in_f
-        self.w0 = w0
-        self.linear = nn.Linear(in_f, out_f)
-        self.is_first = is_first
-        self.is_last = is_last
-        self.init_weights()
-
-    def init_weights(self):
-        b = 1 / self.in_f if self.is_first else np.sqrt(6 / self.in_f) / self.w0
-        with torch.no_grad():
-            self.linear.weight.uniform_(-b, b)
-
-    def forward(self, x):
-        x = self.linear(x)
-        return x if self.is_last else torch.sin(self.w0 * x)
-
-
-class TemporalSDFModel(nn.Module):
+class TemporalSDFModel(nn.Module, TemporalMixin):
     """SDF model with EMA temporal encoding for viscoelastic hysteresis."""
 
     def __init__(
@@ -60,7 +40,7 @@ class TemporalSDFModel(nn.Module):
             SirenLayer(half, half, w0=1),
         )
 
-        # EMA temporal encoder (from model_mstnf.py)
+        # EMA temporal encoder
         from src.models.model_mstnf import MultiScaleEMA
         self.temporal = MultiScaleEMA(
             action_dim=action_dim,
@@ -106,11 +86,3 @@ class TemporalSDFModel(nn.Module):
         coords = coords.clone().detach().requires_grad_(True)
         sdf = self.forward(coords, action_window)
         return sdf, coords
-
-    def compute_smoothness(self, action_windows_t, action_windows_t1):
-        state_t = self.temporal(action_windows_t)
-        state_t1 = self.temporal(action_windows_t1)
-        return torch.mean((state_t1 - state_t) ** 2)
-
-    def get_learned_decays(self):
-        return self.temporal.decays.detach().cpu().numpy()
