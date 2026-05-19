@@ -1,0 +1,214 @@
+"""dataset_factory.py — 数据集创建与 batch collation 工厂。
+
+根据 PhaseSpec.dataset_type 自动创建对应的数据集实例，
+并将各数据集不同的 tuple 返回格式统一为 dict batch。
+
+支持的 dataset_type:
+  "sequence"        → SoftSequenceDataset（2D 图像 + 动作）
+  "multiview_depth" → MultiViewDepthDataset（多视角 + 深度）
+  "sdf"             → SDFDataset（3D SDF 监督）
+  "skeleton_sdf"    → SkeletonSDFDataset（骨架 + SDF）
+
+统一 dict batch 格式:
+  {
+      "action_window":       Tensor (B, K, D),
+      "action_window_next":  Tensor | None,        # pairs 模式
+      "images":              list[Tensor] | Tensor, # 单视角=Tensor, 多视角=list
+      "depths":              list[Tensor] | None,
+      "gt_positions":        Tensor | None,         # (B, N, 3) 3D 骨架 GT
+      "coords":              Tensor | None,         # (B, M, 3) SDF 查询点
+      "gt_sdf":              Tensor | None,         # (B, M)
+      "gt_normals":          Tensor | None,         # (B, M, 3)
+  }
+"""
+
+import torch
+from torch.utils.data import Dataset
+
+from src.training.spec import PhaseSpec
+
+
+def create_dataset(dataset_type: str, data_dir: str, config: dict,
+                   phase_spec: PhaseSpec) -> Dataset:
+    """根据 dataset_type 创建数据集实例。
+
+    Args:
+        dataset_type: "sequence" | "multiview_depth" | "sdf" | "skeleton_sdf"
+        data_dir: 数据目录路径
+        config: 训练配置 dict
+        phase_spec: 当前阶段配置（从中读取 dataset_kwargs 等）
+
+    Returns:
+        Dataset 实例
+    """
+    temp_cfg = config.get("temporal", {})
+    kwargs = dict(phase_spec.dataset_kwargs)
+    seq_len = temp_cfg.get("window_size", 20)
+
+    if dataset_type == "sequence":
+        from src.data.dataset import SoftSequenceDataset
+        return SoftSequenceDataset(
+            data_dir,
+            seq_len=seq_len,
+            return_pairs=kwargs.get("return_pairs", False),
+            return_3d=kwargs.get("return_3d", False),
+            return_depth=kwargs.get("return_depth", False),
+        )
+
+    elif dataset_type == "multiview_depth":
+        from src.data.dataset_multiview_depth import MultiViewDepthDataset
+        active = phase_spec.active_losses
+        return MultiViewDepthDataset(
+            data_dir,
+            seq_len=seq_len,
+            return_depth="depth" in active,
+            return_pairs="smooth" in active,
+        )
+
+    elif dataset_type == "sdf":
+        from src.data.dataset_sdf import SDFDataset
+        sdf_cfg = config.get("sdf", {})
+        return SDFDataset(
+            data_dir,
+            seq_len=seq_len,
+            n_surface=sdf_cfg.get("n_surface", 300),
+            n_near_surface=sdf_cfg.get("n_near_surface", 200),
+            n_off_surface=sdf_cfg.get("n_off_surface", 200),
+        )
+
+    elif dataset_type == "skeleton_sdf":
+        from src.data.dataset_skeleton_sdf import SkeletonSDFDataset
+        sdf_cfg = config.get("sdf", {})
+        return SkeletonSDFDataset(
+            data_dir,
+            seq_len=seq_len,
+            n_surface=sdf_cfg.get("n_surface", 500),
+            n_near_surface=sdf_cfg.get("n_near_surface", 500),
+            n_off_surface=sdf_cfg.get("n_off_surface", 500),
+        )
+
+    else:
+        raise ValueError(f"Unknown dataset_type: {dataset_type}")
+
+
+def get_collate_fn(dataset_type: str, dataset: Dataset):
+    """返回将 tuple batch 转为统一 dict batch 的 collate 函数。
+
+    Args:
+        dataset_type: 同 create_dataset
+        dataset: 已创建的数据集实例（某些 collate 需要元信息）
+
+    Returns:
+        callable: list[tuple] → dict[str, Tensor]
+    """
+    if dataset_type == "sequence":
+        return _collate_sequence(dataset)
+    elif dataset_type == "multiview_depth":
+        return _collate_multiview_depth(dataset)
+    elif dataset_type == "sdf":
+        return _collate_sdf
+    elif dataset_type == "skeleton_sdf":
+        return _collate_skeleton_sdf
+    else:
+        raise ValueError(f"Unknown dataset_type: {dataset_type}")
+
+
+# ── Collate 函数 ──────────────────────────────────────────────────────
+
+
+def _collate_sequence(dataset):
+    """SoftSequenceDataset 的 collate 函数。
+
+    返回格式取决于数据集的 return_pairs / return_3d 标志。
+    """
+    return_pairs = dataset.return_pairs
+    return_3d = getattr(dataset, 'return_3d', False)
+
+    def collate(batch):
+        action_windows = torch.stack([b[0] for b in batch])
+
+        result = {"action_window": action_windows}
+
+        if return_pairs:
+            # (seq_t, seq_t1, img_t, img_t1, [pos_t, pos_t1])
+            result["action_window_next"] = torch.stack([b[1] for b in batch])
+            result["images"] = torch.stack([b[2] for b in batch])
+            idx = 3
+        else:
+            # (action_window, image, [positions], [depth])
+            result["images"] = torch.stack([b[1] for b in batch])
+            idx = 2
+
+        # 3D positions
+        result["gt_positions"] = None
+        result["depths"] = None
+        result["coords"] = None
+        result["gt_sdf"] = None
+        result["gt_normals"] = None
+
+        return result
+
+    return collate
+
+
+def _collate_multiview_depth(dataset):
+    """MultiViewDepthDataset 的 collate 函数。"""
+    n_views = dataset.n_views
+
+    def collate(batch):
+        action_windows = torch.stack([b[0] for b in batch])
+
+        result = {"action_window": action_windows}
+
+        # b[1] = images_list (list of V tensors)
+        images_per_view = []
+        for v in range(n_views):
+            images_per_view.append(torch.stack([b[1][v] for b in batch]))
+        result["images"] = images_per_view
+
+        # b[2] = depths_list or None
+        if batch[0][2] is not None:
+            depths_per_view = []
+            for v in range(n_views):
+                depths_per_view.append(torch.stack([b[2][v] for b in batch]))
+            result["depths"] = depths_per_view
+        else:
+            result["depths"] = None
+
+        result["action_window_next"] = None
+        result["gt_positions"] = None
+        result["coords"] = None
+        result["gt_sdf"] = None
+        result["gt_normals"] = None
+
+        return result
+
+    return collate
+
+
+def _collate_sdf(batch):
+    """SDFDataset 的 collate 函数。 (action_window, coords, sdf, normals)"""
+    return {
+        "action_window": torch.stack([b[0] for b in batch]),
+        "images": None,
+        "depths": None,
+        "action_window_next": None,
+        "gt_positions": None,
+        "coords": torch.stack([b[1] for b in batch]),
+        "gt_sdf": torch.stack([b[2] for b in batch]),
+        "gt_normals": torch.stack([b[3] for b in batch]),
+    }
+
+
+def _collate_skeleton_sdf(batch):
+    """SkeletonSDFDataset 的 collate 函数。 (action, coords, sdf, normals, positions)"""
+    return {
+        "action_window": torch.stack([b[0] for b in batch]),
+        "images": None,
+        "depths": None,
+        "action_window_next": None,
+        "coords": torch.stack([b[1] for b in batch]),
+        "gt_sdf": torch.stack([b[2] for b in batch]),
+        "gt_normals": torch.stack([b[3] for b in batch]),
+        "gt_positions": torch.stack([b[4] for b in batch]),
+    }
