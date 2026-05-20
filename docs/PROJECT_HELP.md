@@ -12,16 +12,15 @@ PyElastica 物理仿真 → PyVista 渲染图像 → 数据采集 (.npz) → 模
 
 项目目标：**仅用驱动参数（扭矩）预测软体机器人的完整 3D 形态**。
 
-当前有四套模型管线：
+当前有五套模型管线，全部通过 Spec 声明式训练架构统一管理：
 
-| 管线 | 模型 | 核心创新 | 数据需求 | 输出 |
-|------|------|---------|---------|------|
-| C-MSTNF 系列 | MSTNF / C-MSTNF / ODE-CMSTNF / Smooth-CMSTNF | 多尺度时序编码 + D-NeRF 变形场 | 2D 图像 + 动作 | 2D 渲染图 |
-| MS-SCNF | MS-SCNF | 显式骨架回归 + 骨架条件密度场 | 2D 图像 + 动作 + 3D 节点坐标 | 3D 骨架 + 2D 渲染图 |
-| **深度增强** | **Depth-CMSTNF** | 深度图作为额外监督信号 | **2D 图像 + 动作 + 深度图** | **深度感知 2D 渲染图** |
-| **SDF 3D** | **TemporalSDF** | SIREN 坐标编码 + 3D SDF 直接监督 | **3D 节点坐标 + 动作（无需 2D 图像）** | **3D SDF 场** |
-| **SkeletonSDF** | **SkeletonSDF** | 参数化骨架 + 管状 SDF 先验 + SIREN 残差 | **3D 节点坐标 + 动作（无需 2D 图像）** | **3D SDF 场 + 3D 骨架** |
-| **多视角+深度** | **MSTNF / C-MSTNF (多视角训练)** | 多视角 rendering + 深度监督融合 | **多视角 2D 图像 + 深度图 + 相机参数** | **多视角 2D 渲染图** |
+| 管线 | 模型 | 核心创新 | 监督模式 | 数据需求 | 输出 |
+|------|------|---------|---------|---------|------|
+| C-MSTNF 系列 | MSTNF / C-MSTNF | 多尺度时序编码 + D-NeRF 变形场 | rendering | 2D 图像 + 动作 | 2D 渲染图 |
+| MS-SCNF | MS-SCNF | 显式骨架回归 + 骨架条件密度场 | skeleton→rendering | 2D 图像 + 动作 + 3D 节点坐标 | 3D 骨架 + 2D 渲染图 |
+| SDF 3D | TemporalSDF | SIREN 坐标编码 + 3D SDF 直接监督 | direct_3d | 3D 节点坐标 + 动作（无需图像） | 3D SDF 场 |
+| SkeletonSDF | SkeletonSDF | 参数化骨架 + 管状 SDF 先验 + SIREN 残差 | direct_3d | 3D 节点坐标 + 动作（无需图像） | 3D SDF 场 + 3D 骨架 |
+| 多视角+深度 | MSTNF / C-MSTNF (多视角训练) | 多视角 rendering + 深度监督融合 | rendering (MultiView) | 多视角 2D 图像 + 深度图 + 相机参数 | 多视角 2D 渲染图 |
 
 ---
 
@@ -46,19 +45,16 @@ SelfSoftRobot/
 │   ├── data/
 │   │   └── dataset.py               # SoftSequenceDataset（支持 2D/3D 数据）
 │   │   └── dataset_sdf.py            # SDFDataset（3D SDF 监督采样）
+│   │   └── dataset_skeleton_sdf.py   # SkeletonSDFDataset（骨架 + SDF 采样）
 │   │   └── dataset_multiview.py      # MultiViewDataset（旧版双视角数据集）
 │   │   └── dataset_multiview_depth.py # MultiViewDepthDataset（新版多视角+深度）
 │   ├── training/
 │   │   ├── base.py                  #   BaseTrainer（渲染、射线采样等共享工具）
-│   │   ├── two_phase_trainer.py     #   TwoPhaseTrainer（Phase1+Phase2 基类）
-│   │   ├── trainer_mstnf.py         #   MSTNF 训练器
-│   │   ├── trainer_cmstnf.py        #   C-MSTNF 训练器
-│   │   ├── trainer_ode_cmstnf.py    #   ODE-CMSTNF 训练器
-│   │   ├── trainer_smooth_cmstnf.py #   Smooth-CMSTNF 训练器
-│   │   ├── trainer_ms_scnf.py       #   MS-SCNF 训练器
-│   │   ├── trainer_depth_cmstnf.py  #   Depth-CMSTNF 训练器（深度监督）
-│   │   ├── trainer_sdf.py           #   TemporalSDF 训练器（3D SDF 监督）
-│   │   ├── trainer_multiview.py     #   多视角+深度训练器（方案A）
+│   │   ├── spec.py                  #   PhaseSpec / TrainingSpec（训练需求声明，核心）
+│   │   ├── phase_strategy.py        #   PhaseStrategy（解析 spec，管理冻结/解冻/forward）
+│   │   ├── view_strategy.py         #   ViewStrategy（单视角/多视角策略）
+│   │   ├── dataset_factory.py       #   数据集工厂 + collate 函数（dict batch 统一）
+│   │   ├── trainer_unified.py       #   UnifiedTrainer（统一训练器，支持所有模型）
 │   │   ├── metrics_3d.py            #   3D 评估指标
 │   │   └── rendering.py             #   旧版渲染工具
 │   ├── config/
@@ -80,15 +76,19 @@ SelfSoftRobot/
 │   │   ├── collect_multiview.py #   多视角采集（+ --depth）
 │   │   └── collect_utils.py         #   动作策略、保存、命名工具函数
 │   ├── training/                    # 训练入口脚本
-│   │   ├── train_mstnf.py           #   MSTNF
-│   │   ├── train_cmstnf.py          #   C-MSTNF
-│   │   ├── train_ode_cmstnf.py      #   ODE-CMSTNF
-│   │   ├── train_smooth_cmstnf.py   #   Smooth-CMSTNF
-│   │   ├── train_ms_scnf.py         #   MS-SCNF
-│   │   ├── train_depth_cmstnf.py  #   Depth-CMSTNF（深度监督，新）
-│   │   ├── train_sdf.py             #   TemporalSDF（3D SDF 监督）
-│   │   ├── train_skeleton_sdf.py    #   SkeletonSDF（参数化骨架 + 管状 SDF，两阶段）
-│   │   ├── train_multiview.py       #   多视角+深度训练（方案A，支持 mstnf/cmstnf/smooth_cmstnf）
+│   │   ├── train_unified.py         #   统一入口（支持全部 5 个模型，推荐）
+│   │   ├── train_mstnf.py           #   MSTNF 薄包装（→ UnifiedTrainer）
+│   │   ├── train_cmstnf.py          #   C-MSTNF 薄包装
+│   │   ├── train_ode_cmstnf.py      #   ODE-CMSTNF（已归档到 docs/archived/）
+│   │   ├── train_smooth_cmstnf.py   #   Smooth-CMSTNF（已归档）
+│   │   ├── train_ms_scnf.py         #   MS-SCNF 薄包装
+│   │   ├── train_depth_cmstnf.py    #   Depth-CMSTNF（已归档）
+│   │   ├── train_sdf.py             #   TemporalSDF 薄包装
+│   │   ├── train_skeleton_sdf.py    #   SkeletonSDF 薄包装
+│   │   ├── train_multiview.py       #   多视角+深度训练薄包装
+│   │   └── train_multiview_consistency.py  # 多视角一致性薄包装
+│   ├── testing/                     # 测试与验证
+│   │   └── verify_unified_trainer.py #  统一训练器验证（5 模型 forward+backward）
 │   ├── evaluation/
 │   │   └── evaluate_3d.py           #   3D 几何评估脚本（新）
 │   └── visualization/               # 可视化工具
@@ -585,21 +585,52 @@ sample_sdf_training_data(positions, radius)
 辅助函数：`downsample_skeleton()`（均匀下采样）、`point_to_segment_distance()`（可微点到线段距离）、`create_skeleton_head()`（工厂函数）。
 
 
-### 3.5 训练器文件
+### 3.5 训练架构：Spec 声明式系统
 
-所有训练器继承 `BaseTrainer`（渲染、射线采样工具）。`trainer_sdf.py` 和 `trainer_multiview.py` 不继承 BaseTrainer，前者不需要体渲染，后者独立管理多视角渲染。
+所有模型通过 `training_spec` 类属性声明训练需求，`UnifiedTrainer` 统一解释执行。**无需为每个模型写独立的 Trainer 子类**。
 
-| 文件 | 模型 | Phase 1 内容 | Phase 2 内容 |
-|------|------|-------------|-------------|
-| `trainer_mstnf.py` | MSTNF | — | 单阶段训练 |
-| `trainer_cmstnf.py` | C-MSTNF | Canonical 场 (2D loss) | Deformation 场 (2D loss) |
-| `trainer_ode_cmstnf.py` | ODE-CMSTNF | 同 C-MSTNF | 同 C-MSTNF + ODE 编码 |
-| `trainer_smooth_cmstnf.py` | Smooth-CMSTNF | 同 C-MSTNF | 同 C-MSTNF + 正则化 |
-| `trainer_ms_scnf.py` | MS-SCNF | 骨架回归 (3D loss) | 联合训练 (3D + 2D loss) |
-| `trainer_depth_cmstnf.py` | **Depth-CMSTNF** | 同 C-MSTNF | **同 C-MSTNF + 深度 L1 loss + 深度引导采样** |
-| `trainer_sdf.py` | **TemporalSDF** | — | **单阶段，3D SDF 监督** |
-| `train_skeleton_sdf.py` | **SkeletonSDF** | **骨架预热 (3D loss)** | **联合: 骨架 + SDF + Eikonal + Normal loss** |
-| `trainer_multiview.py` | **多视角训练** | — | **多视角 rendering + 深度 loss + smoothness** |
+**三个正交维度**：
+
+| 维度 | 机制 | 负责 |
+|------|------|------|
+| **Phase 策略** | `PhaseSpec` + `PhaseStrategy` | 阶段数、冻结、forward、epochs |
+| **监督模式** | `supervision_mode` | `"rendering"` / `"direct_3d"` / `"skeleton"` |
+| **视角策略** | `ViewStrategy` | 单视角 / 多视角 / 跨视角约束 |
+
+**三种监督模式**：
+
+| 模式 | 前向流程 | 适用模型 |
+|------|---------|---------|
+| `"rendering"` | rays → 3D points → model(pts, action) → 体渲染 → 像素对比 | MSTNF, CMSTNF, MS-SCNF Phase 2 |
+| `"direct_3d"` | coords → model(coords, action) → 值对比 (SDF/法向量) | SDF, SkeletonSDF |
+| `"skeleton"` | action → model.predict_skeleton(action) → 骨架对比 | MS-SCNF Phase 1, SkeletonSDF Phase 1 |
+
+**Loss 组织**：所有 loss 在 `active_losses` 中声明，分两层计算：
+- **渲染层**（ViewStrategy）：recon, depth, reproj, consist
+- **模型层**（`model.compute_losses()`）：smooth, skeleton, sdf, normal, eikonal
+
+**各模型的 training_spec**：
+
+| 模型 | 阶段 | 监督模式 | 活跃 Loss |
+|------|------|---------|----------|
+| MSTNF | 1 phase: full | rendering | recon, smooth |
+| CMSTNF | 2 phase: canonical → deformation | rendering → rendering | [recon] → [recon, smooth] |
+| MS-SCNF | 2 phase: skeleton → joint | skeleton → rendering | [skeleton] → [skeleton, recon, smooth] |
+| TemporalSDF | 1 phase: full | direct_3d | sdf, normal, eikonal |
+| SkeletonSDF | 2 phase: skeleton → joint | direct_3d → direct_3d | [skeleton] → [skeleton, sdf, normal, eikonal] |
+
+**核心文件**：
+
+| 文件 | 作用 |
+|------|------|
+| `src/training/spec.py` | `PhaseSpec` / `TrainingSpec` 数据类 |
+| `src/training/phase_strategy.py` | 解析 spec，管理冻结/解冻/forward |
+| `src/training/view_strategy.py` | `SingleViewStrategy` / `MultiViewStrategy` |
+| `src/training/dataset_factory.py` | 根据 `dataset_type` 创建数据集 + collate → dict batch |
+| `src/training/trainer_unified.py` | 统一训练器，组合 PhaseStrategy + ViewStrategy |
+| `scripts/training/train_unified.py` | 统一入口脚本，支持 5 个模型 |
+
+**旧 Trainer 文件**已归档到 `docs/archived/trainers/`（hook_based / standalone / multiview 三类）。各训练脚本（`train_*.py`）已改为 UnifiedTrainer 的薄包装，保持原有 CLI 接口不变。
 
 ### 3.6 配置文件：`src/config/training.json`
 
@@ -727,12 +758,40 @@ python scripts/data_collection/collect.py --3d --depth
 
 可用 `--save-dir` 覆盖自动推断。
 
-### 5.2 C-MSTNF 系列（MSTNF / C-MSTNF / ODE-CMSTNF / Smooth-CMSTNF）
+### 5.2 统一训练入口（推荐）
+
+所有 5 个模型均可通过 `train_unified.py` 训练：
+
+```bash
+# MSTNF（单阶段，rendering）
+python scripts/training/train_unified.py --model mstnf --data_dir data/sequence_data
+
+# C-MSTNF（两阶段，rendering）
+python scripts/training/train_unified.py --model cmstnf --data_dir data/sequence_data \
+    --canonical_data_dir data/canonical_data
+
+# MS-SCNF（两阶段，skeleton+rendering）
+python scripts/training/train_unified.py --model ms_scnf --data_dir data/seq_rr_3d
+
+# TemporalSDF（单阶段，direct_3d，无需图像）
+python scripts/training/train_unified.py --model sdf --data_dir data/seq_rr_3d
+
+# SkeletonSDF（两阶段，direct_3d，无需图像）
+python scripts/training/train_unified.py --model skeleton_sdf --data_dir data/seq_rr_3d
+
+# 多视角 + 一致性
+python scripts/training/train_unified.py --model cmstnf --data_dir data/seq_rz_c2_sk \
+    --multiview --depth --consistency
+```
+
+各模型原有脚本（`train_mstnf.py` 等）仍可使用，内部已迁移到 UnifiedTrainer。
+
+### 5.2.1 C-MSTNF 系列（MSTNF / C-MSTNF）
 
 **第一步：采集数据**
 
 ```bash
-# 零动作数据（Phase 1 用，仅 C-MSTNF 系列需要）
+# 零动作数据（Phase 1 用，仅 C-MSTNF 需要）
 python scripts/data_collection/collect.py --action-x zero --action-y zero
 
 # 时序动作数据（Phase 2 / MSTNF 训练用）
@@ -742,11 +801,17 @@ python scripts/data_collection/collect.py
 **第二步：训练**
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python scripts/training/train_mstnf.py      # MSTNF
-CUDA_VISIBLE_DEVICES=0 python scripts/training/train_cmstnf.py     # C-MSTNF
-CUDA_VISIBLE_DEVICES=0 python scripts/training/train_ode_cmstnf.py # ODE-CMSTNF
-CUDA_VISIBLE_DEVICES=0 python scripts/training/train_smooth_cmstnf.py
+# 推荐方式（统一入口）
+CUDA_VISIBLE_DEVICES=0 python scripts/training/train_unified.py --model mstnf --data_dir data/sequence_data
+CUDA_VISIBLE_DEVICES=0 python scripts/training/train_unified.py --model cmstnf --data_dir data/sequence_data \
+    --canonical_data_dir data/canonical_data
+
+# 或使用原有脚本（薄包装，CLI 不变）
+CUDA_VISIBLE_DEVICES=0 python scripts/training/train_mstnf.py
+CUDA_VISIBLE_DEVICES=0 python scripts/training/train_cmstnf.py
 ```
+
+> **注意**：ODE-CMSTNF 和 Smooth-CMSTNF 的 Trainer 已归档到 `docs/archived/`，如需使用需恢复文件。
 
 ### 5.3 MS-SCNF（推荐）
 
@@ -856,41 +921,31 @@ CUDA_VISIBLE_DEVICES=2 python scripts/training/train_depth_cmstnf.py --no_guided
 
 **核心设计**：深度图仅用于训练时的 loss 计算和采样引导，**推理时只需要驱动参数**，不需要深度图或任何传感器输入，完全符合自建模思想。
 
-### 5.5 多视角+深度训练（方案 A）
+### 5.5 多视角+深度训练
 
-**核心思想**：不改模型架构，同时从 2-3 个固定视角做 volume rendering，各视角 MSE loss 求和 + 深度 L1 loss。真实场景下通过 2-3 个固定相机同步采集。
+**核心思想**：不改模型架构，同时从 2-3 个固定视角做 volume rendering，各视角 MSE loss 求和 + 深度 L1 loss。
 
 **第一步：采集多视角+深度数据**
 
 ```bash
 # 双视角（正面+侧面）+ 深度图
 python scripts/data_collection/collect_multiview.py --depth
-
-# 指定保存目录和动作模式
-python scripts/data_collection/collect_multiview.py --depth --save-dir data/exp7_multiview
 ```
-
-数据保存为 `(N, V, H, W)` 数组格式（`images`, `depths`, `camera_params`），同时保留旧格式字段兼容。
 
 **第二步：训练**
 
 ```bash
-# MSTNF 多视角训练（无深度）
-CUDA_VISIBLE_DEVICES=0 python scripts/training/train_multiview.py \
-    --model mstnf --data_dir data/exp7_multiview
+# 推荐方式（统一入口）
+CUDA_VISIBLE_DEVICES=0 python scripts/training/train_unified.py \
+    --model cmstnf --data_dir data/exp7_multiview --multiview --depth
 
-# C-MSTNF 多视角训练（含深度监督）
+# 含跨视角一致性约束
+CUDA_VISIBLE_DEVICES=0 python scripts/training/train_unified.py \
+    --model cmstnf --data_dir data/exp7_multiview --multiview --depth --consistency
+
+# 或使用原有脚本（薄包装）
 CUDA_VISIBLE_DEVICES=0 python scripts/training/train_multiview.py \
     --model cmstnf --data_dir data/exp7_multiview --depth
-
-# 自定义参数
-CUDA_VISIBLE_DEVICES=0 python scripts/training/train_multiview.py \
-    --model mstnf --data_dir data/exp7_multiview --depth \
-    --w_depth 0.2 --n_epochs 300 --lr 1e-4
-
-# 含深度引导采样（coarse-to-fine）
-CUDA_VISIBLE_DEVICES=0 python scripts/training/train_multiview.py \
-    --model cmstnf --data_dir data/exp7_multiview --depth --depth-guided
 ```
 
 **关键组件**：
@@ -898,9 +953,9 @@ CUDA_VISIBLE_DEVICES=0 python scripts/training/train_multiview.py \
 | 文件 | 作用 |
 |------|------|
 | `src/utils/camera_system.py` | `MultiCameraSystem` — 统一管理多相机参数、射线生成、投影/反投影 |
-| `src/data/dataset_multiview_depth.py` | `MultiViewDepthDataset` — 兼容新旧 npz 格式，返回多视角图片+深度列表 |
-| `src/training/trainer_multiview.py` | `MultiViewTrainer` — 多视角 rendering + 深度 loss + smoothness |
-| `scripts/training/train_multiview.py` | 训练入口，支持 mstnf/cmstnf/smooth_cmstnf |
+| `src/data/dataset_multiview_depth.py` | `MultiViewDepthDataset` — 兼容新旧 npz 格式 |
+| `src/training/view_strategy.py` | `MultiViewStrategy` — 多视角 rendering + 深度 + 一致性约束 |
+| `scripts/training/train_unified.py` | 统一训练入口 |
 
 **Loss 组成**：
 ```
@@ -964,7 +1019,9 @@ jupyter notebook notebooks/07_coarse_to_fine_freq.ipynb
 - **GPU 选择**：通过环境变量指定，如 `CUDA_VISIBLE_DEVICES=2 python scripts/training/train_mstnf.py`。脚本默认 GPU 0。
 - **动作归一化**：训练时自动计算归一化因子并保存到 `action_norm_factor.txt`，推理时需加载。
 - **多视角数据格式**：新版 `collect_multiview.py` 保存 `(N,V,H,W)` 数组格式（`images`, `depths`, `camera_params`），同时保留旧格式字段（`images_front` 等）兼容旧代码。
-- **多视角训练器**：`MultiViewTrainer` 不依赖特定模型，只要 `forward(pts, action_window)` 接口兼容即可。支持 mstnf/cmstnf/smooth_cmstnf。
+- **多视角训练器**：多视角训练通过 `ViewStrategy` 的 `MultiViewStrategy` 实现，不再需要独立的 Trainer。统一入口 `train_unified.py --multiview`。
+- **训练架构**：所有模型通过 `training_spec` 声明式配置训练需求，`UnifiedTrainer` 统一解释执行。新增模型只需添加 `training_spec` 类属性和 `compute_losses()` 方法，无需写新 Trainer。
+- **旧 Trainer 归档**：旧 Trainer 文件归档在 `docs/archived/trainers/`（分 hook_based / standalone / multiview 三类）。各训练脚本已改为 UnifiedTrainer 薄包装。
 - **SDF 可视化**：`visualize_3d_shape.py` 支持 mesh（marching cubes 面片）和 pointcloud（SDF<=0 的点云）两种模式。
 - **根目录旧文件**：`env.py`、`func.py`、`train.py`、`predefined.py` 来自原始 FBV-SM 论文，与当前 PyElastica 管线无关，仅供参考。
 - **骨架模块复用**：`skeleton_heads.py` 从 `model_ms_scnf.py` 提取为独立模块，供 MS-SCNF 和 SkeletonSDF 共享。包含 4 种骨架参数化（point/fourier/bspline/catmullrom）及辅助函数。
