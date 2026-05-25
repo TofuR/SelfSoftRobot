@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.training.phase_strategy import PhaseStrategy
-from src.training.view_strategy import ViewStrategy
+from src.rendering.view_strategy import ViewStrategy
 from src.training.dataset_factory import create_dataset, get_collate_fn
 from src.utils.experiment import create_experiment
 from config.params import load_config
@@ -37,8 +37,10 @@ class UnifiedTrainer:
         config: 训练配置 dict
     """
 
-    def __init__(self, model, view_strategy: ViewStrategy = None, config=None):
+    def __init__(self, model, view_strategy: ViewStrategy = None, config=None,
+                 model_tag=None):
         self.model = model
+        self.model_tag = model_tag or type(model).__name__.lower().replace('model', '')
         self.phase = PhaseStrategy(model)
         self.views = view_strategy
         self.config = config or load_config("training")
@@ -65,13 +67,21 @@ class UnifiedTrainer:
         active = set(phase_spec.active_losses)
         losses = {}
 
+        # 如果 use_gt_skeleton，准备 GT skeleton（按 batch 元素切片传给 view_strategy）
+        gt_skeleton = None
+        if getattr(phase_spec, 'use_gt_skeleton', False) and "gt_positions" in batch:
+            gt_skeleton = batch["gt_positions"].to(self.device)
+            if gt_skeleton.shape[-1] != 3 and gt_skeleton.shape[1] == 3:
+                gt_skeleton = gt_skeleton.permute(0, 2, 1)
+
         # ── 1. 渲染层: recon, depth, reproj, consist ──
         if phase_spec.supervision_mode == "rendering" and self.views:
             action_window = batch["action_window"].to(self.device)
             images = batch.get("images")
             depths = batch.get("depths")
             view_losses = self.views.compute_losses(
-                forward_fn, action_window, images, depths, active)
+                forward_fn, action_window, images, depths, active,
+                gt_skeleton=gt_skeleton)
             losses.update(view_losses)
 
         # ── 2. 模型层: smooth, skeleton, sdf, normal, eikonal, ... ──
@@ -82,6 +92,75 @@ class UnifiedTrainer:
 
         losses["total"] = sum(losses.values())
         return losses
+
+    def _build_exp_config(self, data_dirs, n_epochs_per_phase):
+        """构建完整的实验配置 dict，用于保存到 config.json。"""
+        opt_cfg = self.config.get("optimization", {})
+        model = self.model
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+        phases_info = []
+        for p in self.phase.spec.phases:
+            p_info = {
+                "name": p.name,
+                "supervision_mode": p.supervision_mode,
+                "dataset_type": p.dataset_type,
+                "data_mode": p.data_mode,
+                "active_losses": p.active_losses,
+                "freeze_modules": p.freeze_modules,
+                "use_gt_skeleton": getattr(p, 'use_gt_skeleton', False),
+            }
+            if p.lr:
+                p_info["lr"] = p.lr
+            if p.save_modules:
+                p_info["save_modules"] = p.save_modules
+            if p.load_modules:
+                p_info["load_modules"] = p.load_modules
+            phases_info.append(p_info)
+
+        config = {
+            "model": type(model).__name__,
+            "model_tag": self.model_tag,
+            "total_params": total_params,
+            "trainable_params": trainable_params,
+            "action_dim": getattr(model, 'action_dim', None),
+            "window_size": self.config.get("temporal", {}).get("window_size"),
+            "hidden_dim": self.config.get("temporal", {}).get("hidden_dim"),
+            "n_scales": self.config.get("temporal", {}).get("n_scales"),
+            "device": str(self.device),
+            "phases": phases_info,
+            "training": {
+                "lr": opt_cfg.get("lr"),
+                "batch_size": opt_cfg.get("batch_size"),
+                "n_epochs": opt_cfg.get("n_epochs"),
+                "optimizer": "Adam",
+                "scheduler": "ReduceLROnPlateau",
+                "scheduler_patience": opt_cfg.get("scheduler_patience", 5),
+            },
+            "loss_weights": self.config.get("loss_weights", {}),
+            "data_dirs": {k: str(v) for k, v in data_dirs.items()},
+            "view_strategy": type(self.views).__name__ if self.views else None,
+        }
+
+        # 模型特有参数
+        for attr in ('skeleton_mode', 'rod_radius', 'd_filter', 'n_freqs',
+                     'n_fine', 'n_medium', 'n_coarse'):
+            val = getattr(model, attr, None)
+            if val is not None:
+                config[attr] = val
+
+        # 多视角参数
+        mv_cfg = self.config.get("multiview", {})
+        if mv_cfg:
+            config["multiview"] = mv_cfg
+
+        # SDF 参数
+        sdf_cfg = self.config.get("sdf", {})
+        if sdf_cfg:
+            config["sdf"] = sdf_cfg
+
+        return config
 
     def _save_phase_modules(self, phase_dir, phase_spec):
         """保存 PhaseSpec.save_modules 中声明的子模块权重。"""
@@ -129,13 +208,15 @@ class UnifiedTrainer:
 
         self.views.setup(self.device, self.config)
 
-    def train(self, data_dirs, exp_dir=None, n_epochs_per_phase=None):
+    def train(self, data_dirs, exp_dir=None, n_epochs_per_phase=None,
+              skip_phases=None):
         """统一训练入口。
 
         Args:
             data_dirs: dict, key 为 data_mode ("canonical"/"sequence"), value 为路径
             exp_dir: 实验日志目录
             n_epochs_per_phase: dict, key 为 phase name, value 为 epoch 数
+            skip_phases: list[str], 要跳过的阶段名列表
         """
         self.device = next(self.model.parameters()).device
         if self.views:
@@ -144,14 +225,16 @@ class UnifiedTrainer:
         opt_cfg = self.config["optimization"]
 
         if exp_dir is None:
-            exp_dir = create_experiment("train_log/train_unified", {
-                "model": type(self.model).__name__,
-                "phases": [p.name for p in self.phase.spec.phases],
-            })
+            exp_config = self._build_exp_config(data_dirs, n_epochs_per_phase)
+            exp_dir = create_experiment(f"train_log/{self.model_tag}", exp_config)
 
         saved_modules_by_phase = {}
 
         for phase_idx, phase_spec in self.phase.iterate_phases():
+            if skip_phases and phase_spec.name in skip_phases:
+                print(f"  Skipping phase '{phase_spec.name}'")
+                continue
+
             data_dir = data_dirs.get(phase_spec.data_mode)
             if data_dir is None:
                 print(f"  Skipping phase '{phase_spec.name}': no data for '{phase_spec.data_mode}'")

@@ -60,6 +60,14 @@ class SkeletonHead(nn.Module):
             'fine': self.fine_head(feat).reshape(B, self.n_fine, 3),
         }
 
+    def fit_to_points(self, gt_points):
+        """GT 坐标不需要参数化，直接返回多尺度。"""
+        return {
+            'fine': gt_points,
+            'medium': downsample_skeleton(gt_points, self.n_medium),
+            'coarse': downsample_skeleton(gt_points, self.n_coarse),
+        }
+
 
 class FourierSkeletonHead(nn.Module):
     """Fourier 级数骨架头：天然光滑，带限防止高频振荡。
@@ -95,6 +103,25 @@ class FourierSkeletonHead(nn.Module):
         B = physics_state.shape[0]
         coeffs = self.head(feat).reshape(B, 3, 1 + 2 * self.n_freq)
         fine = torch.matmul(coeffs, self.eval_matrix.T).transpose(1, 2)
+        return {
+            'fine': fine,
+            'medium': downsample_skeleton(fine, self.n_medium),
+            'coarse': downsample_skeleton(fine, self.n_coarse),
+        }
+
+    def fit_to_points(self, gt_points):
+        """GT → Fourier 系数（伪逆拟合）→ 重建带限光滑骨架。
+
+        forward: fine = (coeffs @ eval_matrix.T).T，即 fine = eval_matrix @ coeffs.T
+        逆: coeffs.T = pinv(eval_matrix) @ fine
+        重建: fine_recon = eval_matrix @ pinv(eval_matrix) @ gt（最小二乘投影）
+        """
+        if not hasattr(self, '_proj_matrix'):
+            pinv = torch.linalg.pinv(self.eval_matrix)  # (n_basis, n_fine)
+            self._proj_matrix = self.eval_matrix @ pinv  # (n_fine, n_fine)
+        B = gt_points.shape[0]
+        fine = torch.matmul(
+            self._proj_matrix.unsqueeze(0).expand(B, -1, -1), gt_points)
         return {
             'fine': fine,
             'medium': downsample_skeleton(fine, self.n_medium),
@@ -161,6 +188,20 @@ class BSplineSkeletonHead(nn.Module):
             'coarse': downsample_skeleton(fine, self.n_coarse),
         }
 
+    def fit_to_points(self, gt_points):
+        """GT → B-spline 控制点（伪逆拟合）→ 重建光滑骨架。"""
+        if not hasattr(self, '_proj_matrix'):
+            pinv = torch.linalg.pinv(self.basis_matrix)  # (n_ctrl, n_fine)
+            self._proj_matrix = self.basis_matrix @ pinv  # (n_fine, n_fine)
+        B = gt_points.shape[0]
+        fine = torch.matmul(
+            self._proj_matrix.unsqueeze(0).expand(B, -1, -1), gt_points)
+        return {
+            'fine': fine,
+            'medium': downsample_skeleton(fine, self.n_medium),
+            'coarse': downsample_skeleton(fine, self.n_coarse),
+        }
+
 
 class CatmullRomSkeletonHead(nn.Module):
     """Catmull-Rom 样条骨架头：插值型，曲线精确通过控制点。
@@ -212,6 +253,20 @@ class CatmullRomSkeletonHead(nn.Module):
         fine = torch.matmul(
             self.eval_matrix.unsqueeze(0).expand(B, -1, -1), ctrl
         )
+        return {
+            'fine': fine,
+            'medium': downsample_skeleton(fine, self.n_medium),
+            'coarse': downsample_skeleton(fine, self.n_coarse),
+        }
+
+    def fit_to_points(self, gt_points):
+        """GT → CatmullRom 控制点（伪逆拟合）→ 重建插值光滑骨架。"""
+        if not hasattr(self, '_proj_matrix'):
+            pinv = torch.linalg.pinv(self.eval_matrix)  # (n_ctrl, n_fine)
+            self._proj_matrix = self.eval_matrix @ pinv  # (n_fine, n_fine)
+        B = gt_points.shape[0]
+        fine = torch.matmul(
+            self._proj_matrix.unsqueeze(0).expand(B, -1, -1), gt_points)
         return {
             'fine': fine,
             'medium': downsample_skeleton(fine, self.n_medium),

@@ -59,7 +59,7 @@ class TemporalSDFModel(nn.Module, TemporalMixin):
         )
 
         # EMA temporal encoder
-        from src.models.model_mstnf import MultiScaleEMA
+        from src.encoders.multi_scale_ema import MultiScaleEMA
         self.temporal = MultiScaleEMA(
             action_dim=action_dim,
             n_scales=n_scales,

@@ -25,7 +25,7 @@
 
 import torch
 
-from .skeleton_heads import downsample_skeleton
+from src.heads.skeleton_heads import downsample_skeleton
 
 
 class TemporalMixin:

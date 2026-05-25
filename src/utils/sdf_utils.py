@@ -8,7 +8,7 @@
 
 import torch
 import numpy as np
-from src.models.skeleton_heads import point_to_segment_distance
+from src.heads.skeleton_heads import point_to_segment_distance
 
 
 def compute_gt_sdf(query_points, skeleton, radius):

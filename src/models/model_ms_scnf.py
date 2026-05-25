@@ -5,61 +5,15 @@
       ├── SkeletonHead → coarse(4×3) / medium(10×3) / fine(31×3)
       │                        ↓
       │               SkeletonConditionedDensity → [vis, density]
-
-skeleton_mode 选择骨架参数化方式（详见 skeleton_heads.py）：
-  "point" / "fourier" / "bspline" / "catmullrom"
-
-训练分两阶段：
-  Phase 1: 仅 SkeletonHead（3D L2 loss，GT 来自仿真器）
-  Phase 2: 联合 SkeletonHead + DensityField（3D + 2D rendering loss）
 """
 
 import torch
 import torch.nn as nn
-from .layers import PositionalEncoder, MLPDecoder
 from .mixins import TemporalMixin, SkeletonMixin
-from .model_mstnf import MultiScaleEMA
-from .skeleton_heads import (
-    SkeletonHead, SKELETON_MODES, create_skeleton_head,
-    downsample_skeleton, point_to_segment_distance,
-)
+from src.encoders.multi_scale_ema import MultiScaleEMA
+from src.heads.skeleton_heads import create_skeleton_head
+from src.fields.skeleton_density import SkeletonConditionedDensity
 from src.training.spec import PhaseSpec, TrainingSpec
-
-
-class SkeletonConditionedDensity(nn.Module):
-    """骨架条件密度场：查询点密度取决于到骨架曲线的距离。"""
-
-    def __init__(self, n_freqs=6, d_filter=128):
-        super().__init__()
-        self.dist_encoder = PositionalEncoder(d_input=1, n_freqs=n_freqs, log_space=True)
-        self.pos_encoder = PositionalEncoder(d_input=3, n_freqs=4, log_space=True)
-
-        dist_enc_dim = 1 * (1 + 2 * n_freqs)
-        pos_enc_dim = 3 * (1 + 2 * 4)
-        input_dim = dist_enc_dim + pos_enc_dim
-
-        self.decoder = MLPDecoder(input_dim=input_dim, d_filter=d_filter, output_size=2)
-        with torch.no_grad():
-            self.decoder.net[-1].bias[1] = 0.0
-
-    def forward(self, query_points, skeleton):
-        N, n_samples, _ = query_points.shape
-        B = skeleton.shape[0]
-        n_seg = skeleton.shape[1] - 1
-
-        pts = query_points.unsqueeze(0).expand(B, -1, -1, -1).reshape(B * N, n_samples, 3)
-        skel_expanded = skeleton.unsqueeze(1).expand(-1, N, -1, -1).reshape(B * N, -1, 3)
-        seg_start = skel_expanded[:, :-1, :]
-        seg_end = skel_expanded[:, 1:, :]
-
-        dist = point_to_segment_distance(pts, seg_start, seg_end)
-        dist = dist.unsqueeze(-1)
-
-        dist_enc = self.dist_encoder(dist)
-        pos_enc = self.pos_encoder(pts)
-        latent = torch.cat([dist_enc, pos_enc], dim=-1)
-
-        return self.decoder(latent)
 
 
 class MSSCNFModel(nn.Module, TemporalMixin, SkeletonMixin):
@@ -77,9 +31,13 @@ class MSSCNFModel(nn.Module, TemporalMixin, SkeletonMixin):
                       active_losses=["skeleton"],
                       save_modules=["temporal", "skeleton_head"]),
             PhaseSpec("joint",
-                      dataset_kwargs={"return_3d": True, "return_pairs": True},
-                      active_losses=["skeleton", "recon", "smooth"],
-                      load_modules={"temporal": "skeleton", "skeleton_head": "skeleton"}),
+                      use_gt_skeleton=True,
+                      dataset_type="multiview_depth",
+                      supervision_mode="rendering",
+                      freeze_modules=["temporal", "skeleton_head"],
+                      dataset_kwargs={"return_3d": True},
+                      active_losses=["recon", "depth", "reproj", "consist", "smooth"],
+                      load_modules={}),
         ],
     )
 
@@ -176,10 +134,13 @@ class MSSCNFModel(nn.Module, TemporalMixin, SkeletonMixin):
 
         self.canonical = nn.Module()
 
-    def forward(self, points, action_window):
-        state = self.encode(action_window)
-        skel_dict = self.skeleton_head(state)
-        skeleton = skel_dict['fine']
+    def forward(self, points, action_window, gt_skeleton=None):
+        if gt_skeleton is not None:
+            skel_dict = self.skeleton_head.fit_to_points(gt_skeleton)
+            skeleton = skel_dict['fine']
+        else:
+            state = self.encode(action_window)
+            skeleton = self.skeleton_head(state)['fine']
         return self.density(points, skeleton)
 
     def forward_canonical(self, points):

@@ -67,6 +67,7 @@ class SingleViewStrategy(ViewStrategy):
     def _sample_rays(self, target_img, n_rays=None):
         n_rays = n_rays or self.n_rays
         N_total = self.rays_o.shape[0]
+        target_img = target_img.to(self.device)
         fg_mask = target_img > 0.1
         fg_idx = torch.where(fg_mask)[0]
         n_fg = int(n_rays * self.fg_ratio)
@@ -160,6 +161,7 @@ class MultiViewStrategy(ViewStrategy):
         rays_o = self.all_rays_o[view_idx]
         rays_d = self.all_rays_d[view_idx]
         N_total = rays_o.shape[0]
+        target_img = target_img.to(self.device)
         fg_mask = target_img > 0.1
         fg_idx = torch.where(fg_mask)[0]
         n_fg = int(n_rays * self.fg_ratio)
@@ -174,6 +176,9 @@ class MultiViewStrategy(ViewStrategy):
 
     def _render_view(self, forward_fn, action_window, view_idx, target_img,
                      target_depth=None):
+        target_img = target_img.to(self.device)
+        if target_depth is not None:
+            target_depth = target_depth.to(self.device)
         sel_idx, rays_o, rays_d = self._sample_rays_for_view(view_idx, target_img)
         target_pixels = target_img[sel_idx]
         pts, z_vals = sample_stratified(rays_o, rays_d, self.near, self.far, self.n_samples)
@@ -198,8 +203,8 @@ class MultiViewStrategy(ViewStrategy):
         if self.n_views < 2:
             return torch.tensor(0.0, device=self.device)
         view_A, view_B = 0, min(1, self.n_views - 1)
-        target_img_A = images_list[view_A]
-        target_img_B = images_list[view_B]
+        target_img_A = images_list[view_A].to(self.device)
+        target_img_B = images_list[view_B].to(self.device)
 
         sel_A, rays_o_sel, rays_d_sel = self._sample_rays_for_view(view_A, target_img_A)
         pts, z_vals = sample_stratified(rays_o_sel, rays_d_sel, self.near, self.far, self.n_samples)
@@ -248,7 +253,7 @@ class MultiViewStrategy(ViewStrategy):
         if self.n_views < 2:
             return torch.tensor(0.0, device=self.device)
         view_A, view_B = 0, min(1, self.n_views - 1)
-        target_img_A = images_list[view_A]
+        target_img_A = images_list[view_A].to(self.device)
 
         rays_o_A = self.all_rays_o[view_A]
         rays_d_A = self.all_rays_d[view_A]
@@ -264,7 +269,7 @@ class MultiViewStrategy(ViewStrategy):
         raw_A = _query_chunked(forward_fn, pts_A, action_window)
         _, _, weights_A = OM_rendering_with_depth(raw_A, z_vals_A)
 
-        target_img_B = images_list[view_B]
+        target_img_B = images_list[view_B].to(self.device)
         fg_mask_B = target_img_B > 0.1
         fg_idx_B = torch.where(fg_mask_B)[0]
         if fg_idx_B.shape[0] < 10:
@@ -288,7 +293,8 @@ class MultiViewStrategy(ViewStrategy):
                 F.l1_loss(alpha_A[:n_cmp].std(), alpha_B[:n_cmp].std()))
 
     def compute_losses(self, forward_fn, action_window, images_list,
-                       depths_list=None, active_losses=None):
+                       depths_list=None, active_losses=None,
+                       gt_skeleton=None):
         active = active_losses or ["recon"]
         total_recon = torch.tensor(0.0, device=self.device)
         total_depth = torch.tensor(0.0, device=self.device)
@@ -297,6 +303,15 @@ class MultiViewStrategy(ViewStrategy):
 
         for b in range(B):
             aw_b = action_window[b:b + 1]
+
+            # 按 batch 元素包装 forward_fn，注入对应的 GT skeleton
+            fn_b = forward_fn
+            if gt_skeleton is not None:
+                gt_b = gt_skeleton[b:b + 1]
+                _orig = forward_fn
+                def fn_b(pts, aw, _gt=gt_b, _fn=_orig):
+                    return _fn(pts, aw, gt_skeleton=_gt)
+
             imgs_b = [img[b].to(self.device) if img.dim() == 2 else img.to(self.device)
                       for img in images_list]
             deps_b = None
@@ -308,7 +323,7 @@ class MultiViewStrategy(ViewStrategy):
             for v in range(self.n_views):
                 dep_v = deps_b[v] if deps_b else None
                 loss_recon, loss_depth = self._render_view(
-                    forward_fn, aw_b, v, imgs_b[v], target_depth=dep_v)
+                    fn_b, aw_b, v, imgs_b[v], target_depth=dep_v)
                 total_recon = total_recon + loss_recon
                 total_depth = total_depth + loss_depth
 
@@ -320,14 +335,22 @@ class MultiViewStrategy(ViewStrategy):
 
         # 跨视角约束（仅对第一个样本）
         aw_first = action_window[0:1]
-        imgs_first = [img[0] if img.dim() == 2 else img for img in images_list]
+        imgs_first = [(img[0].to(self.device) if img[0].dim() == 1
+                        else img.to(self.device))
+                       for img in images_list]
+        fn_first = forward_fn
+        if gt_skeleton is not None:
+            gt_first = gt_skeleton[0:1]
+            _orig = forward_fn
+            def fn_first(pts, aw, _gt=gt_first, _fn=_orig):
+                return _fn(pts, aw, gt_skeleton=_gt)
 
         if "reproj" in active and self.with_reprojection:
             losses['reproj'] = self._compute_reprojection_loss(
-                forward_fn, aw_first, imgs_first) * self.w_reproj
+                fn_first, aw_first, imgs_first) * self.w_reproj
 
         if "consist" in active and self.with_consistency:
             losses['consist'] = self._compute_consistency_loss(
-                forward_fn, aw_first, imgs_first) * self.w_consist
+                fn_first, aw_first, imgs_first) * self.w_consist
 
         return losses

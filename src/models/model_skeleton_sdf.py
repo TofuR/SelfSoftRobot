@@ -29,8 +29,8 @@ import torch.nn.functional as F
 
 from .layers import SirenLayer, PositionalEncoder
 from .mixins import TemporalMixin, SkeletonMixin
-from .model_mstnf import MultiScaleEMA
-from .skeleton_heads import (
+from src.encoders.multi_scale_ema import MultiScaleEMA
+from src.heads.skeleton_heads import (
     create_skeleton_head, downsample_skeleton, point_to_segment_distance,
 )
 from src.training.spec import TrainingSpec, PhaseSpec
@@ -55,8 +55,10 @@ class SkeletonSDFModel(nn.Module, TemporalMixin, SkeletonMixin):
                       save_modules=["temporal", "skeleton_head"]),
             PhaseSpec("joint", dataset_type="skeleton_sdf",
                       supervision_mode="direct_3d",
-                      active_losses=["skeleton", "sdf", "normal", "eikonal"],
-                      load_modules={"temporal": "skeleton", "skeleton_head": "skeleton"}),
+                      use_gt_skeleton=True,
+                      freeze_modules=["temporal", "skeleton_head"],
+                      active_losses=["sdf", "normal", "eikonal"],
+                      load_modules={}),
         ],
     )
 
@@ -113,18 +115,24 @@ class SkeletonSDFModel(nn.Module, TemporalMixin, SkeletonMixin):
                 SirenLayer(sdf_hidden, 1, is_last=True),
             )
 
-    def forward(self, query_points, action_window):
+    def forward(self, query_points, action_window, gt_skeleton=None):
         """预测查询点的 SDF 值。
 
         Args:
             query_points: (N, n_samples, 3) 空间查询点。
             action_window: (B, K, D) 动作序列。
+            gt_skeleton: 可选 (B, 31, 3) GT 骨架，跳过 skeleton_head 预测。
 
         Returns:
             sdf: (B*N, n_samples, 1) SDF 值。
         """
-        state = self.encode(action_window)
-        skeleton = self.skeleton_head(state)['fine']  # (B, 31, 3)
+        if gt_skeleton is None:
+            state = self.encode(action_window)
+            skeleton = self.skeleton_head(state)['fine']  # (B, 31, 3)
+        else:
+            skel_dict = self.skeleton_head.fit_to_points(gt_skeleton)
+            skeleton = skel_dict['fine']
+            state = self.encode(action_window)  # SDF residual 仍需 physics_state
 
         N, n_samples, _ = query_points.shape
         B = skeleton.shape[0]
@@ -235,7 +243,13 @@ class SkeletonSDFModel(nn.Module, TemporalMixin, SkeletonMixin):
             # unsqueeze(0) -> (1, N, 3) 会被 forward 理解为 N_q=1, n_samples=N, 3
             # 这与 trainer 中 query = coords.unsqueeze(0) 一致
             query = coords.unsqueeze(0)
-            pred_sdf = self(query, action_window).squeeze(-1)  # (B, N)
+            if getattr(phase_spec, 'use_gt_skeleton', False) and "gt_positions" in batch:
+                _gt_skel = batch["gt_positions"].to(device)
+                if _gt_skel.shape[-1] != 3 and _gt_skel.shape[1] == 3:
+                    _gt_skel = _gt_skel.permute(0, 2, 1)
+                pred_sdf = self(query, action_window, gt_skeleton=_gt_skel).squeeze(-1)
+            else:
+                pred_sdf = self(query, action_window).squeeze(-1)  # (B, N)
 
             # SDF L1 回归
             if "sdf" in active:

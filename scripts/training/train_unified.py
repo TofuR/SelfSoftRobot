@@ -35,7 +35,7 @@ import torch
 from config.params import load_config
 from src.utils.config_utils import resolve_config
 from src.training.trainer_unified import UnifiedTrainer
-from src.training.view_strategy import (
+from src.rendering.view_strategy import (
     SingleViewStrategy, MultiViewStrategy,
 )
 
@@ -144,6 +144,7 @@ def train(args):
         "optimization.lr": args.lr,
         "optimization.n_epochs": args.n_epochs,
         "optimization.batch_size": args.batch_size,
+        "ms_scnf.skeleton_mode": args.skeleton_mode,
     })
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -168,15 +169,16 @@ def train(args):
         from src.training.spec import PhaseSpec
 
         rendering_phase = next(p for p in spec.phases if p.supervision_mode == "rendering")
+        active_losses = set(rendering_phase.active_losses)
         ds = create_dataset(rendering_phase.dataset_type, args.data_dir, config, rendering_phase)
 
-        if args.multiview and hasattr(ds, 'cam_system') and ds.cam_system.n_views >= 2:
-            from src.utils.camera_system import MultiCameraSystem
+        if hasattr(ds, 'cam_system') and ds.cam_system.n_views >= 2:
             view_strat = MultiViewStrategy(
-                ds.cam_system, with_depth=args.depth,
-                with_consistency=args.consistency,
-                with_reprojection=args.consistency)
-            print(f"  ViewStrategy: MultiView{' + Consistency' if args.consistency else ''}")
+                ds.cam_system,
+                with_depth="depth" in active_losses or args.depth,
+                with_consistency="consist" in active_losses or args.consistency,
+                with_reprojection="reproj" in active_losses or args.consistency)
+            print(f"  ViewStrategy: MultiView ({ds.cam_system.n_views} views)")
         elif hasattr(ds, 'get_camera_params'):
             params = ds.get_camera_params()
             if params:
@@ -214,8 +216,15 @@ def train(args):
                 n_epochs_per_phase[p.name] = args.n_epochs or config["optimization"]["n_epochs"]
 
     # ── 训练 ──
-    trainer = UnifiedTrainer(model, view_strat, config=config)
-    trainer.train(data_dirs, n_epochs_per_phase=n_epochs_per_phase)
+    skip_phases = None
+    if args.phase is not None and spec.is_two_phase:
+        skip_phases = [p.name for i, p in enumerate(spec.phases) if i + 1 != args.phase]
+        print(f"  Skipping phases: {skip_phases}")
+
+    trainer = UnifiedTrainer(model, view_strat, config=config,
+                             model_tag=args.model)
+    trainer.train(data_dirs, n_epochs_per_phase=n_epochs_per_phase,
+                  skip_phases=skip_phases)
 
 
 def main():
@@ -234,6 +243,11 @@ def main():
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--n_epochs", type=int, default=None)
     parser.add_argument("--batch_size", type=int, default=None)
+    parser.add_argument("--skeleton_mode", type=str, default=None,
+                        choices=["point", "fourier", "bspline", "catmullrom"],
+                        help="骨架参数化方式")
+    parser.add_argument("--phase", type=int, default=None, choices=[1, 2],
+                        help="只运行指定阶段（跳过其他阶段）")
     args = parser.parse_args()
     train(args)
 
