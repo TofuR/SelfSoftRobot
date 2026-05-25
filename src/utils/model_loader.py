@@ -46,6 +46,29 @@ def _load_norm_factor(checkpoint_path, data_dir):
     return 1.0
 
 
+def _detect_skeleton_mode(state_dict):
+    """从 checkpoint key 推断骨架参数化方式。"""
+    keys = set(state_dict.keys())
+    if 'skeleton_head.basis_matrix' in keys:
+        return 'bspline'
+    if 'skeleton_head.eval_matrix' in keys:
+        w = state_dict.get('skeleton_head.head.weight')
+        if w is not None and w.shape[0] % 3 == 0:
+            n_param = w.shape[0] // 3
+            if n_param % 2 == 1:
+                return 'fourier'
+        return 'catmullrom'
+    return 'point'
+
+
+def _detect_skeleton_n_ctrl(state_dict):
+    """从 checkpoint 推断骨架控制点数（bspline/catmullrom 用）。"""
+    w = state_dict.get('skeleton_head.head.weight')
+    if w is not None and w.shape[0] % 3 == 0:
+        return w.shape[0] // 3
+    return 10
+
+
 def _detect_model_type(state_dict):
     """通过 checkpoint key 判断模型类型和训练阶段。"""
     keys = set(state_dict.keys())
@@ -121,6 +144,10 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
         from src.models.model_ms_scnf import MSSCNFModel
         ms_cfg = train_cfg.get('ms_scnf', {})
 
+        # 从 checkpoint 推断骨架参数化方式
+        skel_mode = _detect_skeleton_mode(state_dict)
+        n_ctrl = _detect_skeleton_n_ctrl(state_dict)
+
         model = MSSCNFModel(
             action_dim=action_dim,
             window_size=window_size,
@@ -132,10 +159,10 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
             n_medium=ms_cfg.get('n_medium', 10),
             n_fine=ms_cfg.get('n_fine', 31),
             deform_n_freqs=train_cfg['canonical']['deform_n_freqs'],
-            skeleton_mode=ms_cfg.get('skeleton_mode', 'point'),
+            skeleton_mode=skel_mode,
             fourier_n_freq=ms_cfg.get('fourier_n_freq', 8),
-            bspline_n_ctrl=ms_cfg.get('bspline_n_ctrl', 10),
-            catmullrom_n_ctrl=ms_cfg.get('catmullrom_n_ctrl', 10),
+            bspline_n_ctrl=n_ctrl if skel_mode == 'bspline' else ms_cfg.get('bspline_n_ctrl', 10),
+            catmullrom_n_ctrl=n_ctrl if skel_mode == 'catmullrom' else ms_cfg.get('catmullrom_n_ctrl', 10),
         ).to(device)
 
         if phase == 1:
@@ -159,13 +186,15 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
     elif model_type == 'skeleton_sdf':
         from src.models.model_skeleton_sdf import SkeletonSDFModel
         ms_cfg = train_cfg.get('ms_scnf', {})
-        sdf_cfg = train_cfg.get('sdf', {})
+        skel_mode = _detect_skeleton_mode(state_dict)
+        n_ctrl = _detect_skeleton_n_ctrl(state_dict)
+
         model = SkeletonSDFModel(
             action_dim=action_dim,
             window_size=window_size,
             n_scales=train_cfg['temporal']['n_scales'],
             hidden_dim=train_cfg['temporal']['hidden_dim'],
-            skeleton_mode=ms_cfg.get('skeleton_mode', 'bspline'),
+            skeleton_mode=skel_mode,
             rod_radius=ms_cfg.get('rod_radius', 0.015),
         ).to(device)
         model.load_state_dict(state_dict)
