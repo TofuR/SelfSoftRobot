@@ -63,6 +63,7 @@ def create_dataset(dataset_type: str, data_dir: str, config: dict,
             seq_len=seq_len,
             return_depth="depth" in active,
             return_pairs="smooth" in active,
+            return_3d=kwargs.get("return_3d", False),
         )
 
     elif dataset_type == "sdf":
@@ -154,6 +155,8 @@ def _collate_sequence(dataset):
 def _collate_multiview_depth(dataset):
     """MultiViewDepthDataset 的 collate 函数。"""
     n_views = dataset.n_views
+    has_3d = getattr(dataset, 'return_3d', False) and getattr(dataset, 'has_3d', False)
+    has_pairs = dataset.return_pairs
 
     def collate(batch):
         action_windows = torch.stack([b[0] for b in batch])
@@ -175,8 +178,18 @@ def _collate_multiview_depth(dataset):
         else:
             result["depths"] = None
 
-        result["action_window_next"] = None
-        result["gt_positions"] = None
+        # b[3] = positions or None
+        if has_3d and len(batch[0]) > 3 and batch[0][3] is not None:
+            result["gt_positions"] = torch.stack([b[3] for b in batch])
+        else:
+            result["gt_positions"] = None
+
+        # b[4:] = pairs (action_window_next, images_next_list)
+        if has_pairs and len(batch[0]) > 4:
+            result["action_window_next"] = torch.stack([b[4] for b in batch])
+        else:
+            result["action_window_next"] = None
+
         result["coords"] = None
         result["gt_sdf"] = None
         result["gt_normals"] = None

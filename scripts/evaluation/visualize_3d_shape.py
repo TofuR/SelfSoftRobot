@@ -112,6 +112,69 @@ def input_float(prompt, default):
 # ──────────────────────────── 模型查询 ────────────────────────────
 
 @torch.no_grad()
+def query_skeleton_sdf_model(model, action_window, bounds, grid_res, device,
+                             gt_skeleton=None, batch_size=100000):
+    """SkeletonSDF 模型: 在 3D 网格上查询 SDF 值。
+
+    与 SDF 模型类似，但需要 (N, n_samples, 3) 输入格式，且支持 GT skeleton。
+    """
+    from skimage import measure
+
+    x = np.linspace(bounds[0], bounds[1], grid_res)
+    y = np.linspace(bounds[2], bounds[3], grid_res)
+    z = np.linspace(bounds[4], bounds[5], grid_res)
+    xx, yy, zz = np.meshgrid(x, y, z, indexing='ij')
+    coords_np = np.stack([xx.ravel(), yy.ravel(), zz.ravel()], axis=-1).astype(np.float32)
+
+    n_pts = len(coords_np)
+    sdf_all = np.zeros(n_pts, dtype=np.float32)
+    n_batches = (n_pts + batch_size - 1) // batch_size
+
+    for i in range(n_batches):
+        start = i * batch_size
+        end = min(start + batch_size, n_pts)
+        pts = torch.from_numpy(coords_np[start:end]).to(device)
+        pts = pts.unsqueeze(1)  # (N, 1, 3)
+
+        kwargs = {}
+        if gt_skeleton is not None:
+            if isinstance(gt_skeleton, np.ndarray):
+                skel_t = torch.from_numpy(gt_skeleton).float().to(device)
+                if skel_t.dim() == 2:
+                    skel_t = skel_t.unsqueeze(0)
+                if skel_t.shape[-1] != 3:
+                    skel_t = skel_t.permute(0, 2, 1)
+                kwargs['gt_skeleton'] = skel_t
+            else:
+                kwargs['gt_skeleton'] = gt_skeleton
+
+        sdf = model(pts, action_window, **kwargs)
+        sdf_all[start:end] = sdf.squeeze(-1).squeeze(-1).cpu().numpy()
+
+    sdf_grid = sdf_all.reshape(grid_res, grid_res, grid_res)
+
+    result = {
+        'vertices': None, 'faces': None,
+        'sdf_grid': sdf_grid,
+        'x': x, 'y': y, 'z': z,
+    }
+
+    if sdf_all.min() <= 0 <= sdf_all.max():
+        spacing = tuple(
+            (np.array([bounds[1], bounds[3], bounds[5]]) -
+             np.array([bounds[0], bounds[2], bounds[4]])) / (grid_res - 1)
+        )
+        verts, faces, normals, _ = measure.marching_cubes(sdf_grid, level=0.0, spacing=spacing)
+        verts[:, 0] = verts[:, 0] * spacing[0] + bounds[0]
+        verts[:, 1] = verts[:, 1] * spacing[1] + bounds[2]
+        verts[:, 2] = verts[:, 2] * spacing[2] + bounds[4]
+        result['vertices'] = verts
+        result['faces'] = faces
+
+    return result
+
+
+@torch.no_grad()
 def query_sdf_model(model, action_window, bounds, grid_res, device,
                     coord_center=None, coord_scale=1.0, batch_size=100000):
     """SDF 模型: 在 3D 网格上查询 SDF 值，用 marching cubes 提取零等值面。
@@ -220,7 +283,7 @@ def export_html(result, output_path, model_type, threshold=None, gt_skeleton=Non
 
     fig = go.Figure()
 
-    if model_type == 'sdf':
+    if model_type in ('sdf', 'skeleton_sdf'):
         if sdf_mode == 'pointcloud' and result.get('sdf_grid') is not None:
             grid = result['sdf_grid']
             x, y, z = result['x'], result['y'], result['z']
@@ -260,7 +323,7 @@ def export_html(result, output_path, model_type, threshold=None, gt_skeleton=Non
                 name='SDF field',
             ))
 
-    elif model_type != 'sdf' and result.get('points') is not None:
+    elif model_type not in ('sdf', 'skeleton_sdf') and result.get('points') is not None:
         pts = result['points']
         dens = result['density']
         mask = dens > threshold
@@ -312,7 +375,7 @@ def export_png(result, output_path, model_type, threshold=None, gt_skeleton=None
 
     plotter = pv.Plotter(off_screen=True, window_size=(1200, 900))
 
-    if model_type == 'sdf':
+    if model_type in ('sdf', 'skeleton_sdf'):
         if sdf_mode == 'pointcloud' and result.get('sdf_grid') is not None:
             grid = result['sdf_grid']
             x, y, z = result['x'], result['y'], result['z']
@@ -342,7 +405,7 @@ def export_png(result, output_path, model_type, threshold=None, gt_skeleton=None
                 plotter.add_mesh(contours, scalars='sdf', opacity=0.5,
                                  show_scalar_bar=True, cmap='coolwarm')
 
-    elif model_type != 'sdf' and result.get('points') is not None:
+    elif model_type not in ('sdf', 'skeleton_sdf') and result.get('points') is not None:
         pts = result['points']
         dens = result['density']
         mask = dens > threshold
@@ -377,7 +440,7 @@ def _make_frame_traces(result, model_type, threshold, gt_skeleton, pred_skeleton
     import plotly.graph_objects as go
     traces = []
 
-    if model_type == 'sdf':
+    if model_type in ('sdf', 'skeleton_sdf'):
         if sdf_mode == 'pointcloud' and result.get('sdf_grid') is not None:
             grid = result['sdf_grid']
             x, y, z = result['x'], result['y'], result['z']
@@ -666,7 +729,7 @@ def main():
     grid_res = input_int("[5] 网格分辨率", 40)
     threshold = 0.5
     sdf_mode = 'mesh'
-    if model_type == 'sdf':
+    if model_type in ('sdf', 'skeleton_sdf'):
         print("\n[6] SDF 可视化模式:")
         print("  1. mesh (marching cubes 三维面片)")
         print("  2. pointcloud (SDF<=0 的点云)")
@@ -709,10 +772,19 @@ def main():
             result = query_sdf_model(model, action_window, bounds, grid_res, device,
                                       coord_center=norm_params['coord_center'],
                                       coord_scale=norm_params['coord_scale'])
+        elif model_type == 'skeleton_sdf':
+            result = query_skeleton_sdf_model(
+                model, action_window, bounds, grid_res, device,
+                gt_skeleton=gt_skeleton)
         else:
             result = query_nerf_model(model, action_window, bounds, grid_res, device)
 
         if model_type == 'ms_scnf' and hasattr(model, 'predict_skeleton'):
+            with torch.no_grad():
+                skel_dict = model.predict_skeleton(action_window)
+                pred_skeleton = skel_dict['fine'][0].cpu().numpy().T
+
+        if model_type == 'skeleton_sdf' and hasattr(model, 'predict_skeleton'):
             with torch.no_grad():
                 skel_dict = model.predict_skeleton(action_window)
                 pred_skeleton = skel_dict['fine'][0].cpu().numpy().T

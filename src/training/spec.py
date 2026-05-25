@@ -45,6 +45,7 @@ class PhaseSpec:
     dataset_kwargs: dict = field(default_factory=dict)
     save_modules: list[str] = field(default_factory=list)
     load_modules: dict[str, str] = field(default_factory=dict)
+    use_gt_skeleton: bool = False
 
 
 @dataclass

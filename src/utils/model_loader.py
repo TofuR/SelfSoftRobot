@@ -48,22 +48,32 @@ def _load_norm_factor(checkpoint_path, data_dir):
 
 def _detect_model_type(state_dict):
     """通过 checkpoint key 判断模型类型和训练阶段。"""
-    # SDF 模型: coord_encoder + fusion 是特征 key
-    for key in state_dict:
-        if 'coord_encoder' in key:
-            return 'sdf', 0
-    if 'temporal' in state_dict and 'skeleton_head' in state_dict:
-        # MS-SCNF phase 1: 只保存了 temporal + skeleton_head
+    keys = set(state_dict.keys())
+
+    # SDF 模型（无骨架）: coord_encoder
+    if any('coord_encoder' in k for k in keys):
+        return 'sdf', 0
+
+    # 骨架 SDF 模型: skeleton_head + sdf_net（无 density）
+    has_skel = any('skeleton_head' in k for k in keys)
+    has_sdf_net = any('sdf_net' in k for k in keys)
+    has_density = any('density' in k for k in keys)
+
+    if has_skel and has_sdf_net and not has_density:
+        return 'skeleton_sdf', 0
+
+    # MS-SCNF phase 1: 只保存了 temporal + skeleton_head 的子模块
+    if has_skel and not has_density and not has_sdf_net:
         return 'ms_scnf', 1
-    if 'density.pos_encoder' in state_dict or 'skeleton_conditioned_density' in str(state_dict.keys()):
-        # MS-SCNF phase 2: 完整 state_dict 含 density 模块
+
+    # MS-SCNF phase 2: skeleton_head + density
+    if has_skel and has_density:
         return 'ms_scnf', 2
-    # 检查是否有 density 相关的 key（full state_dict 格式）
-    for key in state_dict:
-        if 'skeleton_head' in key:
-            return 'ms_scnf', 2
-        if 'canonical' in key:
-            return 'cmstnf', 2
+
+    # CMSTNF: canonical 模块
+    if any('canonical' in k for k in keys):
+        return 'cmstnf', 2
+
     return 'mstnf', 0
 
 
@@ -143,6 +153,20 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
             hidden_dim=train_cfg['temporal']['hidden_dim'],
             d_filter=train_cfg['model']['d_filter'],
             n_freqs=train_cfg['model']['n_freqs'],
+        ).to(device)
+        model.load_state_dict(state_dict)
+
+    elif model_type == 'skeleton_sdf':
+        from src.models.model_skeleton_sdf import SkeletonSDFModel
+        ms_cfg = train_cfg.get('ms_scnf', {})
+        sdf_cfg = train_cfg.get('sdf', {})
+        model = SkeletonSDFModel(
+            action_dim=action_dim,
+            window_size=window_size,
+            n_scales=train_cfg['temporal']['n_scales'],
+            hidden_dim=train_cfg['temporal']['hidden_dim'],
+            skeleton_mode=ms_cfg.get('skeleton_mode', 'bspline'),
+            rod_radius=ms_cfg.get('rod_radius', 0.015),
         ).to(device)
         model.load_state_dict(state_dict)
 
