@@ -1,14 +1,42 @@
 """model_loader.py — 统一模型加载工具。
 
 自动检测模型类型和训练阶段，加载权重并返回 eval 模式的模型。
+优先从同目录 config.json 读取参数，找不到则从 state_dict 推断。
 """
 
 import os
+import json
 import glob
 import numpy as np
 import torch
 
 from config.params import load_config
+
+
+def _find_config(checkpoint_path):
+    """从 checkpoint 路径向上搜索 config.json。"""
+    ckpt_dir = os.path.dirname(checkpoint_path)
+    for _ in range(5):
+        cfg_path = os.path.join(ckpt_dir, 'config.json')
+        if os.path.exists(cfg_path):
+            return cfg_path
+        parent = os.path.dirname(ckpt_dir)
+        if parent == ckpt_dir:
+            break
+        ckpt_dir = parent
+    return None
+
+
+def _load_config_json(checkpoint_path):
+    """加载 checkpoint 附近的 config.json，返回 dict 或 None。"""
+    cfg_path = _find_config(checkpoint_path)
+    if cfg_path is None:
+        return None
+    try:
+        with open(cfg_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 
 def _infer_action_dim(data_dir):
@@ -124,11 +152,37 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
     state_dict = torch.load(checkpoint_path, map_location=device, weights_only=True)
     model_type, phase = _detect_model_type(state_dict)
 
+    # 读取 config.json（如有），获取保存的参数
+    saved_cfg = _load_config_json(checkpoint_path)
+
     train_cfg = load_config('training')
     action_dim = _infer_action_dim(data_dir)
     norm_factor = _load_norm_factor(checkpoint_path, data_dir)
     if window_size is None:
-        window_size = train_cfg['temporal']['window_size']
+        window_size = saved_cfg.get('window_size') if saved_cfg else None
+        if window_size is None:
+            window_size = train_cfg['temporal']['window_size']
+
+    # 从 config.json 或 state_dict 推断 skeleton_mode
+    skel_mode = None
+    if saved_cfg and 'skeleton_mode' in saved_cfg:
+        skel_mode = saved_cfg['skeleton_mode']
+    if model_type in ('ms_scnf', 'skeleton_sdf'):
+        skel_mode = skel_mode or _detect_skeleton_mode(state_dict)
+    n_ctrl = _detect_skeleton_n_ctrl(state_dict) if skel_mode and skel_mode != 'point' else 10
+
+    # 判断是否需要 GT skeleton（从 config.json 的 phases 信息）
+    use_gt_skeleton = False
+    trained_phases = set()
+    if saved_cfg:
+        for p in saved_cfg.get('phases', []):
+            if isinstance(p, str):
+                trained_phases.add(p)
+            elif isinstance(p, dict):
+                if p.get('trained', False) or p.get('use_gt_skeleton', False):
+                    trained_phases.add(p.get('name', ''))
+                if p.get('use_gt_skeleton', False):
+                    use_gt_skeleton = True
 
     if model_type == 'sdf':
         from src.models.model_sdf import TemporalSDFModel
@@ -144,10 +198,6 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
         from src.models.model_ms_scnf import MSSCNFModel
         ms_cfg = train_cfg.get('ms_scnf', {})
 
-        # 从 checkpoint 推断骨架参数化方式
-        skel_mode = _detect_skeleton_mode(state_dict)
-        n_ctrl = _detect_skeleton_n_ctrl(state_dict)
-
         model = MSSCNFModel(
             action_dim=action_dim,
             window_size=window_size,
@@ -159,8 +209,8 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
             n_medium=ms_cfg.get('n_medium', 10),
             n_fine=ms_cfg.get('n_fine', 31),
             deform_n_freqs=train_cfg['canonical']['deform_n_freqs'],
-            skeleton_mode=skel_mode,
-            fourier_n_freq=ms_cfg.get('fourier_n_freq', 8),
+            skeleton_mode=skel_mode or 'point',
+            fourier_n_freq=saved_cfg.get('fourier_n_freq', ms_cfg.get('fourier_n_freq', 8)) if saved_cfg else ms_cfg.get('fourier_n_freq', 8),
             bspline_n_ctrl=n_ctrl if skel_mode == 'bspline' else ms_cfg.get('bspline_n_ctrl', 10),
             catmullrom_n_ctrl=n_ctrl if skel_mode == 'catmullrom' else ms_cfg.get('catmullrom_n_ctrl', 10),
         ).to(device)
@@ -186,15 +236,13 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
     elif model_type == 'skeleton_sdf':
         from src.models.model_skeleton_sdf import SkeletonSDFModel
         ms_cfg = train_cfg.get('ms_scnf', {})
-        skel_mode = _detect_skeleton_mode(state_dict)
-        n_ctrl = _detect_skeleton_n_ctrl(state_dict)
 
         model = SkeletonSDFModel(
             action_dim=action_dim,
             window_size=window_size,
             n_scales=train_cfg['temporal']['n_scales'],
             hidden_dim=train_cfg['temporal']['hidden_dim'],
-            skeleton_mode=skel_mode,
+            skeleton_mode=skel_mode or 'bspline',
             rod_radius=ms_cfg.get('rod_radius', 0.015),
         ).to(device)
         model.load_state_dict(state_dict)
@@ -220,7 +268,39 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
         'phase': phase,
         'action_dim': action_dim,
         'window_size': window_size,
+        'skeleton_mode': skel_mode,
+        'use_gt_skeleton': use_gt_skeleton,
+        'trained_phases': trained_phases,
+        'saved_config': saved_cfg,
     }
     print(f"Loaded {model_type} (phase {phase}) from {checkpoint_path}")
     print(f"  action_dim={action_dim}, window_size={window_size}, norm_factor={norm_factor:.4f}")
+    if skel_mode:
+        print(f"  skeleton_mode={skel_mode}, use_gt_skeleton={use_gt_skeleton}")
     return info
+
+
+def load_model_from_experiment(exp_dir, data_dir=None, device='cpu', phase_name=None):
+    """从实验目录加载最佳模型。
+
+    Args:
+        exp_dir: 实验目录（含 config.json 和 phase_*/ 子目录）。
+        data_dir: 数据目录。
+        device: 计算设备。
+        phase_name: 指定 phase（默认取最后一个有 best_model.pt 的）。
+
+    Returns:
+        dict: 同 load_model()。
+    """
+    # 搜索 best_model.pt
+    if phase_name:
+        ckpt_path = os.path.join(exp_dir, f"phase_{phase_name}", "model", "best_model.pt")
+        if not os.path.exists(ckpt_path):
+            raise FileNotFoundError(f"No checkpoint at {ckpt_path}")
+    else:
+        candidates = sorted(glob.glob(os.path.join(exp_dir, 'phase_*', 'model', 'best_model.pt')))
+        if not candidates:
+            raise FileNotFoundError(f"No best_model.pt in {exp_dir}")
+        ckpt_path = candidates[-1]
+
+    return load_model(ckpt_path, data_dir=data_dir, device=device)

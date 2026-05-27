@@ -16,7 +16,7 @@ from src.utils.rendering import (
 )
 
 
-def _query_chunked(forward_fn, pts, action_window, chunk_size=4096):
+def _query_chunked(forward_fn, pts, action_window, chunk_size):
     """分块查询模型，避免 OOM。"""
     parts = []
     for i in range(0, pts.shape[0], chunk_size):
@@ -48,14 +48,16 @@ class SingleViewStrategy(ViewStrategy):
 
     def setup(self, device, config):
         self.device = device
-        mv_cfg = config.get("multiview", {})
-        self.n_rays = mv_cfg.get("n_rays_per_view", 1024)
-        self.n_samples = mv_cfg.get("n_samples", 64)
-        self.fg_ratio = mv_cfg.get("fg_ratio", 0.5)
-        self.near = mv_cfg.get("near", 0.5)
-        self.far = mv_cfg.get("far", 2.5)
-        self.w_recon = mv_cfg.get("w_recon_per_view", 1.0)
-        self.w_depth = mv_cfg.get("w_depth", 0.1)
+        mv_cfg = config["multiview"]
+        self.n_rays = mv_cfg["n_rays_per_view"]
+        self.n_samples = mv_cfg["n_samples"]
+        self.fg_ratio = mv_cfg["fg_ratio"]
+        self.near = mv_cfg["near"]
+        self.far = mv_cfg["far"]
+        self.fg_threshold = mv_cfg["fg_threshold"]
+        self.chunk_size = mv_cfg["chunk_size"]
+        self.w_recon = mv_cfg["w_recon_per_view"]
+        self.w_depth = mv_cfg["w_depth"]
 
         focal_t = torch.tensor(self.focal).float().to(device)
         eye = self.camera_pose['eye']
@@ -68,7 +70,7 @@ class SingleViewStrategy(ViewStrategy):
         n_rays = n_rays or self.n_rays
         N_total = self.rays_o.shape[0]
         target_img = target_img.to(self.device)
-        fg_mask = target_img > 0.1
+        fg_mask = target_img > self.fg_threshold
         fg_idx = torch.where(fg_mask)[0]
         n_fg = int(n_rays * self.fg_ratio)
         n_bg = n_rays - n_fg
@@ -97,7 +99,7 @@ class SingleViewStrategy(ViewStrategy):
             sel, rays_o_sel, rays_d_sel = self._sample_rays(img_b)
             target_pixels = img_b[sel]
             pts, z_vals = sample_stratified(rays_o_sel, rays_d_sel, self.near, self.far, self.n_samples)
-            raw = _query_chunked(forward_fn, pts, aw_b)
+            raw = _query_chunked(forward_fn, pts, aw_b, self.chunk_size)
 
             if dep_b is not None and "depth" in active:
                 rendered, rendered_depth, _ = OM_rendering_with_depth(raw, z_vals)
@@ -133,18 +135,20 @@ class MultiViewStrategy(ViewStrategy):
 
     def setup(self, device, config):
         self.device = device
-        mv_cfg = config.get("multiview", {})
-        self.n_rays_per_view = mv_cfg.get("n_rays_per_view", 512)
-        self.n_samples = mv_cfg.get("n_samples", 64)
-        self.fg_ratio = mv_cfg.get("fg_ratio", 0.5)
-        self.near = mv_cfg.get("near", 0.5)
-        self.far = mv_cfg.get("far", 2.5)
-        self.w_recon = mv_cfg.get("w_recon_per_view", 1.0)
-        self.w_depth = mv_cfg.get("w_depth", 0.1)
-        self.w_consist = mv_cfg.get("w_consist", 0.05)
-        self.w_reproj = mv_cfg.get("w_reproj", 0.1)
-        self.n_reproj_points = mv_cfg.get("n_reproj_points", 256)
-        self.alpha_threshold = mv_cfg.get("alpha_threshold", 0.5)
+        mv_cfg = config["multiview"]
+        self.n_rays_per_view = mv_cfg["n_rays_per_view"]
+        self.n_samples = mv_cfg["n_samples"]
+        self.fg_ratio = mv_cfg["fg_ratio"]
+        self.near = mv_cfg["near"]
+        self.far = mv_cfg["far"]
+        self.fg_threshold = mv_cfg["fg_threshold"]
+        self.chunk_size = mv_cfg["chunk_size"]
+        self.w_recon = mv_cfg["w_recon_per_view"]
+        self.w_depth = mv_cfg["w_depth"]
+        self.w_consist = mv_cfg["w_consist"]
+        self.w_reproj = mv_cfg["w_reproj"]
+        self.n_reproj_points = mv_cfg["n_reproj_points"]
+        self.alpha_threshold = mv_cfg["alpha_threshold"]
 
         self.H = self.cam_system.cameras[0]['H']
         self.W = self.cam_system.cameras[0]['W']
@@ -162,7 +166,7 @@ class MultiViewStrategy(ViewStrategy):
         rays_d = self.all_rays_d[view_idx]
         N_total = rays_o.shape[0]
         target_img = target_img.to(self.device)
-        fg_mask = target_img > 0.1
+        fg_mask = target_img > self.fg_threshold
         fg_idx = torch.where(fg_mask)[0]
         n_fg = int(n_rays * self.fg_ratio)
         n_bg = n_rays - n_fg
@@ -182,7 +186,7 @@ class MultiViewStrategy(ViewStrategy):
         sel_idx, rays_o, rays_d = self._sample_rays_for_view(view_idx, target_img)
         target_pixels = target_img[sel_idx]
         pts, z_vals = sample_stratified(rays_o, rays_d, self.near, self.far, self.n_samples)
-        raw = _query_chunked(forward_fn, pts, action_window)
+        raw = _query_chunked(forward_fn, pts, action_window, self.chunk_size)
 
         if target_depth is not None:
             rendered, rendered_depth, _ = OM_rendering_with_depth(raw, z_vals)
@@ -208,7 +212,7 @@ class MultiViewStrategy(ViewStrategy):
 
         sel_A, rays_o_sel, rays_d_sel = self._sample_rays_for_view(view_A, target_img_A)
         pts, z_vals = sample_stratified(rays_o_sel, rays_d_sel, self.near, self.far, self.n_samples)
-        raw = _query_chunked(forward_fn, pts, action_window)
+        raw = _query_chunked(forward_fn, pts, action_window, self.chunk_size)
         _, depth_A, weights_A = OM_rendering_with_depth(raw, z_vals)
 
         alpha_sum = weights_A.sum(dim=-1)
@@ -243,7 +247,7 @@ class MultiViewStrategy(ViewStrategy):
         pts_B, z_vals_B = sample_stratified(
             rays_o_B[pixel_idx_B], rays_d_B[pixel_idx_B],
             self.near, self.far, self.n_samples)
-        raw_B = _query_chunked(forward_fn, pts_B, action_window)
+        raw_B = _query_chunked(forward_fn, pts_B, action_window, self.chunk_size)
         rendered_B, _, _ = OM_rendering_with_depth(raw_B, z_vals_B)
 
         gt_B = target_img_B[pixel_idx_B]
@@ -257,7 +261,7 @@ class MultiViewStrategy(ViewStrategy):
 
         rays_o_A = self.all_rays_o[view_A]
         rays_d_A = self.all_rays_d[view_A]
-        fg_mask = target_img_A > 0.1
+        fg_mask = target_img_A > self.fg_threshold
         fg_idx = torch.where(fg_mask)[0]
         if fg_idx.shape[0] < 10:
             return torch.tensor(0.0, device=self.device)
@@ -266,11 +270,11 @@ class MultiViewStrategy(ViewStrategy):
 
         pts_A, z_vals_A = sample_stratified(
             rays_o_A[chosen], rays_d_A[chosen], self.near, self.far, self.n_samples)
-        raw_A = _query_chunked(forward_fn, pts_A, action_window)
+        raw_A = _query_chunked(forward_fn, pts_A, action_window, self.chunk_size)
         _, _, weights_A = OM_rendering_with_depth(raw_A, z_vals_A)
 
         target_img_B = images_list[view_B].to(self.device)
-        fg_mask_B = target_img_B > 0.1
+        fg_mask_B = target_img_B > self.fg_threshold
         fg_idx_B = torch.where(fg_mask_B)[0]
         if fg_idx_B.shape[0] < 10:
             return torch.tensor(0.0, device=self.device)
@@ -280,7 +284,7 @@ class MultiViewStrategy(ViewStrategy):
         pts_B, z_vals_B = sample_stratified(
             self.all_rays_o[view_B][chosen_B], self.all_rays_d[view_B][chosen_B],
             self.near, self.far, self.n_samples)
-        raw_B = _query_chunked(forward_fn, pts_B, action_window)
+        raw_B = _query_chunked(forward_fn, pts_B, action_window, self.chunk_size)
         _, _, weights_B = OM_rendering_with_depth(raw_B, z_vals_B)
 
         alpha_A = weights_A.mean(dim=-1)

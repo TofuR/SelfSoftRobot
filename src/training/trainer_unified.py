@@ -104,12 +104,14 @@ class UnifiedTrainer:
         for p in self.phase.spec.phases:
             p_info = {
                 "name": p.name,
+                "forward_attr": p.forward_attr,
                 "supervision_mode": p.supervision_mode,
                 "dataset_type": p.dataset_type,
                 "data_mode": p.data_mode,
                 "active_losses": p.active_losses,
                 "freeze_modules": p.freeze_modules,
                 "use_gt_skeleton": getattr(p, 'use_gt_skeleton', False),
+                "trained": False,
             }
             if p.lr:
                 p_info["lr"] = p.lr
@@ -136,7 +138,7 @@ class UnifiedTrainer:
                 "n_epochs": opt_cfg.get("n_epochs"),
                 "optimizer": "Adam",
                 "scheduler": "ReduceLROnPlateau",
-                "scheduler_patience": opt_cfg.get("scheduler_patience", 5),
+                "scheduler_patience": opt_cfg["scheduler_patience"],
             },
             "loss_weights": self.config.get("loss_weights", {}),
             "data_dirs": {k: str(v) for k, v in data_dirs.items()},
@@ -145,7 +147,8 @@ class UnifiedTrainer:
 
         # 模型特有参数
         for attr in ('skeleton_mode', 'rod_radius', 'd_filter', 'n_freqs',
-                     'n_fine', 'n_medium', 'n_coarse'):
+                     'n_fine', 'n_medium', 'n_coarse', 'deform_n_freqs',
+                     'fourier_n_freq', 'bspline_n_ctrl', 'catmullrom_n_ctrl'):
             val = getattr(model, attr, None)
             if val is not None:
                 config[attr] = val
@@ -174,6 +177,22 @@ class UnifiedTrainer:
         torch.save(save_dict, path)
         return path
 
+    def _update_config_phase_trained(self, exp_dir, phase_name, best_loss):
+        """Phase 完成后更新 config.json，标记 trained=true 并记录最终 loss。"""
+        import json
+        config_path = os.path.join(exp_dir, "config.json")
+        if not os.path.exists(config_path):
+            return
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        for p in cfg.get("phases", []):
+            if p["name"] == phase_name:
+                p["trained"] = True
+                p["best_loss"] = best_loss
+                break
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+
     def _load_phase_modules(self, phase_spec, saved_modules_by_phase):
         """加载前面阶段保存的子模块权重。"""
         for mod_name, prev_phase_name in phase_spec.load_modules.items():
@@ -188,9 +207,9 @@ class UnifiedTrainer:
         ds = create_dataset(
             phase_spec.dataset_type, data_dir, self.config, phase_spec)
         collate_fn = get_collate_fn(phase_spec.dataset_type, ds)
-        batch_size = self.config.get("optimization", {}).get("batch_size", 4)
-        return DataLoader(ds, batch_size=batch_size, shuffle=True,
-                          num_workers=4, collate_fn=collate_fn), ds
+        opt_cfg = self.config["optimization"]
+        return DataLoader(ds, batch_size=opt_cfg["batch_size"], shuffle=True,
+                          num_workers=opt_cfg["num_workers"], collate_fn=collate_fn), ds
 
     def _setup_views_from_dataset(self, ds):
         """从数据集获取相机参数并初始化 ViewStrategy（如果需要）。"""
@@ -248,7 +267,7 @@ class UnifiedTrainer:
             n_trainable = sum(p.numel() for p in trainable)
             optimizer = torch.optim.Adam(trainable, lr=lr)
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer, patience=opt_cfg.get("scheduler_patience", 5))
+                optimizer, patience=opt_cfg["scheduler_patience"])
 
             n_epochs = (n_epochs_per_phase or {}).get(
                 phase_spec.name, opt_cfg["n_epochs"])
@@ -320,6 +339,9 @@ class UnifiedTrainer:
 
             torch.save(self.model.state_dict(),
                        os.path.join(phase_dir, "model", "final_model.pt"))
+
+            # 更新 config.json 标记该 phase 已训练
+            self._update_config_phase_trained(exp_dir, phase_spec.name, best_val)
 
         print(f"\n训练完成! 日志: {exp_dir}")
         return exp_dir

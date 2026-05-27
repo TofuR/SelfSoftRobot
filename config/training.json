@@ -5,9 +5,10 @@
         "lr": 0.001,
         "batch_size": 4,
         "n_epochs": 500,
+        "num_workers": 4,
         "scheduler": "ReduceLROnPlateau",
         "scheduler_patience": 10,
-        "_doc": "n_epochs=训练轮数, scheduler_patience=验证loss多少epoch不下降就降学习率"
+        "_doc": "n_epochs=训练轮数, scheduler_patience=验证loss多少epoch不下降就降学习率, num_workers=DataLoader进程数"
     },
 
     "normalization": {
@@ -63,7 +64,8 @@
         "fourier_n_freq": 8,
         "bspline_n_ctrl": 10,
         "catmullrom_n_ctrl": 10,
-        "_doc": "skeleton_mode=point|fourier|bspline|catmullrom, fourier_n_freq=Fourier频率数, bspline/catmullrom_n_ctrl=控制点数"
+        "rod_radius": 0.015,
+        "_doc": "skeleton_mode=point|fourier|bspline|catmullrom, fourier_n_freq=Fourier频率数, bspline/catmullrom_n_ctrl=控制点数, rod_radius=软臂半径(SkeletonSDF用)"
     },
 
     "sdf": {
@@ -84,6 +86,8 @@
         "fg_ratio": 0.5,
         "near": 0.5,
         "far": 2.5,
+        "fg_threshold": 0.1,
+        "chunk_size": 4096,
         "use_depth_guided_sampling": false,
         "n_coarse": 32,
         "n_fine": 32,
@@ -91,6 +95,16 @@
         "w_reproj": 100.0,
         "n_reproj_points": 256,
         "alpha_threshold": 0.5,
-        "_doc": "w_depth=深度loss权重, w_recon_per_view=每视角重建权重, n_rays_per_view=每视角采样射线数, fg_ratio=前景射线比例, w_consist=跨视角一致性权重(方案B), w_reproj=重投影权重(方案B), n_reproj_points=重投影采样点数, alpha_threshold=高置信度区域阈值"
+        "_doc": "w_depth=深度loss权重, w_recon_per_view=每视角重建权重, n_rays_per_view=每视角采样射线数, fg_ratio=前景射线比例, fg_threshold=前景mask二值化阈值, chunk_size=模型分块查询大小, w_consist=跨视角一致性权重(方案B), w_reproj=重投影权重(方案B), n_reproj_points=重投影采样点数, alpha_threshold=高置信度区域阈值"
+    },
+
+    "evaluation": {
+        "query_batch_size": 50000,
+        "grid_res": 40,
+        "density_threshold": 0.01,
+        "bounds_margin": 0.03,
+        "marching_cubes_level": 0,
+        "fps": 3,
+        "_doc": "query_batch_size=评估查询分块大小, grid_res=可视化网格分辨率, density_threshold=密度可视化阈值, bounds_margin=空间包围盒余量, fps=GIF帧率"
     }
 }

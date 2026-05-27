@@ -43,7 +43,7 @@ def create_dataset(dataset_type: str, data_dir: str, config: dict,
     """
     temp_cfg = config.get("temporal", {})
     kwargs = dict(phase_spec.dataset_kwargs)
-    seq_len = temp_cfg.get("window_size", 20)
+    seq_len = temp_cfg["window_size"]
 
     if dataset_type == "sequence":
         from src.data.dataset import SoftSequenceDataset
@@ -68,24 +68,24 @@ def create_dataset(dataset_type: str, data_dir: str, config: dict,
 
     elif dataset_type == "sdf":
         from src.data.dataset_sdf import SDFDataset
-        sdf_cfg = config.get("sdf", {})
+        sdf_cfg = config["sdf"]
         return SDFDataset(
             data_dir,
             seq_len=seq_len,
-            n_surface=sdf_cfg.get("n_surface", 300),
-            n_near_surface=sdf_cfg.get("n_near_surface", 200),
-            n_off_surface=sdf_cfg.get("n_off_surface", 200),
+            n_surface=sdf_cfg["n_surface"],
+            n_near_surface=sdf_cfg["n_near_surface"],
+            n_off_surface=sdf_cfg["n_off_surface"],
         )
 
     elif dataset_type == "skeleton_sdf":
         from src.data.dataset_skeleton_sdf import SkeletonSDFDataset
-        sdf_cfg = config.get("sdf", {})
+        sdf_cfg = config["sdf"]
         return SkeletonSDFDataset(
             data_dir,
             seq_len=seq_len,
-            n_surface=sdf_cfg.get("n_surface", 500),
-            n_near_surface=sdf_cfg.get("n_near_surface", 500),
-            n_off_surface=sdf_cfg.get("n_off_surface", 500),
+            n_surface=sdf_cfg["n_surface"],
+            n_near_surface=sdf_cfg["n_near_surface"],
+            n_off_surface=sdf_cfg["n_off_surface"],
         )
 
     else:

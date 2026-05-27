@@ -25,8 +25,6 @@
 import os
 import sys
 
-if "CUDA_VISIBLE_DEVICES" not in os.environ:
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 import argparse
@@ -76,14 +74,14 @@ def create_model(model_type, action_dim, config):
             hidden_dim=temp_cfg["hidden_dim"],
             d_filter=model_cfg["d_filter"],
             n_freqs=model_cfg["n_freqs"],
-            n_coarse=ms_cfg.get("n_coarse", 4),
-            n_medium=ms_cfg.get("n_medium", 10),
-            n_fine=ms_cfg.get("n_fine", 31),
-            deform_n_freqs=canon_cfg.get("deform_n_freqs", 6),
-            skeleton_mode=ms_cfg.get("skeleton_mode", "point"),
-            fourier_n_freq=ms_cfg.get("fourier_n_freq", 8),
-            bspline_n_ctrl=ms_cfg.get("bspline_n_ctrl", 10),
-            catmullrom_n_ctrl=ms_cfg.get("catmullrom_n_ctrl", 10),
+            n_coarse=ms_cfg["n_coarse"],
+            n_medium=ms_cfg["n_medium"],
+            n_fine=ms_cfg["n_fine"],
+            deform_n_freqs=canon_cfg["deform_n_freqs"],
+            skeleton_mode=ms_cfg["skeleton_mode"],
+            fourier_n_freq=ms_cfg["fourier_n_freq"],
+            bspline_n_ctrl=ms_cfg["bspline_n_ctrl"],
+            catmullrom_n_ctrl=ms_cfg["catmullrom_n_ctrl"],
         )
 
     elif model_type == "sdf":
@@ -94,9 +92,9 @@ def create_model(model_type, action_dim, config):
             window_size=temp_cfg["window_size"],
             n_scales=temp_cfg["n_scales"],
             hidden_dim=temp_cfg["hidden_dim"],
-            w_sdf=sdf_cfg.get("w_sdf", 3e3),
-            w_normal=sdf_cfg.get("w_normal", 1e2),
-            w_eikonal=sdf_cfg.get("w_eikonal", 5e1),
+            w_sdf=sdf_cfg["w_sdf"],
+            w_normal=sdf_cfg["w_normal"],
+            w_eikonal=sdf_cfg["w_grad"],
         )
 
     elif model_type == "skeleton_sdf":
@@ -108,14 +106,14 @@ def create_model(model_type, action_dim, config):
             window_size=temp_cfg["window_size"],
             n_scales=temp_cfg["n_scales"],
             hidden_dim=temp_cfg["hidden_dim"],
-            skeleton_mode=ms_cfg.get("skeleton_mode", "bspline"),
-            rod_radius=ms_cfg.get("rod_radius", 0.015),
-            w_skel_fine=ms_cfg.get("w_skeleton_fine", 1.0),
-            w_skel_medium=ms_cfg.get("w_skeleton_medium", 0.3),
-            w_skel_coarse=ms_cfg.get("w_skeleton_coarse", 0.1),
+            skeleton_mode=ms_cfg["skeleton_mode"],
+            rod_radius=ms_cfg["rod_radius"],
+            w_skel_fine=ms_cfg["w_skeleton_fine"],
+            w_skel_medium=ms_cfg["w_skeleton_medium"],
+            w_skel_coarse=ms_cfg["w_skeleton_coarse"],
             w_skel_smooth=ms_cfg.get("w_smooth", 0.01),
-            w_sdf=sdf_cfg.get("w_sdf", 3e3),
-            w_normal=sdf_cfg.get("w_normal", 10.0),
+            w_sdf=sdf_cfg["w_sdf"],
+            w_normal=sdf_cfg["w_normal"],
             w_eikonal=sdf_cfg.get("w_eikonal", 50.0),
         )
 
@@ -144,7 +142,13 @@ def train(args):
         "optimization.lr": args.lr,
         "optimization.n_epochs": args.n_epochs,
         "optimization.batch_size": args.batch_size,
+        "optimization.num_workers": args.num_workers,
         "ms_scnf.skeleton_mode": args.skeleton_mode,
+        "multiview.chunk_size": args.chunk_size,
+        "multiview.n_rays_per_view": args.n_rays,
+        "multiview.n_samples": args.n_samples,
+        "sdf.n_surface": args.n_surface,
+        "sdf.w_sdf": args.w_sdf,
     })
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -211,7 +215,7 @@ def train(args):
         n_epochs_per_phase = {}
         for p in spec.phases:
             if p.name in ("canonical", "skeleton"):
-                n_epochs_per_phase[p.name] = can_cfg.get("phase1_epochs", 50)
+                n_epochs_per_phase[p.name] = can_cfg["phase1_epochs"]
             else:
                 n_epochs_per_phase[p.name] = args.n_epochs or config["optimization"]["n_epochs"]
 
@@ -248,6 +252,18 @@ def main():
                         help="骨架参数化方式")
     parser.add_argument("--phase", type=int, default=None, choices=[1, 2],
                         help="只运行指定阶段（跳过其他阶段）")
+    parser.add_argument("--num_workers", type=int, default=None,
+                        help="DataLoader 进程数")
+    parser.add_argument("--chunk_size", type=int, default=None,
+                        help="渲染查询分块大小")
+    parser.add_argument("--n_rays", type=int, default=None,
+                        help="每视角采样射线数")
+    parser.add_argument("--n_samples", type=int, default=None,
+                        help="每射线采样点数")
+    parser.add_argument("--n_surface", type=int, default=None,
+                        help="SDF 表面采样点数")
+    parser.add_argument("--w_sdf", type=float, default=None,
+                        help="SDF loss 权重")
     args = parser.parse_args()
     train(args)
 
