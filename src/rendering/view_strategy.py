@@ -204,6 +204,11 @@ class MultiViewStrategy(ViewStrategy):
         return loss_recon, loss_depth
 
     def _compute_reprojection_loss(self, forward_fn, action_window, images_list):
+        """视角 A 渲染 → 反投影到 3D → 投影到视角 B → 渲染对比 GT。
+
+        所有采样射线都参与，不做 alpha 筛选或加权。
+        NeRF depth 本身是 alpha 加权期望值，背景射线 rendered≈0、GT≈0，MSE 自然贡献小。
+        """
         if self.n_views < 2:
             return torch.tensor(0.0, device=self.device)
         view_A, view_B = 0, min(1, self.n_views - 1)
@@ -213,39 +218,27 @@ class MultiViewStrategy(ViewStrategy):
         sel_A, rays_o_sel, rays_d_sel = self._sample_rays_for_view(view_A, target_img_A)
         pts, z_vals = sample_stratified(rays_o_sel, rays_d_sel, self.near, self.far, self.n_samples)
         raw = _query_chunked(forward_fn, pts, action_window, self.chunk_size)
-        _, depth_A, weights_A = OM_rendering_with_depth(raw, z_vals)
+        _, depth_A, _ = OM_rendering_with_depth(raw, z_vals)
 
-        alpha_sum = weights_A.sum(dim=-1)
-        confident_mask = alpha_sum > self.alpha_threshold
-        if confident_mask.sum() < 10:
-            return torch.tensor(0.0, device=self.device)
-
-        confident_idx = torch.where(confident_mask)[0]
-        n_pts = min(self.n_reproj_points, confident_idx.shape[0])
-        chosen = confident_idx[torch.randperm(confident_idx.shape[0], device=self.device)[:n_pts]]
-        sel_depth = depth_A[chosen]
-        sel_pixels = sel_A[chosen]
-
+        # 全部射线反投影到 3D
         H, W = self.H, self.W
-        px_x = sel_pixels % W
-        px_y = sel_pixels // W
+        px_x = sel_A % W
+        px_y = sel_A // W
         pixels_2d = torch.stack([px_x, px_y], dim=-1)
-        points_3d = self.cam_system.unproject(pixels_2d, sel_depth, view_A, device=self.device)
+        points_3d = self.cam_system.unproject(pixels_2d, depth_A, view_A, device=self.device)
 
+        # 投影到视角 B
         pixels_B, depths_B = self.cam_system.project(points_3d, view_B, device=self.device)
         valid = ((pixels_B[:, 0] >= 0) & (pixels_B[:, 0] < W) &
                  (pixels_B[:, 1] >= 0) & (pixels_B[:, 1] < H) & (depths_B > 0))
         if valid.sum() < 5:
             return torch.tensor(0.0, device=self.device)
 
-        pixels_B_valid = pixels_B[valid]
-        pixel_idx_B = (pixels_B_valid[:, 1].long() * W + pixels_B_valid[:, 0].long())
-        pixel_idx_B = pixel_idx_B.clamp(0, H * W - 1)
+        pixel_idx_B = (pixels_B[valid, 1].long() * W + pixels_B[valid, 0].long()).clamp(0, H * W - 1)
 
-        rays_o_B = self.all_rays_o[view_B]
-        rays_d_B = self.all_rays_d[view_B]
+        # 在视角 B 渲染对应射线
         pts_B, z_vals_B = sample_stratified(
-            rays_o_B[pixel_idx_B], rays_d_B[pixel_idx_B],
+            self.all_rays_o[view_B][pixel_idx_B], self.all_rays_d[view_B][pixel_idx_B],
             self.near, self.far, self.n_samples)
         raw_B = _query_chunked(forward_fn, pts_B, action_window, self.chunk_size)
         rendered_B, _, _ = OM_rendering_with_depth(raw_B, z_vals_B)
@@ -254,47 +247,44 @@ class MultiViewStrategy(ViewStrategy):
         return F.mse_loss(rendered_B, gt_B)
 
     def _compute_consistency_loss(self, forward_fn, action_window, images_list):
+        """跨视角密度一致性：同一个 3D 点从两个视角渲染的 density 应该一致。
+
+        流程：视角 A 渲染 → depth → 反投影到 3D → 投影到视角 B → 渲染
+        对比 rendered_A 和 rendered_B 在对应 3D 点的 density，不依赖 GT。
+        """
         if self.n_views < 2:
             return torch.tensor(0.0, device=self.device)
         view_A, view_B = 0, min(1, self.n_views - 1)
         target_img_A = images_list[view_A].to(self.device)
 
-        rays_o_A = self.all_rays_o[view_A]
-        rays_d_A = self.all_rays_d[view_A]
-        fg_mask = target_img_A > self.fg_threshold
-        fg_idx = torch.where(fg_mask)[0]
-        if fg_idx.shape[0] < 10:
-            return torch.tensor(0.0, device=self.device)
-        n_pts = min(self.n_reproj_points, self.n_rays_per_view)
-        chosen = fg_idx[torch.randperm(fg_idx.shape[0], device=self.device)[:n_pts]]
-
-        pts_A, z_vals_A = sample_stratified(
-            rays_o_A[chosen], rays_d_A[chosen], self.near, self.far, self.n_samples)
+        sel_A, rays_o_sel, rays_d_sel = self._sample_rays_for_view(view_A, target_img_A)
+        pts_A, z_vals_A = sample_stratified(rays_o_sel, rays_d_sel, self.near, self.far, self.n_samples)
         raw_A = _query_chunked(forward_fn, pts_A, action_window, self.chunk_size)
-        _, _, weights_A = OM_rendering_with_depth(raw_A, z_vals_A)
+        rendered_A, depth_A, _ = OM_rendering_with_depth(raw_A, z_vals_A)
 
-        target_img_B = images_list[view_B].to(self.device)
-        fg_mask_B = target_img_B > self.fg_threshold
-        fg_idx_B = torch.where(fg_mask_B)[0]
-        if fg_idx_B.shape[0] < 10:
+        # 反投影到 3D → 投影到视角 B
+        H, W = self.H, self.W
+        px_x = sel_A % W
+        px_y = sel_A // W
+        pixels_2d = torch.stack([px_x, px_y], dim=-1)
+        points_3d = self.cam_system.unproject(pixels_2d, depth_A, view_A, device=self.device)
+        pixels_B, depths_B = self.cam_system.project(points_3d, view_B, device=self.device)
+        valid = ((pixels_B[:, 0] >= 0) & (pixels_B[:, 0] < W) &
+                 (pixels_B[:, 1] >= 0) & (pixels_B[:, 1] < H) & (depths_B > 0))
+        if valid.sum() < 5:
             return torch.tensor(0.0, device=self.device)
-        n_B = min(n_pts, fg_idx_B.shape[0])
-        chosen_B = fg_idx_B[torch.randperm(fg_idx_B.shape[0], device=self.device)[:n_B]]
 
+        pixel_idx_B = (pixels_B[valid, 1].long() * W + pixels_B[valid, 0].long()).clamp(0, H * W - 1)
+
+        # 在视角 B 渲染对应射线
         pts_B, z_vals_B = sample_stratified(
-            self.all_rays_o[view_B][chosen_B], self.all_rays_d[view_B][chosen_B],
+            self.all_rays_o[view_B][pixel_idx_B], self.all_rays_d[view_B][pixel_idx_B],
             self.near, self.far, self.n_samples)
         raw_B = _query_chunked(forward_fn, pts_B, action_window, self.chunk_size)
-        _, _, weights_B = OM_rendering_with_depth(raw_B, z_vals_B)
+        rendered_B, _, _ = OM_rendering_with_depth(raw_B, z_vals_B)
 
-        alpha_A = weights_A.mean(dim=-1)
-        alpha_B = weights_B.mean(dim=-1)
-        n_cmp = min(alpha_A.shape[0], alpha_B.shape[0])
-        if n_cmp < 5:
-            return torch.tensor(0.0, device=self.device)
-
-        return (F.mse_loss(alpha_A[:n_cmp].mean(), alpha_B[:n_cmp].mean()) +
-                F.l1_loss(alpha_A[:n_cmp].std(), alpha_B[:n_cmp].std()))
+        # 对比两个视角在同一个 3D 点的渲染结果
+        return F.mse_loss(rendered_A[valid], rendered_B)
 
     def compute_losses(self, forward_fn, action_window, images_list,
                        depths_list=None, active_losses=None,
