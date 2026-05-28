@@ -21,36 +21,71 @@ Key dependencies: PyTorch 2.6, PyElastica (via `elastica`), PyVista, OpenCV. Req
 # Soft arm data collection (PyElastica)
 python scripts/data_collection/collect.py
 
-# Multi-view data collection with 3D ground truth (PyElastica soft arm)
-# Camera count is auto-detected from config/camera.json
-python scripts/data_collection/collect.py --3d
+# With 3D ground truth + depth
+python scripts/data_collection/collect.py --3d --depth
+
+# Canonical data (zero actions, for two-phase models)
+python scripts/data_collection/collect.py --action-x zero --action-y zero
 ```
 
 ### Training
+All models use the unified entry point:
 ```bash
-# Model training scripts (soft arm, sequence data)
-python scripts/training/train_mstnf.py
-python scripts/training/train_cmstnf.py        # Two-phase: canonical + deformation
-python scripts/training/train_ode_cmstnf.py     # Neural ODE temporal encoder
-python scripts/training/train_smooth_cmstnf.py  # Spectral normalization variant
-python scripts/training/train_ms_scnf.py        # Skeleton-conditioned, two-phase
+# MSTNF (single-phase, rendering)
+python scripts/training/train_unified.py --model mstnf --data_dir data/sequence_data
+
+# C-MSTNF (two-phase, rendering)
+python scripts/training/train_unified.py --model cmstnf --data_dir data/sequence_data \
+    --canonical_data_dir data/canonical_data
+
+# MS-SCNF (two-phase, skeleton+rendering)
+python scripts/training/train_unified.py --model ms_scnf --data_dir data/seq_rr_3d
+
+# TemporalSDF (single-phase, direct 3D)
+python scripts/training/train_unified.py --model sdf --data_dir data/seq_rr_3d
+
+# SkeletonSDF (two-phase, direct 3D)
+python scripts/training/train_unified.py --model skeleton_sdf --data_dir data/seq_rr_3d
+
+# Multi-view + depth
+python scripts/training/train_unified.py --model cmstnf --data_dir data/exp7_multiview \
+    --multiview --depth --consistency
 ```
+
+Individual training scripts (`train_mstnf.py`, `train_cmstnf.py`, etc.) are thin wrappers around UnifiedTrainer.
 
 ### Evaluation & Visualization
 ```bash
 python scripts/evaluation/evaluate_3d.py
 python scripts/evaluation/visualize_predictions.py compare   # Side-by-side comparison
 python scripts/evaluation/visualize_predictions.py animate   # GIF animation
+python scripts/evaluation/visualize_3d_shape.py              # 3D SDF/mesh visualization
 ```
 
 There is no formal test suite. Validation is done through notebooks and the evaluation scripts.
 
 ## Architecture
 
-### Two Simulation Backends
+### Simulation Backend
 
 - **PyElastica** (`elastica_env.py`): Soft continuum arm (Cosserat rod). Two modes: static `get_simulation_data_pair()` for independent episodes, and `ContinuousSoftArmEnv` for stateful sequential simulation. Renders via PyVista to binary images.
-- **PyBullet** (reference only): The original rigid arm simulation code from the FBV-SM paper is preserved in `docs/ref/SelfSimRobot/` for reference. See `docs/papers/hu2025_paper_understanding.md` for detailed analysis.
+- **PyBullet** (reference only): The original rigid arm simulation code from the FBV-SM paper is preserved in `docs/ref/SelfSimRobot/` for reference.
+
+### Source Layout (`src/`)
+
+```
+src/
+  encoders/          # Temporal encoders (MultiScaleEMA)
+  fields/            # Neural fields (CanonicalField, DeformationField, SkeletonConditionedDensity)
+  heads/             # Skeleton regression heads (point/fourier/bspline/catmullrom)
+  rendering/         # View strategies (SingleView, MultiView)
+  evaluation/        # Query & render utilities for evaluation
+  models/            # Model definitions
+  training/          # Training infrastructure (UnifiedTrainer, PhaseStrategy, spec)
+  data/              # Dataset classes
+  utils/             # Shared utilities
+  config/            # CLI argument definitions (args.py)
+```
 
 ### Model Architecture (`src/models/`)
 
@@ -58,48 +93,77 @@ There is no formal test suite. Validation is done through notebooks and the eval
 |-------|------|----------|
 | FBV_SM | `model.py` | Legacy base model from FBV-SM paper |
 | MSTNF | `model_mstnf.py` | Multi-scale EMA for temporal action history |
-| CMSTNF | `model_cmstnf.py` | D-NeRF paradigm: separate canonical + deformation fields, two-phase training |
-| ODE-CMSTNF | `model_ode_cmstnf.py` | Neural ODE (damped spring) replaces EMA for temporal encoding |
-| Smooth-CMSTNF | `model_smooth_cmstnf.py` | Spectral normalization + Jacobian/gradient penalties for smooth deformation |
-| MS-SCNF | `model_ms_scnf.py` | Predicts 3D skeleton at multiple scales, conditioned on physics state |
+| C-MSTNF | `model_cmstnf.py` | D-NeRF paradigm: separate canonical + deformation fields |
+| MS-SCNF | `model_ms_scnf.py` | Predicts 3D skeleton at multiple scales, skeleton-conditioned density |
+| TemporalSDF | `model_sdf.py` | SIREN coordinate encoding + direct 3D SDF supervision |
+| SkeletonSDF | `model_skeleton_sdf.py` | Parametric skeleton + tubular SDF prior + SIREN residual |
 
-Shared layers in `layers.py`: `PositionalEncoder`, `ActuatorMLPEncoder`, `MLPDecoder`, `TemporalLSTMEncoder`.
+ODE-CMSTNF and Smooth-CMSTNF are archived in `docs/archived/`.
+
+Shared components:
+- `layers.py`: `PositionalEncoder`, `ActuatorMLPEncoder`, `MLPDecoder`, `TemporalLSTMEncoder`
+- `mixins.py`: Shared mixin classes for model composition
+
+### Extracted Modules
+
+- `src/encoders/multi_scale_ema.py`: `MultiScaleEMA` — multi-scale exponential moving average
+- `src/fields/`: `CanonicalField`, `DeformationField`, `SkeletonConditionedDensity`
+- `src/heads/skeleton_heads.py`: 4 skeleton parameterizations (point/fourier/bspline/catmullrom), factory function `create_skeleton_head()`
+- `src/rendering/view_strategy.py`: `SingleViewStrategy` / `MultiViewStrategy`
+- `src/evaluation/`: `query.py` (model querying), `render.py` (visualization rendering)
 
 ### Training Infrastructure (`src/training/`)
 
-- `base.py`: `BaseTrainer` — shared camera setup, rendering, validation loops
-- `two_phase_trainer.py`: Base for CMSTNF-family models (Phase 1: canonical field, Phase 2: deformation)
-- Model-specific trainers inherit from these: `MSTNFTrainer`, `CMSTNFTrainer`, `ODECMSTNFTrainer`, `SmoothCMSTNFTrainer`, `MSSCNFTrainer`
+All models use **declarative Spec-based training** via `UnifiedTrainer`:
+
+- `spec.py`: `PhaseSpec` / `TrainingSpec` — declare training requirements per model
+- `phase_strategy.py`: Interprets spec, manages freeze/unfreeze/forward per phase
+- `trainer_unified.py`: `UnifiedTrainer` — combines PhaseStrategy + ViewStrategy
+- `dataset_factory.py`: Creates dataset + collate function based on spec
+- `base.py`: `BaseTrainer` — shared camera setup, rendering, validation loops (legacy)
+
+Three supervision modes: `"rendering"` (volume rendering), `"direct_3d"` (SDF query), `"skeleton"` (skeleton regression).
 
 ### Data (`src/data/`)
 
-- `dataset.py`: `SoftSequenceDataset` — loads action-image sequences from `.npz` files (supports 3D positions, camera params)
-- `dataset_multiview.py`: `MultiViewDataset` — dual-view (front + side) with 2D skeleton extraction
+- `dataset.py`: `SoftSequenceDataset` — loads action-image sequences, supports 3D positions + depth
+- `dataset_sdf.py`: `SDFDataset` — 3D SDF supervision sampling (surface/near/off-surface points)
+- `dataset_skeleton_sdf.py`: `SkeletonSDFDataset` — skeleton + SDF joint sampling
+- `dataset_multiview.py`: `MultiViewDataset` — dual-view with 2D skeleton extraction (legacy)
+- `dataset_multiview_depth.py`: `MultiViewDepthDataset` — multi-view + depth, auto-detects old/new npz format
 
-### Key Utilities
+### Configuration
 
-- `src/utils/rendering.py`: Volume rendering utilities (OM rendering, ray sampling)
-- `src/utils/camera.py`: Camera ray generation for the new pipeline
-- `src/utils/skeleton_2d.py`: 2D skeleton extraction from binary images
-- `src/utils/skeleton_viz.py`: 3D skeleton visualization and animation
-- `src/utils/model_loader.py`: Auto-detect model type and load checkpoint
-- `src/config/params.py`: YAML-based config loading for camera/simulation/training params
+- `config/training.json`: Shared training hyperparameters (all models)
+- `config/camera.json`: Camera parameters
+- `config/simulation.json`: Simulation parameters
+- `config/params.py`: YAML-based config loading
+- `src/config/args.py`: CLI argument definitions for unified training
+
+### Key Utilities (`src/utils/`)
+
+- `rendering.py`: Volume rendering (OM rendering, ray sampling, depth-guided sampling)
+- `camera.py`: Camera ray generation (`get_rays`)
+- `camera_system.py`: `MultiCameraSystem` — multi-camera management, projection/reprojection
+- `model_loader.py`: Auto-detect model type and load checkpoint
+- `sdf_utils.py`: GT SDF generation (analytical tubular structure computation)
+- `config_utils.py`: CLI parameter override + config merge utilities
+- `experiment.py`: Experiment directory management + GIF saving
+- `skeleton_2d.py`: 2D skeleton extraction from binary images
+- `skeleton_viz.py`: 3D skeleton visualization and animation
+- `visualization.py`: General visualization utilities
 
 ### Data Layout
 
 ```
 data/
-  sim_data/         # PyBullet rigid arm simulation data (.npz)
-  action/           # Action sequences
-  canonical_data/   # Canonical field training data
-  sequence_data/    # Sequence training data
-  sequence_data_1d/ # 1D sequence variant
-  seq_rr_3d/        # 3D sequence data (rotation-rotation)
-  seq_rz_3d/        # 3D sequence data (rotation-zero)
-  seq_zz_3d/        # 3D sequence data (zero-zero)
-  exp7_multiview/   # Multi-view experiment data
-  processed/        # Preprocessed data
-  raw/              # Raw collected data
+  seq_zz/            # canonical (both dims zero)
+  seq_zz_3d/         # canonical + 3D
+  seq_rr/            # sequence (both dims random)
+  seq_rr_3d/         # sequence + 3D
+  seq_rz/            # x random, y zero
+  seq_hh/            # batch (both dims hold)
+  exp7_multiview/    # multi-view experiment data
 ```
 
 ### Code Language
@@ -108,8 +172,10 @@ Comments, docstrings, and variable names are a mix of English and Chinese. The p
 
 ## Key Conventions
 
-- **No formal test framework** — validation uses Jupyter notebooks (`notebooks/01-09`) and evaluation scripts
+- **No formal test framework** — validation uses Jupyter notebooks (`notebooks/`) and evaluation scripts
 - **Experiment logging**: Training outputs go to `train_log/<model_name>/exp_<date>_<n>/` with images, best model weights, and loss logs
-- **Config-driven**: New pipeline uses `src/config/params.py` for YAML config loading; legacy code uses hardcoded constants
-- **Two-phase training**: CMSTNF/MS-SCNF models train canonical field first, then deformation/skeleton jointly
+- **Config-driven**: `config/training.json` for all hyperparameters; CLI args in `src/config/args.py` can override defaults
+- **Two-phase training**: C-MSTNF/MS-SCNF/SkeletonSDF models train canonical/skeleton first, then deformation/SDF jointly
+- **Unified training**: All models use `UnifiedTrainer` via `training_spec` class attributes; no per-model Trainer subclasses needed
 - **Model loading**: Use `src/utils/model_loader.py` which auto-detects model type from checkpoint
+- **Model input convention**: Models take only actuator inputs + 3D query points. Images/depth are supervision signals only, never model inputs
