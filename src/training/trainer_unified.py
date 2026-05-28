@@ -293,14 +293,26 @@ class UnifiedTrainer:
 
             for epoch in range(1, n_epochs + 1):
                 self.model.train()
+                self._current_epoch = epoch
                 epoch_loss = 0
                 epoch_details = {}
                 n_batches = 0
+
+                # reproj/consist 课程式 warmup
+                warmup_epochs = self.config.get("multiview", {}).get("warmup_epochs", 0)
+                self._warmup_factor = min(1.0, epoch / max(warmup_epochs, 1)) if warmup_epochs > 0 else 1.0
 
                 pbar = tqdm(loader, desc=f"[{phase_spec.name}] Epoch {epoch}/{n_epochs}")
                 for batch in pbar:
                     forward_fn = self.phase.get_forward_fn()
                     losses = self._compute_losses(forward_fn, batch, phase_spec)
+
+                    # warmup 缩放跨视角 loss
+                    if self._warmup_factor < 1.0:
+                        for key in ("reproj", "consist"):
+                            if key in losses:
+                                losses[key] = losses[key] * self._warmup_factor
+                        losses["total"] = sum(v for k, v in losses.items() if k != "total")
 
                     optimizer.zero_grad()
                     losses["total"].backward()

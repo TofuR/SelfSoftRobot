@@ -141,8 +141,18 @@ def _collate_sequence(dataset):
             idx = 2
 
         # 3D positions
-        result["gt_positions"] = None
-        result["depths"] = None
+        if return_3d and len(batch[0]) > idx:
+            result["gt_positions"] = torch.stack([b[idx] for b in batch])
+            idx += 1
+        else:
+            result["gt_positions"] = None
+
+        # depths
+        if getattr(dataset, 'return_depth', False) and len(batch[0]) > idx:
+            result["depths"] = torch.stack([b[idx] for b in batch])
+            idx += 1
+        else:
+            result["depths"] = None
         result["coords"] = None
         result["gt_sdf"] = None
         result["gt_normals"] = None
