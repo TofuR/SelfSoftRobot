@@ -17,6 +17,42 @@
             "up": null,
             "name": "side_60",
             "_doc": "额外相机。angle_deg=相对于主相机绕中心旋转角度，center/up 为 null 时继承主相机。60° 避免Y轴无扭矩时侧面无信息"
+        },
+        {
+            "angle_deg": 120,
+            "distance": 1.5,
+            "height": 0.5,
+            "center": null,
+            "up": null,
+            "name": "side_120",
+            "_doc": "第二个额外相机。120°"
+        },
+        {
+            "angle_deg": 180,
+            "distance": 1.5,
+            "height": 0.5,
+            "center": null,
+            "up": null,
+            "name": "back",
+            "_doc": "第三个额外相机。180°（背面）"
+        },
+        {
+            "angle_deg": 210,
+            "distance": 1.5,
+            "height": 0.5,
+            "center": null,
+            "up": null,
+            "name": "side_30",
+            "_doc": "第四个额外相机。210°"
+        },
+        {
+            "angle_deg": 270,
+            "distance": 1.5,
+            "height": 0.5,
+            "center": null,
+            "up": null,
+            "name": "side_90",
+            "_doc": "第五个额外相机。270°（侧面）"
         }
     ],
 
