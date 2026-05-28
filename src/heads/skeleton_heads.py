@@ -311,3 +311,73 @@ def point_to_segment_distance(points, seg_start, seg_end):
     projection = seg_start.unsqueeze(-3) + t * seg_vec.unsqueeze(-3)
     dist = ((points.unsqueeze(-2) - projection) ** 2).sum(-1)
     return dist.min(-1)[0].sqrt()
+
+
+def point_to_skeleton_coords(points, seg_start, seg_end):
+    """计算查询点相对于骨架曲线的局部柱坐标（可微）。
+
+    在最近骨架线段上建立局部参考系，返回径向距离、轴向参数和环向角度。
+
+    Args:
+        points: (..., M, 3) 查询点。
+        seg_start: (..., S, 3) 线段起点。
+        seg_end: (..., S, 3) 线段终点。
+
+    Returns:
+        (dist, t_axial, theta):
+          dist:    (..., M) 到最近线段的径向距离。
+          t_axial: (..., M) 归一化轴向参数 in [0, 1]。
+          theta:   (..., M) 环向角度 in [-pi, pi]。
+    """
+    n_seg = seg_start.shape[-2]
+    seg_vec = seg_end - seg_start                          # (..., S, 3)
+    seg_len_sq = (seg_vec ** 2).sum(-1, keepdim=True).clamp(min=1e-8)
+
+    diff = points.unsqueeze(-2) - seg_start.unsqueeze(-3)  # (..., M, S, 3)
+    t_local = (diff * seg_vec.unsqueeze(-3)).sum(-1, keepdim=True) \
+              / seg_len_sq.unsqueeze(-3)                    # (..., M, S, 1)
+    t_local = t_local.clamp(0, 1)
+
+    projection = seg_start.unsqueeze(-3) + t_local * seg_vec.unsqueeze(-3)
+    dist_sq = ((points.unsqueeze(-2) - projection) ** 2).sum(-1)  # (..., M, S)
+
+    # 最近线段
+    closest_idx = dist_sq.argmin(dim=-1)                    # (..., M)
+    min_dist_sq = dist_sq.gather(-1, closest_idx.unsqueeze(-1)).squeeze(-1)
+    dist = min_dist_sq.sqrt()
+
+    # 轴向参数: (seg_idx + t_local) / n_seg
+    t_local_gathered = t_local.squeeze(-1).gather(-1, closest_idx.unsqueeze(-1)).squeeze(-1)
+    t_axial = (closest_idx.float() + t_local_gathered) / n_seg
+    t_axial = t_axial.clamp(0.0, 1.0)
+
+    # 环向角度
+    idx_for_proj = closest_idx.unsqueeze(-1).unsqueeze(-1).expand(
+        *closest_idx.shape, 1, 3)                           # (..., M, 1, 3)
+    proj_gathered = projection.gather(-2, idx_for_proj).squeeze(-2)  # (..., M, 3)
+
+    tangent = seg_vec / seg_vec.norm(dim=-1, keepdim=True).clamp(min=1e-8)  # (..., S, 3)
+    idx_for_tangent = closest_idx.unsqueeze(-1).expand(
+        *closest_idx.shape, 3)                              # (..., M, 3)
+    tangent_gathered = tangent.gather(-2, idx_for_tangent)  # (..., M, 3)
+
+    radial = points - proj_gathered                         # (..., M, 3)
+    # 投影到切平面
+    radial_proj = radial - (radial * tangent_gathered).sum(-1, keepdim=True) * tangent_gathered
+
+    # 参考方向: cross(tangent, z_hat)，退化时用 y_hat
+    z_hat = torch.zeros_like(tangent_gathered)
+    z_hat[..., 2] = 1.0
+    ref = torch.cross(tangent_gathered, z_hat, dim=-1)
+    degenerate = ref.norm(dim=-1, keepdim=True) < 1e-6
+    y_hat = torch.zeros_like(tangent_gathered)
+    y_hat[..., 1] = 1.0
+    ref_alt = torch.cross(tangent_gathered, y_hat, dim=-1)
+    ref = torch.where(degenerate, ref_alt, ref)
+    ref = ref / ref.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+
+    theta = torch.atan2(
+        (radial_proj * torch.cross(tangent_gathered, ref, dim=-1)).sum(-1),
+        (radial_proj * ref).sum(-1))
+
+    return dist, t_axial, theta
