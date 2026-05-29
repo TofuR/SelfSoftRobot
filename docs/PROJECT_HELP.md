@@ -93,6 +93,7 @@ SelfSoftRobot/
 │   │   └── collect_utils.py         #   动作策略、保存、命名工具函数
 │   ├── training/                    # 训练入口脚本
 │   │   ├── train_unified.py         #   统一入口（支持全部 5 个模型，推荐）
+│   │   ├── train_search.py          #   超参数网格搜索（子进程调用 train_unified.py）
 │   │   ├── train_mstnf.py           #   MSTNF 薄包装（→ UnifiedTrainer）
 │   │   ├── train_cmstnf.py          #   C-MSTNF 薄包装
 │   │   ├── train_ms_scnf.py         #   MS-SCNF 薄包装
@@ -363,17 +364,20 @@ action_window: (B, K=20, D=2) → MultiScaleEMA → physics_state: (B, 128)
 
 3D 查询点 points: (N_rays, N_samples, 3)
   │
-  ↓ SkeletonConditionedDensity
-  │   1. 计算查询点到骨架线段的距离:
+  ↓ SkeletonConditionedDensity（骨架局部柱坐标）
+  │   1. point_to_skeleton_coords 计算局部柱坐标:
   │      skeleton 相邻节点构成 30 条线段
-  │      对每个查询点，找最近线段 → dist: (B*N, N_samples)
+  │      对每个查询点，找最近线段 → 柱坐标 (dist, t_axial, theta)
+  │        dist    = 到最近线段的径向距离
+  │        t_axial = 归一化轴向参数 in [0, 1]（沿骨架位置比例）
+  │        theta   = 环向角度 in [-π, π]（当前不使用，留供未来扩展）
   │
   │   2. 双路位置编码:
-  │      dist  → PE(d_input=1, n_freqs=6) → dist_enc:  (B*N, N_samples, 13)
-  │      pts   → PE(d_input=3, n_freqs=4) → pos_enc:   (B*N, N_samples, 27)
+  │      dist    → PE(d_input=1, n_freqs=6)  → dist_enc:  (B*N, N_samples, 13)
+  │      t_axial → PE(d_input=1, n_freqs=8)  → axial_enc: (B*N, N_samples, 17)
   │
   │   3. 拼接 + 解码:
-  │      [dist_enc, pos_enc] → MLPDecoder → (B*N, N_samples, 2) [vis, density]
+  │      [dist_enc, axial_enc] → MLPDecoder → (B*N, N_samples, 2) [vis, density]
   ↓
   体渲染 → 2D 图像
 ```
@@ -381,8 +385,12 @@ action_window: (B, K=20, D=2) → MultiScaleEMA → physics_state: (B, 128)
 **独特优势**：
 - `model.predict_skeleton(action_window)` 可直接输出 31 个 3D 节点坐标，无需渲染
 - 多尺度预测：三个并行线性头共享 trunk，coarse-to-fine 课程式学习
-- 骨架距离编码：查询点到最近骨架线段的距离作为密度先验（距骨架近 → 密度高）
+- 骨架局部柱坐标编码：查询点的密度由径向距离 `dist` 和轴向位置 `t_axial` 决定，不再使用 3D 绝对坐标
+  - 径向距离决定"距骨架多远"（距骨架近 → 密度高）
+  - 轴向位置决定"在骨架的哪一段"，允许截面半径沿长度变化
+  - 环向角度 `theta` 已计算但当前不输入网络（假设圆形截面，留供未来非圆截面扩展）
 - `SkeletonConditionedDensity` 不直接用 `physics_state` 或 `action`——所有动作信息都通过骨架间接传递
+- 辅助函数 `point_to_skeleton_coords()` 返回 `(dist, t_axial, theta)`，替代旧的 `point_to_segment_distance()`（仅返回 dist）
 
 **训练**：两阶段。Phase 1 骨架回归（3D L2 loss）；Phase 2 联合训练（渲染 loss + 骨架 loss）。
 
@@ -569,7 +577,7 @@ sample_sdf_training_data(positions, radius)
 
 统一接口：`forward(physics_state) → dict('coarse', 'medium', 'fine')` 各为 `(B, N, 3)`。
 
-辅助函数：`downsample_skeleton()`（均匀下采样）、`point_to_segment_distance()`（可微点到线段距离）、`create_skeleton_head()`（工厂函数）。
+辅助函数：`downsample_skeleton()`（均匀下采样）、`point_to_segment_distance()`（可微点到线段距离，仅返回 dist）、`point_to_skeleton_coords()`（可微骨架局部柱坐标，返回 dist + t_axial + theta）、`create_skeleton_head()`（工厂函数）。
 
 
 ### 3.5 提取模块（`src/` 子目录分层）
@@ -581,7 +589,7 @@ sample_sdf_training_data(positions, radius)
 | `src/encoders/` | `multi_scale_ema.py` | `MultiScaleEMA` — 多尺度指数移动平均时序编码 |
 | `src/fields/` | `canonical.py` | `CanonicalField` — 规范场 MLP |
 | | `deformation.py` | `DeformationField` — 变形场 MLP |
-| | `skeleton_density.py` | `SkeletonConditionedDensity` — 骨架条件密度场 |
+| | `skeleton_density.py` | `SkeletonConditionedDensity` — 骨架局部柱坐标条件密度场 (dist + t_axial) |
 | `src/heads/` | `skeleton_heads.py` | 4 种骨架参数化头 + 工厂函数 |
 | `src/rendering/` | `view_strategy.py` | `SingleViewStrategy` / `MultiViewStrategy` |
 | `src/evaluation/` | `query.py` | 模型查询工具（预测骨架/SDF/密度场） |
@@ -647,7 +655,7 @@ sample_sdf_training_data(positions, radius)
 | `model` | 位置编码频率数 (10)、隐层维度 (128) |
 | `canonical` | Phase 1/2 epoch 数、变形学习率 |
 | `ms_scnf` | **MS-SCNF 专用**：多尺度节点数 (4/10/31)、骨架 loss 权重 |
-| `multiview` | **多视角训练**：每视角射线数、深度 loss 权重、深度引导采样开关 |
+| `multiview` | **多视角训练**：每视角射线数、深度/reproj/consist loss 权重、warmup 课程 epoch 数 |
 | `sdf` | **SDF 专用**：表面/近表面/离表面采样点数、SDF/法向量/Eikonal 权重 |
 | `evaluation` | **评估**：网格分辨率、动画 FPS |
 
@@ -791,6 +799,38 @@ python scripts/training/train_unified.py --model cmstnf --data_dir data/exp7_mul
 ```
 
 各模型原有脚本（`train_mstnf.py` 等）仍可使用，内部已迁移到 UnifiedTrainer。
+
+### 5.2.2 超参数搜索（`train_search.py`）
+
+对任意模型、任意参数做网格搜索，直接调用 `train_unified.py` 作为子进程。
+
+```bash
+# 搜索学习率（4 组）
+python scripts/training/train_search.py --model ms_scnf --data_dir data/seq_rr_3d \
+    --search lr=1e-4,3e-4,1e-3,3e-3
+
+# 多参数网格搜索（2×3=6 组）
+python scripts/training/train_search.py --model ms_scnf --data_dir data/seq_rr_3d \
+    --search lr=1e-4,1e-3 --search batch_size=2,4,8
+
+# 只打印命令不执行（手动复制或保存为 .sh）
+python scripts/training/train_search.py --model ms_scnf --data_dir data/seq_rr_3d \
+    --search lr=1e-4,1e-3 --dry_run
+
+# 跳过 Phase 1，直接搜索 Phase 2
+CUDA_VISIBLE_DEVICES=0 python scripts/training/train_search.py \
+    --model ms_scnf --data_dir data/seq_rr_3d --search lr=1e-4,1e-3 --phase 2
+
+# 中断后续跑（跳过已有 best_model.pt 的实验）
+python scripts/training/train_search.py --model ms_scnf --data_dir data/seq_rr_3d \
+    --search lr=1e-4,1e-3 --resume
+
+# 汇总已完成搜索结果
+python scripts/training/train_search.py --model ms_scnf --data_dir data/seq_rr_3d \
+    --search lr=1e-4,1e-3 --summarize
+```
+
+支持搜索的参数：`lr`、`batch_size`、`n_epochs`、`phase1_epochs`、`phase2_epochs`、`skeleton_mode`、`n_freqs`、`d_filter`、`deform_n_freqs`、`n_rays`、`n_samples`、`chunk_size`。
 
 ### 5.2.1 C-MSTNF 系列（MSTNF / C-MSTNF）
 
@@ -965,9 +1005,15 @@ CUDA_VISIBLE_DEVICES=0 python scripts/training/train_multiview.py \
 
 **Loss 组成**：
 ```
-L = Σ_v (w_recon × MSE(render_v, gt_v)) / V
-  + w_depth × Σ_v L1(depth_v, depth_gt_v) / V
-  + w_smooth × MSE(state_t, state_{t+1})
+L = Σ_v (w_recon × MSE(render_v, gt_v)) / V          # 每视角重建
+  + w_depth × Σ_v L1(depth_v, depth_gt_v) / V         # 每视角深度
+  + w_reproj × MSE(render_B, gt_B)                     # 重投影：视角 A depth → 3D → 视角 B → 对比 GT
+  + w_consist × MSE(render_A, render_B)                # 一致性：同一 3D 点两视角渲染自洽
+  + w_smooth × MSE(state_t, state_{t+1})               # 时序平滑
+
+跨视角 loss 的 warmup 课程:
+  前 warmup_epochs 个 epoch，reproj/consist 权重从 0 线性增长到设定值，
+  避免训练初期跨视角梯度干扰密度场学习
 ```
 
 ### 5.6 评估与可视化
@@ -1048,3 +1094,6 @@ python scripts/evaluation/visualize_3d_shape.py \
 - **骨架模块复用**：`skeleton_heads.py` 从 `model_ms_scnf.py` 提取为独立模块（`src/heads/`），供 MS-SCNF 和 SkeletonSDF 共享。包含 4 种骨架参数化（point/fourier/bspline/catmullrom）及辅助函数。
 - **分层重构**：共享组件已从 `src/models/` 提取到 `src/encoders/`、`src/fields/`、`src/heads/`、`src/rendering/`、`src/evaluation/`，降低耦合。
 - **配置管理**：训练配置在 `config/training.json`，CLI 参数在 `src/config/args.py` 定义，运行时可覆盖 JSON 默认值。
+- **骨架局部柱坐标**：`SkeletonConditionedDensity` 使用 `(dist, t_axial)` 而非 3D 绝对坐标，环向角度 `theta` 已计算但当前不使用。旧的 `point_to_segment_distance()` 保留供 SkeletonSDF 等模型使用。
+- **跨视角 loss 设计**：reproj 和 consist 均不做 alpha 硬门控，全部采样射线参与。consist 对比同一 3D 点两视角的渲染结果（模型自洽性），reproj 对比视角 B 渲染与 GT（监督信号）。训练初期通过 warmup 课程逐步引入跨视角约束。
+- **超参数搜索**：`train_search.py` 子进程调用 `train_unified.py`，支持网格搜索、dry_run、resume、summarize，中断后可手动修改参数继续。
