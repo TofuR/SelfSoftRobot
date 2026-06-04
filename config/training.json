@@ -27,7 +27,8 @@
         "recon_current": 0.7,
         "recon_next": 0.3,
         "smoothness": 0.1,
-        "_doc": "recon_current=当前帧重建主目标，recon_next=下一帧预测(鼓励时序一致性)，smoothness=物理状态变化惩罚"
+        "cd": 0.1,
+        "_doc": "recon_current=当前帧重建主目标，recon_next=下一帧预测(鼓励时序一致性)，smoothness=物理状态变化惩罚，cd=端点Chamfer Distance辅助损失(Flow Matching用)"
     },
 
     "model": {
@@ -106,6 +107,21 @@
         "bounds_margin": 0.03,
         "marching_cubes_level": 0,
         "fps": 3,
-        "_doc": "query_batch_size=评估查询分块大小, grid_res=可视化网格分辨率, density_threshold=密度可视化阈值, bounds_margin=空间包围盒余量, fps=GIF帧率"
+        "eval_interval": 0,
+        "n_eval_samples": 100,
+        "n_gt_points": 1000,
+        "fscore_thresholds": [0.005, 0.01, 0.02],
+        "_doc": "query_batch_size=评估查询分块大小, grid_res=可视化网格分辨率, density_threshold=密度可视化阈值, bounds_margin=空间包围盒余量, fps=GIF帧率, eval_interval=每N epoch评估一次(0=关闭), n_eval_samples=评估用样本数, n_gt_points=GT表面采样密度, fscore_thresholds=F-Score阈值列表(米)"
+    },
+
+    "pointcloud": {
+        "n_surface_points": 1000,
+        "sigma": 1.0,
+        "ode_steps": 50,
+        "ode_solver": "euler",
+        "velocity_net_hidden": 256,
+        "velocity_net_layers": 6,
+        "time_embed_dim": 64,
+        "_doc": "Flow Matching 点云模型参数。n_surface_points=每帧表面采样点数, sigma=源噪声标准差, ode_steps=推理ODE积分步数, ode_solver=euler|rk4, velocity_net_hidden/layers=速度网络配置, time_embed_dim=时间嵌入维度"
     }
 }
