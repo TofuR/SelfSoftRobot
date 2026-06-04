@@ -101,6 +101,12 @@ def _detect_model_type(state_dict):
     """通过 checkpoint key 判断模型类型和训练阶段。"""
     keys = set(state_dict.keys())
 
+    # Flow Matching 模型: velocity_net + temporal（无 density/sdf/skeleton）
+    has_velocity = any('velocity_net' in k for k in keys)
+    has_temporal = any('temporal' in k for k in keys)
+    if has_velocity and has_temporal:
+        return 'flowmatch', 0
+
     # SDF 模型（无骨架）: coord_encoder
     if any('coord_encoder' in k for k in keys):
         return 'sdf', 0
@@ -193,6 +199,25 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
             hidden_dim=train_cfg['temporal']['hidden_dim'],
         ).to(device)
         model.load_state_dict(state_dict)
+
+    elif model_type == 'flowmatch':
+        from src.models.model_flowmatch import FlowMatchPointCloudModel
+        pc_cfg = train_cfg.get('pointcloud', {})
+        model = FlowMatchPointCloudModel(
+            action_dim=action_dim,
+            window_size=window_size,
+            n_scales=train_cfg['temporal']['n_scales'],
+            hidden_dim=train_cfg['temporal']['hidden_dim'],
+            velocity_net_hidden=pc_cfg.get('velocity_net_hidden', 256),
+            velocity_net_layers=pc_cfg.get('velocity_net_layers', 6),
+            time_embed_dim=pc_cfg.get('time_embed_dim', 64),
+            sigma=pc_cfg.get('sigma', 1.0),
+            ode_steps=pc_cfg.get('ode_steps', 50),
+            ode_solver=pc_cfg.get('ode_solver', 'euler'),
+            n_points=pc_cfg.get('n_surface_points', 1000),
+        ).to(device)
+        # strict=False: 旧 checkpoint 没有 pc_center/pc_scale buffer
+        model.load_state_dict(state_dict, strict=False)
 
     elif model_type == 'ms_scnf':
         from src.models.model_ms_scnf import MSSCNFModel

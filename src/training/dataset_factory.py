@@ -8,6 +8,7 @@
   "multiview_depth" → MultiViewDepthDataset（多视角 + 深度）
   "sdf"             → SDFDataset（3D SDF 监督）
   "skeleton_sdf"    → SkeletonSDFDataset（骨架 + SDF）
+  "pointcloud"      → PointCloudDataset（点云，用于 Flow Matching）
 
 统一 dict batch 格式:
   {
@@ -19,6 +20,7 @@
       "coords":              Tensor | None,         # (B, M, 3) SDF 查询点
       "gt_sdf":              Tensor | None,         # (B, M)
       "gt_normals":          Tensor | None,         # (B, M, 3)
+      "gt_pointcloud":       Tensor | None,         # (B, N, 3) GT 点云（pointcloud 模式）
   }
 """
 
@@ -88,6 +90,15 @@ def create_dataset(dataset_type: str, data_dir: str, config: dict,
             n_off_surface=sdf_cfg["n_off_surface"],
         )
 
+    elif dataset_type == "pointcloud":
+        from src.data.dataset_pointcloud import PointCloudDataset
+        pc_cfg = config.get("pointcloud", {})
+        return PointCloudDataset(
+            data_dir,
+            seq_len=seq_len,
+            n_surface_points=pc_cfg.get("n_surface_points", 1000),
+        )
+
     else:
         raise ValueError(f"Unknown dataset_type: {dataset_type}")
 
@@ -110,6 +121,8 @@ def get_collate_fn(dataset_type: str, dataset: Dataset):
         return _collate_sdf
     elif dataset_type == "skeleton_sdf":
         return _collate_skeleton_sdf
+    elif dataset_type == "pointcloud":
+        return _collate_pointcloud
     else:
         raise ValueError(f"Unknown dataset_type: {dataset_type}")
 
@@ -234,4 +247,19 @@ def _collate_skeleton_sdf(batch):
         "gt_sdf": torch.stack([b[2] for b in batch]),
         "gt_normals": torch.stack([b[3] for b in batch]),
         "gt_positions": torch.stack([b[4] for b in batch]),
+    }
+
+
+def _collate_pointcloud(batch):
+    """PointCloudDataset 的 collate 函数。 (action_window, gt_pointcloud)"""
+    return {
+        "action_window": torch.stack([b[0] for b in batch]),
+        "gt_pointcloud": torch.stack([b[1] for b in batch]),
+        "images": None,
+        "depths": None,
+        "action_window_next": None,
+        "gt_positions": None,
+        "coords": None,
+        "gt_sdf": None,
+        "gt_normals": None,
     }

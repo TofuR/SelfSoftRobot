@@ -7,6 +7,7 @@
   "rendering"  — 射线采样 → 体渲染 → 像素对比（recon, depth）
   "direct_3d"  — 3D 坐标查询 → 值对比（SDF, normal, eikonal）
   "skeleton"   — action → 预测骨架 → 骨架对比（无空间查询）
+  "pointcloud" — action → velocity field ODE → 点云 → FM/CD loss
 
 Loss 分两层:
   渲染层 (ViewStrategy): recon, depth, reproj, consist

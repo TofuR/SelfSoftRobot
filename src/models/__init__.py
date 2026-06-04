@@ -23,4 +23,7 @@ def __getattr__(name):
     if name == "MSSCNFModel":
         from .model_ms_scnf import MSSCNFModel
         return MSSCNFModel
+    if name == "FlowMatchPointCloudModel":
+        from .model_flowmatch import FlowMatchPointCloudModel
+        return FlowMatchPointCloudModel
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
