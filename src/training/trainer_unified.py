@@ -14,6 +14,7 @@ Loss 分两层:
     trainer.train(data_dirs, n_epochs_per_phase={...})
 """
 
+import glob
 import os
 import torch
 import torch.nn.functional as F
@@ -26,6 +27,8 @@ from src.rendering.view_strategy import ViewStrategy
 from src.training.dataset_factory import create_dataset, get_collate_fn
 from src.utils.experiment import create_experiment
 from config.params import load_config
+from src.evaluation.surface_sampling import sample_gt_surface, model_output_to_pointcloud
+from src.evaluation.shape_metrics import chamfer_distance, f_score, hausdorff_distance
 
 
 class UnifiedTrainer:
@@ -90,7 +93,7 @@ class UnifiedTrainer:
             w = self._get_loss_weight(name, 1.0)
             losses[name] = val * w
 
-        losses["total"] = sum(losses.values())
+        losses["total"] = sum(v for k, v in losses.items() if not k.endswith("_monitor"))
         return losses
 
     def _build_exp_config(self, data_dirs, n_epochs_per_phase):
@@ -227,6 +230,76 @@ class UnifiedTrainer:
 
         self.views.setup(self.device, self.config)
 
+    def _evaluate_shape(self, phase_spec, data_dir, epoch, exp_dir):
+        """在训练中运行形状评估，结果保存到 shape_metrics.json。"""
+        import json as _json
+        eval_cfg = self.config.get("evaluation", {})
+        n_eval = eval_cfg.get("n_eval_samples", 100)
+        n_gt = eval_cfg.get("n_gt_points", 1000)
+        thresholds = eval_cfg.get("fscore_thresholds", [0.005, 0.01, 0.02])
+
+        # 确定模型类型
+        model_type = self.model_tag
+        if model_type not in ("flowmatch", "mstnf", "cmstnf", "ms_scnf",
+                              "sdf", "skeleton_sdf"):
+            return
+
+        npz_files = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
+        if not npz_files:
+            return
+        if n_eval > 0 and len(npz_files) > n_eval:
+            indices = np.linspace(0, len(npz_files) - 1, n_eval, dtype=int)
+            npz_files = [npz_files[i] for i in indices]
+
+        self.model.eval()
+        all_results = []
+        for npz_path in npz_files:
+            data = np.load(npz_path, allow_pickle=True)
+            T = len(data["actions"])
+            t = T // 2
+            try:
+                from scripts.evaluation.evaluate_shape import evaluate_single_sample
+                result = evaluate_single_sample(
+                    self.model, model_type, data, t,
+                    self.config.get("temporal", {}).get("window_size", 20),
+                    self.device, {},
+                    {"n_gt_points": n_gt, "n_pred_points": n_gt,
+                     "fscore_thresholds": thresholds,
+                     "density_threshold": eval_cfg.get("density_threshold", 0.5),
+                     "grid_res": eval_cfg.get("grid_res", 30)})
+                if result is not None:
+                    all_results.append(result)
+            except Exception:
+                pass
+
+        self.model.train()
+
+        if not all_results:
+            return
+
+        metrics = {"phase": phase_spec.name, "epoch": epoch,
+                   "n_samples": len(all_results)}
+        for key in all_results[0]:
+            values = [r[key] for r in all_results]
+            metrics[key] = {"mean": float(np.mean(values)),
+                            "std": float(np.std(values))}
+
+        metrics_path = os.path.join(exp_dir, "shape_metrics.json")
+        history = {"model": type(self.model).__name__,
+                   "data": data_dir, "evaluations": []}
+        if os.path.exists(metrics_path):
+            with open(metrics_path, "r") as f:
+                history = _json.load(f)
+        history["evaluations"].append(metrics)
+        with open(metrics_path, "w") as f:
+            _json.dump(history, f, indent=2, ensure_ascii=False)
+
+        cd = metrics.get("chamfer_distance", {}).get("mean", 0)
+        hd = metrics.get("hausdorff_distance", {}).get("mean", 0)
+        mid_key = [k for k in metrics if "f_score" in k]
+        mid_fs = metrics[mid_key[len(mid_key)//2]]["mean"] if mid_key else 0
+        print(f"  [Eval] Epoch {epoch} | CD={cd:.5f} | F@10mm={mid_fs:.3f} | HD={hd:.5f}")
+
     def train(self, data_dirs, exp_dir=None, n_epochs_per_phase=None,
               skip_phases=None):
         """统一训练入口。
@@ -340,6 +413,11 @@ class UnifiedTrainer:
                     scheduler.step(avg)
                 else:
                     scheduler.step()
+
+                # 形状评估（每 eval_interval epoch）
+                eval_interval = self.config.get("evaluation", {}).get("eval_interval", 0)
+                if eval_interval > 0 and (epoch % eval_interval == 0 or epoch == n_epochs):
+                    self._evaluate_shape(phase_spec, data_dir, epoch, exp_dir)
 
             # 保存 Phase 权重
             save_path = self._save_phase_modules(phase_dir, phase_spec)
