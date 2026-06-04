@@ -298,7 +298,9 @@ class UnifiedTrainer:
         hd = metrics.get("hausdorff_distance", {}).get("mean", 0)
         mid_key = [k for k in metrics if "f_score" in k]
         mid_fs = metrics[mid_key[len(mid_key)//2]]["mean"] if mid_key else 0
-        print(f"  [Eval] Epoch {epoch} | CD={cd:.5f} | F@10mm={mid_fs:.3f} | HD={hd:.5f}")
+        pf1 = metrics.get("proj_f1", {}).get("mean", 0)
+        print(f"  [Eval] Epoch {epoch} | CD={cd:.5f} | F@10mm={mid_fs:.3f} | "
+              f"HD={hd:.5f} | ProjF1={pf1:.3f}")
 
     def train(self, data_dirs, exp_dir=None, n_epochs_per_phase=None,
               skip_phases=None):
