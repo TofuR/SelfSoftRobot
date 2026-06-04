@@ -23,9 +23,9 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from src.utils.model_loader import load_model
-from src.evaluation.query import query_density_field, query_sdf_field, query_skeleton
+from src.evaluation.query import query_density_field, query_sdf_field, query_skeleton, query_pointcloud
 from src.evaluation.render import (
-    render_density_html, render_sdf_html, render_animation,
+    render_density_html, render_sdf_html, render_pointcloud_html, render_animation,
     render_png, render_gif,
 )
 
@@ -224,6 +224,7 @@ def main():
     # ── Step 5: 查询参数 ──
     grid_res = input_int("[5] 网格分辨率", default_grid_res)
     is_sdf = model_type in ('sdf', 'skeleton_sdf')
+    is_pc = model_type == 'flowmatch'
     threshold = default_threshold
     sdf_mode = 'mesh'
 
@@ -234,6 +235,10 @@ def main():
         mode_choice = input("  > [1]: ").strip()
         if mode_choice == '2':
             sdf_mode = 'pointcloud'
+    elif is_pc:
+        n_points = input_int("[6] ODE 生成点数", 1000)
+        n_ode_steps = input_int("    ODE 积分步数", 50)
+        print("  (Flow Matching 模型，直接生成点云，无需网格查询)")
     else:
         threshold = input_float("[6] 密度阈值", default_threshold)
 
@@ -265,6 +270,9 @@ def main():
         if is_sdf:
             result = query_sdf_field(model, action_window, bounds, grid_res, device,
                                       gt_skeleton=gt_skel_tensor)
+        elif is_pc:
+            result = query_pointcloud(model, action_window, n_points=n_points,
+                                       n_steps=n_ode_steps)
         else:
             result = query_density_field(model, action_window, bounds, grid_res, device,
                                           gt_skeleton=gt_skel_tensor)
@@ -284,8 +292,8 @@ def main():
         all_pred.append(pred_skeleton)
 
         n_verts = len(result['vertices']) if result.get('vertices') is not None else 0
-        n_pts = (result['density'] > threshold).sum() if result.get('density') is not None else 0
-        print(f"  [{vis_i+1}/{n_vis}] frame {fidx}: {n_verts} verts, {n_pts} dense pts", end='\r')
+        n_pts = (result['density'] > threshold).sum() if result.get('density') is not None else len(result.get('points', []))
+        print(f"  [{vis_i+1}/{n_vis}] frame {fidx}: {n_verts} verts, {n_pts} pts", end='\r')
 
     print(f"\n  完成 {n_vis} 帧查询")
 
@@ -302,6 +310,8 @@ def main():
     png_path = os.path.join(output_dir, f"{base_name}_mid.png")
     if is_sdf:
         fig = render_sdf_html(all_results[mid], sdf_mode, all_gt[mid], all_pred[mid])
+    elif is_pc:
+        fig = render_pointcloud_html(all_results[mid], all_gt[mid], all_pred[mid])
     else:
         fig = render_density_html(all_results[mid], threshold, all_gt[mid], all_pred[mid])
     render_png(fig, png_path)

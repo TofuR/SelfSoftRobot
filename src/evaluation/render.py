@@ -30,6 +30,28 @@ def _add_skeleton_traces(fig, gt_skeleton=None, pred_skeleton=None):
         ))
 
 
+def render_pointcloud_html(result, gt_skeleton=None, pred_skeleton=None, title=""):
+    """Flow Matching 点云 → Plotly Figure。"""
+    import plotly.graph_objects as go
+
+    fig = go.Figure()
+    pts = result.get('points')
+    if pts is not None and len(pts) > 0:
+        fig.add_trace(go.Scatter3d(
+            x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
+            mode='markers',
+            marker=dict(size=1.5, color='deepskyblue', opacity=0.6),
+            name='predicted pointcloud',
+        ))
+    _add_skeleton_traces(fig, gt_skeleton, pred_skeleton)
+    fig.update_layout(
+        title=title or 'Flow Matching — Point Cloud',
+        scene=dict(aspectmode='data'),
+        width=700, height=600, margin=dict(l=0, r=0, t=30, b=0),
+    )
+    return fig
+
+
 def render_density_html(result, threshold, gt_skeleton=None,
                         pred_skeleton=None, title=""):
     """density 点云 → Plotly Figure。"""
@@ -114,6 +136,7 @@ def render_animation(results, model_type, threshold, gt_skeletons,
 
     n_frames = len(results)
     is_sdf = model_type in ('sdf', 'skeleton_sdf')
+    is_pc = model_type == 'flowmatch'
     fig = go.Figure()
 
     for i in range(n_frames):
@@ -129,6 +152,15 @@ def render_animation(results, model_type, threshold, gt_skeletons,
                     x=v[:, 0], y=v[:, 1], z=v[:, 2],
                     i=f[:, 0], j=f[:, 1], k=f[:, 2],
                     color='lightblue', opacity=0.8,
+                    visible=visible, name=f'Frame {frame_indices[i]}',
+                ))
+        elif is_pc:
+            pts = r.get('points')
+            if pts is not None and len(pts) > 0:
+                fig.add_trace(go.Scatter3d(
+                    x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
+                    mode='markers',
+                    marker=dict(size=1.5, color='deepskyblue', opacity=0.6),
                     visible=visible, name=f'Frame {frame_indices[i]}',
                 ))
         else:
@@ -206,6 +238,9 @@ def render_gif(results, model_type, threshold, gt_skeletons,
         if model_type in ('sdf', 'skeleton_sdf'):
             fig = render_sdf_html(results[i], sdf_mode, gt, pred,
                                   title=f'Frame {frame_indices[i]}')
+        elif model_type == 'flowmatch':
+            fig = render_pointcloud_html(results[i], gt, pred,
+                                          title=f'Frame {frame_indices[i]}')
         else:
             fig = render_density_html(results[i], threshold, gt, pred,
                                       title=f'Frame {frame_indices[i]}')

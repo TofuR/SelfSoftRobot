@@ -1,9 +1,10 @@
 """query.py — 统一的模型查询引擎。
 
-3 个标准查询函数，供可视化脚本和训练 validation 共用：
+4 个标准查询函数，供可视化脚本和训练 validation 共用：
   query_density_field — density 网格查询（MSTNF, CMSTNF, MS-SCNF）
   query_sdf_field     — SDF 网格 + marching cubes（SDF, SkeletonSDF）
   query_skeleton      — 骨架预测（MS-SCNF, SkeletonSDF）
+  query_pointcloud    — Flow Matching ODE 点云生成（FlowMatchPointCloud）
 """
 
 import numpy as np
@@ -150,3 +151,21 @@ def query_skeleton(model, action_window, device=None):
         device = action_window.device
     skel_dict = model.predict_skeleton(action_window)
     return {k: v.cpu().numpy() for k, v in skel_dict.items()}
+
+
+@torch.no_grad()
+def query_pointcloud(model, action_window, n_points=1000, n_steps=None):
+    """通过 Flow Matching ODE 积分生成点云。
+
+    Args:
+        model: FlowMatchPointCloudModel，需有 predict_pointcloud() 方法。
+        action_window: (1, K, D) 动作窗口。
+        n_points: 生成的点数。
+        n_steps: ODE 积分步数（None 使用模型默认值）。
+
+    Returns:
+        dict: {points: (N, 3) numpy array, pointcloud: (1, N, 3) numpy array}
+    """
+    pc = model.predict_pointcloud(action_window, n_points=n_points, n_steps=n_steps)
+    pc_np = pc.cpu().numpy()  # (1, N, 3)
+    return {'pointcloud': pc_np, 'points': pc_np[0]}
