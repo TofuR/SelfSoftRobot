@@ -28,6 +28,8 @@ from src.utils.model_loader import load_model
 from src.evaluation.query import query_density_field, query_sdf_field, query_pointcloud
 from src.evaluation.shape_metrics import chamfer_distance, f_score, hausdorff_distance
 from src.evaluation.surface_sampling import sample_gt_surface, model_output_to_pointcloud
+from src.evaluation.projection_metrics import projection_f1
+from src.utils.camera_system import MultiCameraSystem
 
 
 # ── 交互式选择工具 ──────────────────────────────────────────────
@@ -174,6 +176,26 @@ def evaluate_single_sample(model, model_type, data, t, window_size,
     for tau in thresholds:
         result[f"f_score_{int(tau*1000)}mm"] = f_score(pred_pc, gt_pc, tau)
 
+    # 投影 F1：3D 点云投影到相机视角 vs GT 图像（惩罚扇形扩散）
+    if "images" in data and "camera_params" in data:
+        try:
+            cam_sys = MultiCameraSystem.from_npz(data)
+            n_views = cam_sys.n_views
+            dilation = eval_cfg.get("projection_dilation", 1)
+            proj_results = []
+            for v in range(n_views):
+                gt_img = data["images"][t, v]  # (H, W)
+                res = projection_f1(pred_pc, gt_img, cam_sys.cameras[v],
+                                    dilation=dilation)
+                proj_results.append(res)
+            # 多视角平均
+            result["proj_precision"] = float(np.mean([r['precision'] for r in proj_results]))
+            result["proj_recall"] = float(np.mean([r['recall'] for r in proj_results]))
+            result["proj_f1"] = float(np.mean([r['f1'] for r in proj_results]))
+            result["proj_iou"] = float(np.mean([r['iou'] for r in proj_results]))
+        except Exception:
+            pass  # 相机参数不完整时静默跳过
+
     return result
 
 
@@ -235,7 +257,7 @@ def evaluate_model(checkpoint_path, data_dir, eval_cfg=None):
         mean, std = np.mean(values), np.std(values)
         report[key] = {"mean": float(mean), "std": float(std)}
 
-        if "f_score" in key:
+        if "f_score" in key or key.startswith("proj_"):
             print(f"  {key:20s}: {mean:.3f} ± {std:.3f}")
         else:
             print(f"  {key:20s}: {mean:.5f} ± {std:.5f}  (m)")

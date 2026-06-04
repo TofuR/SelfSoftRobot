@@ -111,7 +111,8 @@
         "n_eval_samples": 100,
         "n_gt_points": 1000,
         "fscore_thresholds": [0.005, 0.01, 0.02],
-        "_doc": "query_batch_size=评估查询分块大小, grid_res=可视化网格分辨率, density_threshold=密度可视化阈值, bounds_margin=空间包围盒余量, fps=GIF帧率, eval_interval=每N epoch评估一次(0=关闭), n_eval_samples=评估用样本数, n_gt_points=GT表面采样密度, fscore_thresholds=F-Score阈值列表(米)"
+        "projection_dilation": 1,
+        "_doc": "query_batch_size=评估查询分块大小, grid_res=可视化网格分辨率, density_threshold=密度可视化阈值, bounds_margin=空间包围盒余量, fps=GIF帧率, eval_interval=每N epoch评估一次(0=关闭), n_eval_samples=评估用样本数, n_gt_points=GT表面采样密度, fscore_thresholds=F-Score阈值列表(米), projection_dilation=投影F1的mask膨胀像素数(填充点云稀疏空隙)"
     },
 
     "pointcloud": {
