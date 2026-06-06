@@ -119,6 +119,15 @@ def _detect_model_type(state_dict):
     if has_skel and has_sdf_net and not has_density:
         return 'skeleton_sdf', 0
 
+    # SpatialSequence: gru + slice_head（无 correction）
+    has_gru = any('gru' in k for k in keys)
+    has_slice = any('slice_head' in k for k in keys)
+    has_correction = any('correction' in k for k in keys)
+    if has_gru and has_slice and not has_correction:
+        return 'spatial_sequence', 0
+    if has_gru and has_slice and has_correction:
+        return 'pc_spatial', 0
+
     # MS-SCNF phase 1: 只保存了 temporal + skeleton_head 的子模块
     if has_skel and not has_density and not has_sdf_net:
         return 'ms_scnf', 1
@@ -263,6 +272,35 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
             n_freqs=train_cfg['model']['n_freqs'],
         ).to(device)
         model.load_state_dict(state_dict)
+
+    elif model_type in ('spatial_sequence', 'pc_spatial'):
+        # SpatialSequence / PCSpatial — skeleton-only 模型
+        # n_orders 从 temporal 权重推断, n_nodes 默认 31
+        n_orders = train_cfg['temporal'].get('n_scales', 4)
+        n_nodes = saved_cfg.get('n_nodes', 31) if saved_cfg else 31
+        encoder_type = 'fractional' if any('raw_alphas' in k for k in state_dict) else 'ema'
+        hidden_dim = saved_cfg.get('hidden_dim', train_cfg['temporal']['hidden_dim']) if saved_cfg else train_cfg['temporal']['hidden_dim']
+
+        if model_type == 'spatial_sequence':
+            from src.models.model_spatial_sequence import SpatialSequenceModel
+            model = SpatialSequenceModel(
+                action_dim=action_dim, window_size=window_size,
+                n_orders=n_orders, hidden_dim=hidden_dim,
+                n_nodes=n_nodes, encoder_type=encoder_type,
+            ).to(device)
+        else:
+            from src.models.model_pc_spatial import PCSpatialSequenceModel
+            n_views = saved_cfg.get('n_views', 2) if saved_cfg else 2
+            model = PCSpatialSequenceModel(
+                action_dim=action_dim, window_size=window_size,
+                n_orders=n_orders, hidden_dim=hidden_dim,
+                n_nodes=n_nodes, encoder_type=encoder_type, n_views=n_views,
+            ).to(device)
+
+        model.load_state_dict(state_dict, strict=False)
+        # norm_factor 从 checkpoint buffer 恢复
+        if 'action_norm_factor' in state_dict:
+            norm_factor = state_dict['action_norm_factor'].item()
 
     elif model_type == 'skeleton_sdf':
         from src.models.model_skeleton_sdf import SkeletonSDFModel

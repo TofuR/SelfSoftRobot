@@ -23,10 +23,10 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 sys.path.insert(0, PROJECT_ROOT)
 
 from src.utils.model_loader import load_model
-from src.evaluation.query import query_density_field, query_sdf_field, query_skeleton, query_pointcloud
+from src.evaluation.query import query_density_field, query_sdf_field, query_skeleton, query_pointcloud, query_skeleton_direct
 from src.evaluation.render import (
-    render_density_html, render_sdf_html, render_pointcloud_html, render_animation,
-    render_png, render_gif,
+    render_density_html, render_sdf_html, render_pointcloud_html, render_skeleton_html,
+    render_animation, render_png, render_gif,
 )
 
 
@@ -225,10 +225,13 @@ def main():
     grid_res = input_int("[5] 网格分辨率", default_grid_res)
     is_sdf = model_type in ('sdf', 'skeleton_sdf')
     is_pc = model_type == 'flowmatch'
+    is_skeleton = model_type in ('spatial_sequence', 'pc_spatial')
     threshold = default_threshold
     sdf_mode = 'mesh'
 
-    if is_sdf:
+    if is_skeleton:
+        print("  (骨架模型，直接前向推理，无需网格查询)")
+    elif is_sdf:
         print("\n[6] SDF 可视化模式:")
         print("  1. mesh (marching cubes)")
         print("  2. pointcloud (SDF<=0)")
@@ -251,7 +254,7 @@ def main():
     exp_name = os.path.basename(os.path.dirname(os.path.dirname(ckpt_path)))
     base_name = f"{model_type}_{exp_name}_frames{start_frame}-{end_frame}"
 
-    print(f"\n查询模型 ({model_type}), {n_vis} 帧, grid={grid_res}^3...")
+    print(f"\n查询模型 ({model_type}), {n_vis} 帧...")
     all_results = []
     all_gt = []
     all_pred = []
@@ -267,7 +270,9 @@ def main():
             gt_skel_tensor = prepare_gt_skeleton_tensor(gt_skeleton, device)
 
         # 查询
-        if is_sdf:
+        if is_skeleton:
+            result = query_skeleton_direct(model, action_window)
+        elif is_sdf:
             result = query_sdf_field(model, action_window, bounds, grid_res, device,
                                       gt_skeleton=gt_skel_tensor)
         elif is_pc:
@@ -277,8 +282,11 @@ def main():
             result = query_density_field(model, action_window, bounds, grid_res, device,
                                           gt_skeleton=gt_skel_tensor)
 
-        # 骨架可视化
-        if gt_skeleton is not None:
+        # 骨架可视化（overlay GT）
+        if is_skeleton:
+            # 预测已是 result['points']，GT 作为 overlay
+            pass
+        elif gt_skeleton is not None:
             pred_skeleton = gt_skeleton
         elif model_type in ('ms_scnf', 'skeleton_sdf') and not need_gt:
             try:
@@ -292,7 +300,9 @@ def main():
         all_pred.append(pred_skeleton)
 
         n_verts = len(result['vertices']) if result.get('vertices') is not None else 0
-        n_pts = (result['density'] > threshold).sum() if result.get('density') is not None else len(result.get('points', []))
+        n_pts = len(result.get('points', []))
+        if result.get('density') is not None:
+            n_pts = int((result['density'] > threshold).sum())
         print(f"  [{vis_i+1}/{n_vis}] frame {fidx}: {n_verts} verts, {n_pts} pts", end='\r')
 
     print(f"\n  完成 {n_vis} 帧查询")
@@ -308,7 +318,9 @@ def main():
     # 单帧 PNG
     mid = n_vis // 2
     png_path = os.path.join(output_dir, f"{base_name}_mid.png")
-    if is_sdf:
+    if is_skeleton:
+        fig = render_skeleton_html(all_results[mid], all_gt[mid], all_pred[mid])
+    elif is_sdf:
         fig = render_sdf_html(all_results[mid], sdf_mode, all_gt[mid], all_pred[mid])
     elif is_pc:
         fig = render_pointcloud_html(all_results[mid], all_gt[mid], all_pred[mid])

@@ -169,3 +169,24 @@ def query_pointcloud(model, action_window, n_points=1000, n_steps=None):
     pc = model.predict_pointcloud(action_window, n_points=n_points, n_steps=n_steps)
     pc_np = pc.cpu().numpy()  # (1, N, 3)
     return {'pointcloud': pc_np, 'points': pc_np[0]}
+
+
+@torch.no_grad()
+def query_skeleton_direct(model, action_window):
+    """直接预测骨架坐标（SpatialSequence/PCSpatial 用）。
+
+    Args:
+        model: SpatialSequenceModel 或 PCSpatialSequenceModel。
+        action_window: (1, K, D) 动作窗口。
+
+    Returns:
+        dict: {skeleton: (1, N, 3) numpy, points: (N, 3) numpy}
+              坐标为反归一化后的世界坐标。
+    """
+    pred = model(action_window)  # (1, N, 3) 归一化空间
+    pred_np = pred.cpu().numpy()
+    # 反归一化到世界坐标
+    center = model.pc_center.cpu().numpy()   # (1, 1, 3)
+    scale = model.pc_scale.cpu().numpy()      # (1, 1, 3)
+    pred_world = pred_np * scale + center
+    return {'skeleton': pred_world, 'points': pred_world[0]}

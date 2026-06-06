@@ -52,6 +52,33 @@ def render_pointcloud_html(result, gt_skeleton=None, pred_skeleton=None, title="
     return fig
 
 
+def render_skeleton_html(result, gt_skeleton=None, pred_skeleton=None, title=""):
+    """骨架预测 → Plotly Figure（lines+markers）。
+
+    用于 SpatialSequence/PCSpatial 等直接输出骨架坐标的模型。
+    result 格式同 query_skeleton_direct 返回值。
+    """
+    import plotly.graph_objects as go
+
+    fig = go.Figure()
+    pts = result.get('points')
+    if pts is not None:
+        fig.add_trace(go.Scatter3d(
+            x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
+            mode='lines+markers',
+            marker=dict(size=5, color='blue'),
+            line=dict(color='blue', width=4),
+            name='Predicted skeleton',
+        ))
+    _add_skeleton_traces(fig, gt_skeleton, pred_skeleton)
+    fig.update_layout(
+        title=title or 'Skeleton Prediction',
+        scene=dict(aspectmode='data'),
+        width=700, height=600, margin=dict(l=0, r=0, t=30, b=0),
+    )
+    return fig
+
+
 def render_density_html(result, threshold, gt_skeleton=None,
                         pred_skeleton=None, title=""):
     """density 点云 → Plotly Figure。"""
@@ -137,6 +164,7 @@ def render_animation(results, model_type, threshold, gt_skeletons,
     n_frames = len(results)
     is_sdf = model_type in ('sdf', 'skeleton_sdf')
     is_pc = model_type == 'flowmatch'
+    is_skeleton = model_type in ('spatial_sequence', 'pc_spatial')
     fig = go.Figure()
 
     for i in range(n_frames):
@@ -153,6 +181,16 @@ def render_animation(results, model_type, threshold, gt_skeletons,
                     i=f[:, 0], j=f[:, 1], k=f[:, 2],
                     color='lightblue', opacity=0.8,
                     visible=visible, name=f'Frame {frame_indices[i]}',
+                ))
+        elif is_skeleton:
+            pts = r.get('points')
+            if pts is not None:
+                fig.add_trace(go.Scatter3d(
+                    x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
+                    mode='lines+markers',
+                    marker=dict(size=4, color='blue'),
+                    line=dict(color='blue', width=3),
+                    visible=visible, name=f'Pred {frame_indices[i]}',
                 ))
         elif is_pc:
             pts = r.get('points')
@@ -238,6 +276,9 @@ def render_gif(results, model_type, threshold, gt_skeletons,
         if model_type in ('sdf', 'skeleton_sdf'):
             fig = render_sdf_html(results[i], sdf_mode, gt, pred,
                                   title=f'Frame {frame_indices[i]}')
+        elif model_type in ('spatial_sequence', 'pc_spatial'):
+            fig = render_skeleton_html(results[i], gt, pred,
+                                        title=f'Frame {frame_indices[i]}')
         elif model_type == 'flowmatch':
             fig = render_pointcloud_html(results[i], gt, pred,
                                           title=f'Frame {frame_indices[i]}')
