@@ -9,6 +9,8 @@
 支持所有模型类型:
   density 类 (MSTNF, CMSTNF, MS-SCNF) — 密度阈值 3D 点云
   SDF 类 (SDF, SkeletonSDF)           — marching cubes 三角网格
+  skeleton 类 (SpatialSequence, PCSpatial) — 骨架曲线 lines+markers
+  pointcloud 类 (FlowMatch)           — ODE 生成点云
 """
 
 import os
@@ -215,7 +217,7 @@ def main():
     n_frames = d['actions'].shape[0]
     print(f"\n[4] 帧范围 (共 {n_frames} 帧)")
     start_frame = input_int("  起始帧", 0)
-    end_frame = input_int(f"  结束帧 (含, max {n_frames-1})", min(start_frame + 49, n_frames - 1))
+    end_frame = input_int(f"  结束帧 (含, max {n_frames-1})", min(start_frame + 99, n_frames - 1))
     step = input_int("  帧间隔", max(1, (end_frame - start_frame) // 50))
     frame_indices = list(range(start_frame, end_frame + 1, step))
     n_vis = len(frame_indices)

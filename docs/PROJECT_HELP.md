@@ -12,7 +12,7 @@ PyElastica 物理仿真 → PyVista 渲染图像 → 数据采集 (.npz) → 模
 
 项目目标：**仅用驱动参数（扭矩）预测软体机器人的完整 3D 形态**。
 
-当前有五套模型管线，全部通过 Spec 声明式训练架构统一管理：
+当前有八套模型管线，全部通过 Spec 声明式训练架构统一管理：
 
 | 管线 | 模型 | 核心创新 | 监督模式 | 数据需求 | 输出 |
 |------|------|---------|---------|---------|------|
@@ -21,6 +21,9 @@ PyElastica 物理仿真 → PyVista 渲染图像 → 数据采集 (.npz) → 模
 | SDF 3D | TemporalSDF | SIREN 坐标编码 + 3D SDF 直接监督 | direct_3d | 3D 节点坐标 + 动作（无需图像） | 3D SDF 场 |
 | SkeletonSDF | SkeletonSDF | 参数化骨架 + 管状 SDF 先验 + SIREN 残差 | direct_3d | 3D 节点坐标 + 动作（无需图像） | 3D SDF 场 + 3D 骨架 |
 | 多视角+深度 | MSTNF / C-MSTNF (多视角训练) | 多视角 rendering + 深度监督融合 | rendering (MultiView) | 多视角 2D 图像 + 深度图 + 相机参数 | 多视角 2D 渲染图 |
+| **分数阶记忆** | FractionalMemory | 幂律记忆核替代指数衰减 EMA | —（编码器，非独立模型） | 同宿主模型 | 物理状态向量 |
+| **空间序列** | SpatialSequence | GRU 沿 Z 轴空间传播 + 分数阶记忆 | spatial_sequence | 3D 节点坐标 + 动作 | 3D 中心线 (31 节点) |
+| **预测-修正** | PCSpatial | 预测(驱动历史) + 修正(视觉观测) 两阶段 | spatial_sequence | 3D 节点坐标 + 动作 + 图像（Phase 2） | 3D 中心线 (31 节点) |
 
 ---
 
@@ -38,7 +41,8 @@ SelfSoftRobot/
 │
 ├── src/
 │   ├── encoders/                    # 时序编码器（从 models/ 提取）
-│   │   └── multi_scale_ema.py       #   MultiScaleEMA（多尺度指数移动平均）
+│   │   ├── multi_scale_ema.py       #   MultiScaleEMA（多尺度指数移动平均）
+│   │   └── fractional_memory.py     #   FractionalMemory（分数阶记忆编码器）
 │   ├── fields/                      # 神经场模块（从 models/ 提取）
 │   │   ├── canonical.py             #   CanonicalField（规范场）
 │   │   ├── deformation.py           #   DeformationField（变形场）
@@ -58,11 +62,15 @@ SelfSoftRobot/
 │   │   ├── model_cmstnf.py          #   C-MSTNF（Canonical + Deformation）
 │   │   ├── model_ms_scnf.py         #   MS-SCNF（骨架条件神经场）
 │   │   ├── model_skeleton_sdf.py    #   SkeletonSDF（参数化骨架 + 管状 SDF）
-│   │   └── model_sdf.py             #   TemporalSDF（SIREN + EMA 时序 SDF）
+│   │   ├── model_sdf.py             #   TemporalSDF（SIREN + EMA 时序 SDF）
+│   │   ├── model_spatial_sequence.py #  SpatialSequence（GRU 空间序列中心线）
+│   │   └── model_pc_spatial.py      #   PCSpatial（预测-修正空间序列）
 │   ├── data/
 │   │   ├── dataset.py               #   SoftSequenceDataset（支持 2D/3D/深度）
 │   │   ├── dataset_sdf.py           #   SDFDataset（3D SDF 监督采样）
 │   │   ├── dataset_skeleton_sdf.py  #   SkeletonSDFDataset（骨架 + SDF 采样）
+│   │   ├── dataset_spatial.py       #   SpatialSequenceDataset（中心线回归）
+│   │   ├── dataset_pointcloud.py    #   PointCloudDataset（表面点云采样）
 │   │   ├── dataset_multiview.py     #   MultiViewDataset（旧版双视角数据集）
 │   │   └── dataset_multiview_depth.py # MultiViewDepthDataset（新版多视角+深度）
 │   ├── training/
@@ -101,7 +109,10 @@ SelfSoftRobot/
 │   │   ├── train_skeleton_sdf.py    #   SkeletonSDF 薄包装
 │   │   ├── train_depth_cmstnf.py    #   Depth-CMSTNF 薄包装
 │   │   ├── train_multiview.py       #   多视角+深度训练薄包装
-│   │   └── train_multiview_consistency.py  # 多视角一致性薄包装
+│   │   ├── train_multiview_consistency.py  # 多视角一致性薄包装
+│   │   ├── train_flowmatch.py       #   FlowMatch 点云薄包装
+│   │   ├── train_spatial_sequence.py #  SpatialSequence 薄包装
+│   │   └── train_pc_spatial.py      #   PCSpatial 薄包装
 │   ├── evaluation/
 │   │   ├── evaluate_3d.py           #   3D 几何评估脚本
 │   │   ├── visualize_3d_shape.py    #   3D SDF/mesh 可视化
@@ -132,6 +143,7 @@ SelfSoftRobot/
 │   ├── seq_rr_3d/                   #   时序 + 3D
 │   ├── seq_rz/                      #   x random, y zero
 │   ├── seq_hh/                      #   batch（两维 hold）
+│   ├── seq_rz_c2_sk/                #   单维度随机 + 3D 节点（空间序列模型训练用）
 │   └── exp7_multiview/              #   多视角实验数据
 │
 ├── train_log/                       # 训练日志与模型权重
@@ -508,6 +520,190 @@ sample_sdf_training_data(positions, radius)
 
 ---
 
+#### `fractional_memory.py` — FractionalMemory（分数阶记忆编码器）
+
+**名字来源**：**Fractional**-order **Memory**。用分数阶微积分替代整数阶 EMA 做时序记忆。
+
+**动机**：传统 MultiScaleEMA 用指数衰减核 G(t)∝e^(-t/τ) 做历史加权。但软体材料（硅胶、聚合物）的粘弹性实验表明，记忆核是**幂律衰减** G(t)∝t^(-α)（Rabotnov 1969），而非指数衰减。分数阶导数的 Grünwald-Letnikov（GL）离散化天然给出幂律权重序列。
+
+**核心假设**：
+- 软体机器人的当前形态不只取决于最近几步动作，而是受**整个历史轨迹**影响（迟滞效应）
+- 历史影响的衰减方式是幂律的（长尾），而非指数的（短尾）
+- 不同时间尺度可以用不同的分数阶参数 α 捕获
+
+**输入输出**：
+```
+输入: action_window (B, K, D) — 最近 K 帧的动作序列
+输出: physics_state (B, hidden_dim) — 物理状态向量
+```
+接口与 MultiScaleEMA **完全一致**，可无缝替换。
+
+**数据流**：
+```
+action_window: (B, K=40, D=2)
+  │
+  ├─ α₀=0.11 → GL weights → 加权求和 → feat₀: (B, 2)  # 极短记忆（~无记忆）
+  ├─ α₁=0.35 → GL weights → 加权求和 → feat₁: (B, 2)  # 短期记忆
+  ├─ α₂=0.41 → GL weights → 加权求和 → feat₂: (B, 2)  # 中期记忆
+  └─ α₃=0.69 → GL weights → 加权求和 → feat₃: (B, 2)  # 长期记忆
+       │
+       ↓ 拼接 + 当前动作 + 速度
+       [feat₀, feat₁, feat₂, feat₃, action_now, velocity]: (B, 12)
+       │
+       ↓ MLP(12 → 128 → 128)
+       physics_state: (B, 128)
+```
+
+**GL 权重递推**：
+```
+w₀ = 1
+wₖ = wₖ₋₁ × (k - 1 - α) / k
+
+α ∈ (0, 1):
+  α → 0: 权重快速衰减，只有最近几帧有效（纯弹性，无记忆）
+  α → 1: 权重缓慢衰减，长历史都有效（纯粘性，完全记忆）
+  α ≈ 0.3~0.5: 软体材料典型范围（幂律衰减，长尾记忆）
+```
+
+**可学习参数**：
+- `raw_alphas` (4,) — 4 个分数阶参数，通过 sigmoid 映射到 (0,1)
+- `order_weights` (4,) — 4 个尺度混合权重
+- `state_mlp` — 状态 MLP 权重
+
+**训练结果**（30 epoch, spatial_sequence 数据）：
+- 4 个 α 值自动分化：[0.11, 0.35, 0.41, 0.69]
+- scale 0 近似无记忆（快速响应），scale 3 长期记忆（大变形历史）
+- 与 EMA 编码器对比：在 SpatialSequence 模型上精度相当，但 α 值可解释
+
+**与 MultiScaleEMA 的关系**：
+FractionalMemory 是 MultiScaleEMA 的**物理驱动替代品**。两者接口完全兼容（`forward`、`compute_smoothness`、`decays` 属性），任何使用 MultiScaleEMA 的模型都可通过 `--encoder fractional` 切换。
+
+---
+
+#### `model_spatial_sequence.py` — SpatialSequence（空间序列中心线模型）
+
+**名字来源**：**Spatial Sequence** — 沿空间维度（Z 轴）用序列模型生成中心线。
+
+**动机**：之前的所有模型（MSTNF、C-MSTNF、MS-SCNF、SDF 等）都试图学习"3D 空间中任意点的属性"（密度/SDF），这是一个非常高维的映射。但对于软体臂这种**拓扑固定的管状结构**，真正的自由度只是中心线的弯曲形状（31 个 3D 节点 = 93 DOF）。直接预测中心线比间接通过密度/SDF 恢复要简单得多。
+
+**核心假设**：
+- 软体臂的形态可以完全由中心线节点坐标描述（管状结构假设）
+- 中心线沿 Z 轴具有因果性：底部节点决定顶部节点（悬臂梁物理）
+- 时序历史决定全局弯曲方向，空间传播决定局部形状细节
+
+**输入输出**：
+```
+输入: action_window (B, K=40, D=2) — 最近 40 帧的驱动参数历史
+输出: skeleton_pred (B, 31, 3) — 归一化空间的 31 个中心线节点坐标
+```
+
+**数据流**：
+```
+action_window: (B, 40, 2)
+  │
+  ↓ FractionalMemory (或 MultiScaleEMA)
+  ↓ encode()
+  physics_state / cond: (B, 128)
+  │
+  ↓ init_hidden MLP
+  h₀: (B, 128)  — 初始空间隐藏状态
+  │
+  │  沿 Z 轴从底部到顶部，逐节点传播:
+  │  for i in range(31):
+  │    z_i = linspace(-1, 1, 31)[i]
+  │    z_emb = z_embed(z_i): (B, 128)    — Z 位置嵌入
+  │    h = GRU(cond + z_emb, h_{i-1})     — 空间状态传播
+  │    node_i = slice_head(h): (B, 3)     — 预测该节点 xyz
+  │
+  ↓
+  skeleton: (B, 31, 3)
+```
+
+**监督信号**：
+```
+L_skeleton:      MSE(pred, gt_skeleton)               — 节点坐标回归
+L_spatial_smooth: MSE(Δpred, Δgt)                      — 相邻节点位移连续性
+L_smooth:        MSE(state_t, state_{t+1})             — 时序平滑性（TemporalMixin）
+```
+
+**独特设计**：
+- **GRU 沿 Z 轴传播**：每个节点基于前一个节点的隐藏状态生成，保证拓扑连通和空间连续性
+- **Z 位置嵌入**：每个节点知道自己在臂上的位置（底部 vs 尖端），悬臂梁因果性自然编码
+- **扇形问题从架构层面消失**：FlowMatch 等方法可能出现"扇形"（预测点云不确定中心线位置），GRU 传播保证节点有序
+- **直接 3D 监督**：不需要体渲染，不需要图像，只需要 GT 中心线坐标
+- **参数量极小**：183,947 参数（对比 FlowMatch 的 ~300K+），训练快
+
+**训练**：单阶段，端到端。数据用 `SpatialSequenceDataset`（`dataset_spatial.py`），返回归一化的 action_window + gt_skeleton。
+
+**训练结果**（44 epoch, fractional encoder）：
+- 全部 10 条序列 CD mean=0.001184（对比 FlowMatch CD≈0.40，提升 350×）
+- 测试序列（未见过）CD=0.001416，泛化良好
+
+---
+
+#### `model_pc_spatial.py` — PCSpatial（预测-修正空间序列模型）
+
+**名字来源**：**P**redictive-**C**orrective **Spatial** Sequence。两阶段架构：先预测（Predictive），再修正（Corrective）。
+
+**动机**：SpatialSequence 纯靠驱动历史预测中心线，效果已经很好（CD≈0.001）。但在 real-world 部署时：
+1. 仿真模型与真实机器人有差异（sim-to-real gap）
+2. 驱动器信号可能有噪声或延迟
+3. 外部扰动（碰撞、负载变化）无法仅从驱动历史推断
+
+PCSpatial 借鉴**Kalman 滤波**思想：**模型预测（基于驱动历史）+ 观测修正（基于视觉图像）**。
+
+**核心假设**：
+- 驱动历史提供一个强先验（预测分支），在大多数情况下已经足够准确
+- 图像观测仅用于修正预测误差（修正分支学习残差），不需要从零学习形状
+- 修正信号是低维的（Δxyz per node = 93 DOF），可以用简单的 CNN 从图像提取
+
+**输入输出**：
+```
+Phase 1 (Predictive):
+  输入: action_window (B, K, D) — 驱动历史
+  输出: skeleton_pred (B, 31, 3) — 预测中心线
+
+Phase 2 (Corrective):
+  输入: action_window + images — 驱动历史 + 多视角图像
+  输出: skeleton_final (B, 31, 3) — 修正后中心线
+```
+
+**数据流**：
+```
+Phase 1 — 预测分支（与 SpatialSequence 完全相同）:
+  action_window → FractionalMemory → GRU(Z) → pred_skeleton: (B, 31, 3)
+
+Phase 2 — 修正分支:
+  pred_skeleton: (B, 31, 3)
+  images: (B, V, H, W)  — V 个视角的图像
+    │
+    ↓ Conv2d(V→32→64) → AdaptiveAvgPool → Linear(64→128) → img_feat: (B, 128)
+    ↓ Linear(128→128→93) → reshape → delta: (B, 31, 3)
+    │
+  final = pred_skeleton + delta: (B, 31, 3)
+```
+
+**监督信号**（两阶段相同）：
+```
+L_skeleton:      MSE(final, gt_skeleton)
+L_spatial_smooth: MSE(Δfinal, Δgt)
+L_smooth:        时序平滑（TemporalMixin）
+```
+
+**独特设计**：
+- **两阶段解耦**：Phase 1 冻结修正分支，只训练预测分支；Phase 2 联合训练
+- **残差修正**：修正分支只学习 Δ（图像与预测的差异），而非完整形状，收敛更快
+- **修正分支参数量小**：89,725 参数（CNN + MLP），仅占总参数 33%
+- **sim-to-real 设计**：预测分支用仿真数据训练，修正分支用真实图像微调
+- **可选修正**：无图像时退化为纯预测（Phase 1），有图像时加修正（Phase 2）
+
+**训练结果**（48 epoch, fractional encoder, Phase 1 only）：
+- 全部 10 条序列 CD mean=0.001114（比 SpatialSequence 好 ~6%）
+- 测试序列 CD=0.001154（比 SpatialSequence 的 0.001416 好 ~18%）
+- Phase 2（修正分支）尚未训练，待有图像数据后启用
+
+---
+
 #### Depth-CMSTNF（无独立模型文件）
 
 **名字来源**：**Depth**-supervised **C**anonical **M**STNF。用深度图增强监督的 C-MSTNF。
@@ -564,6 +760,7 @@ sample_sdf_training_data(positions, radius)
 | `ActuatorMLPEncoder` | 动作参数 MLP 编码器，将低维动作映射到高维特征空间 |
 | `MLPDecoder` | 通用解码 MLP：`input → 2d → 2d → d → d/2 → output`，density 用 softplus 激活 |
 | `MultiScaleEMA` | 多尺度指数移动平均：用 N 个可学习衰减率分别做 EMA，再加权拼接 |
+| `FractionalMemory` | 分数阶记忆：用 Grünwald-Letnikov 离散化实现幂律衰减记忆核，接口与 EMA 兼容 |
 | `TemporalLSTMEncoder` | LSTM 时序编码器（旧版，已被 EMA 替代） |
 
 **`skeleton_heads.py` 骨架回归头**（从 model_ms_scnf.py 提取，供 MS-SCNF 和 SkeletonSDF 复用）：
@@ -587,6 +784,7 @@ sample_sdf_training_data(positions, radius)
 | 目录 | 文件 | 内容 |
 |------|------|------|
 | `src/encoders/` | `multi_scale_ema.py` | `MultiScaleEMA` — 多尺度指数移动平均时序编码 |
+| | `fractional_memory.py` | `FractionalMemory` — 分数阶幂律记忆核（GL 离散化） |
 | `src/fields/` | `canonical.py` | `CanonicalField` — 规范场 MLP |
 | | `deformation.py` | `DeformationField` — 变形场 MLP |
 | | `skeleton_density.py` | `SkeletonConditionedDensity` — 骨架局部柱坐标条件密度场 (dist + t_axial) |
@@ -628,6 +826,8 @@ sample_sdf_training_data(positions, radius)
 | MS-SCNF | 2 phase: skeleton → joint | skeleton → rendering | [skeleton] → [skeleton, recon, smooth] |
 | TemporalSDF | 1 phase: full | direct_3d | sdf, normal, eikonal |
 | SkeletonSDF | 2 phase: skeleton → joint | direct_3d → direct_3d | [skeleton] → [skeleton, sdf, normal, eikonal] |
+| SpatialSequence | 1 phase: spatial | spatial_sequence | skeleton, spatial_smooth, smooth |
+| PCSpatial | 2 phase: predictive → corrective | spatial_sequence → spatial_sequence | [skeleton, spatial_smooth, smooth] → [skeleton, spatial_smooth, smooth] |
 
 **核心文件**：
 
@@ -943,6 +1143,55 @@ CUDA_VISIBLE_DEVICES=0 python scripts/evaluation/evaluate_3d.py \
     --data_dir data/seq_rr_3d
 ```
 
+### 5.3.2 空间序列模型（SpatialSequence / PCSpatial）
+
+**核心思路**：直接预测中心线节点坐标（31 × 3D），不走体渲染或 SDF 管线。GRU 沿 Z 轴空间传播保证拓扑连通，FractionalMemory 提供物理驱动的时序记忆。
+
+**第一步：采集带 3D 标注的数据**
+
+```bash
+# 与 MS-SCNF 相同的 3D 数据
+python scripts/data_collection/collect.py --3d
+```
+
+**第二步：训练 SpatialSequence**
+
+```bash
+# 分数阶记忆编码器（推荐）
+CUDA_VISIBLE_DEVICES=0 python scripts/training/train_spatial_sequence.py \
+    --data_dir data/seq_rz_c2_sk --encoder fractional --n_epochs 500
+
+# 传统 EMA 编码器
+CUDA_VISIBLE_DEVICES=0 python scripts/training/train_spatial_sequence.py \
+    --data_dir data/seq_rz_c2_sk --encoder ema --n_epochs 500
+```
+
+**第二步（备选）：训练 PCSpatial**
+
+```bash
+# Phase 1: 预测分支（与 SpatialSequence 相同）
+CUDA_VISIBLE_DEVICES=0 python scripts/training/train_pc_spatial.py \
+    --data_dir data/seq_rz_c2_sk --encoder fractional --n_epochs 500
+
+# Phase 2 自动在 Phase 1 完成后开始（修正分支）
+# 修正分支需要图像数据，无图像时退化为纯预测
+```
+
+**第三步：可视化**
+
+```bash
+# 交互式 3D 可视化
+python scripts/evaluation/visualize_3d_shape.py --device cuda:0
+# 选择 SpatialSequence/PCSpatial checkpoint → 数据文件 → 帧范围
+```
+
+**训练结果**：
+
+| 模型 | 编码器 | Epochs | 全部序列 CD | 测试序列 CD |
+|------|--------|--------|------------|------------|
+| SpatialSequence | FractionalMemory | 44 | 0.001184 | 0.001416 |
+| PCSpatial (pred) | FractionalMemory | 48 | 0.001114 | 0.001154 |
+
 ### 5.4 深度增强模型（Depth-CMSTNF / RGB-D Neural Field）
 
 **第一步：采集含深度图的数据**
@@ -1097,3 +1346,7 @@ python scripts/evaluation/visualize_3d_shape.py \
 - **骨架局部柱坐标**：`SkeletonConditionedDensity` 使用 `(dist, t_axial)` 而非 3D 绝对坐标，环向角度 `theta` 已计算但当前不使用。旧的 `point_to_segment_distance()` 保留供 SkeletonSDF 等模型使用。
 - **跨视角 loss 设计**：reproj 和 consist 均不做 alpha 硬门控，全部采样射线参与。consist 对比同一 3D 点两视角的渲染结果（模型自洽性），reproj 对比视角 B 渲染与 GT（监督信号）。训练初期通过 warmup 课程逐步引入跨视角约束。
 - **超参数搜索**：`train_search.py` 子进程调用 `train_unified.py`，支持网格搜索、dry_run、resume、summarize，中断后可手动修改参数继续。
+- **分数阶记忆编码器**：FractionalMemory（`src/encoders/fractional_memory.py`）是 MultiScaleEMA 的物理驱动替代品，接口完全兼容。训练脚本通过 `--encoder fractional` 切换。GL 权重的 α 参数可学习，训练后可从 checkpoint 的 `temporal.raw_alphas` 读取。
+- **空间序列模型**：SpatialSequence 和 PCSpatial 直接预测中心线节点坐标（31 × 3D），不走体渲染或 SDF 管线。GRU 沿 Z 轴空间传播保证拓扑连通。使用 `dataset_spatial.py` 的 `SpatialSequenceDataset`。
+- **预测-修正架构**：PCSpatial 的 Phase 1 纯预测（等价 SpatialSequence），Phase 2 加入 CNN 图像修正分支（残差学习），设计目标为 sim-to-real 迁移。Phase 2 需要 `--encoder fractional` 以外的图像数据。
+- **可视化支持**：`visualize_3d_shape.py` 支持所有 8 种模型类型（density/SDF/pointcloud/skeleton），骨架模型使用固定坐标轴 + 等比例显示。
