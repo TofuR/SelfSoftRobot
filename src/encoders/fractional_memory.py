@@ -78,6 +78,9 @@ class FractionalMemory(nn.Module):
             w_0 = 1
             w_k = w_{k-1} × (k - 1 - α) / k
 
+        注意：不能用 in-place 赋值 weights[k] = ...，
+        因为 alpha 是可学习参数，in-place 操作会破坏 autograd 版本计数。
+
         Args:
             alpha: 标量，分数阶参数 ∈ (0, 1)
             length: 窗口长度
@@ -85,10 +88,10 @@ class FractionalMemory(nn.Module):
         Returns:
             (length,) 权重张量
         """
-        weights = torch.ones(length, device=alpha.device)
+        w_list = [torch.ones(1, device=alpha.device)]
         for k in range(1, length):
-            weights[k] = weights[k - 1] * (k - 1 - alpha) / k
-        return weights
+            w_list.append(w_list[-1] * (k - 1 - alpha) / k)
+        return torch.cat(w_list)
 
     def forward(self, action_window):
         """计算分数阶记忆物理状态。
