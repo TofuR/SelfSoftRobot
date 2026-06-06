@@ -348,3 +348,40 @@ class MultiViewStrategy(ViewStrategy):
                 fn_first, aw_first, imgs_first) * self.w_consist
 
         return losses
+
+
+def create_view_strategy(dataset, active_losses=None):
+    """从数据集自动创建合适的 ViewStrategy。
+
+    按优先级尝试: 多视角 → get_camera_params → H/W 属性。
+    如果都不匹配返回 None。
+
+    Args:
+        dataset: 已加载的数据集实例。
+        active_losses: 当前 phase 的 active_losses 集合。
+
+    Returns:
+        ViewStrategy 实例或 None。
+    """
+    active_losses = active_losses or set()
+
+    if hasattr(dataset, 'cam_system') and dataset.cam_system.n_views >= 2:
+        return MultiViewStrategy(
+            dataset.cam_system,
+            with_depth="depth" in active_losses,
+            with_consistency="consist" in active_losses,
+            with_reprojection="reproj" in active_losses)
+
+    if hasattr(dataset, 'get_camera_params'):
+        params = dataset.get_camera_params()
+        if params:
+            return SingleViewStrategy(
+                params.get('H', 64), params.get('W', 64), params.get('focal', 130.0),
+                {'eye': params['eye'], 'center': params['center'], 'up': params['up']})
+
+    if hasattr(dataset, 'H') and hasattr(dataset, 'W'):
+        return SingleViewStrategy(
+            dataset.H, dataset.W, dataset.focal,
+            dataset.get_camera_params() if hasattr(dataset, 'get_camera_params') else None)
+
+    return None

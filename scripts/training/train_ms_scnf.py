@@ -21,23 +21,12 @@ if "CUDA_VISIBLE_DEVICES" not in os.environ:
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 import argparse
-import glob
-import numpy as np
 import torch
 
 from src.config.args import add_common_args, add_two_phase_args, resolve_training_config
+from src.utils.data_detect import detect_action_dim
 from src.training.trainer_unified import UnifiedTrainer
-from src.training.view_strategy import SingleViewStrategy
-
-
-def detect_action_dim(data_dir):
-    npz_files = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
-    if not npz_files:
-        raise FileNotFoundError(f"No data in {data_dir}")
-    sample = np.load(npz_files[0])
-    if 'actions' in sample:
-        return sample['actions'].shape[-1]
-    raise ValueError(f"No 'actions' field in {npz_files[0]}")
+from src.rendering.view_strategy import create_view_strategy
 
 
 parser = argparse.ArgumentParser()
@@ -99,16 +88,7 @@ rendering_phase = next((p for p in spec.phases if p.supervision_mode == "renderi
 view_strat = None
 if rendering_phase is not None:
     ds = create_dataset(rendering_phase.dataset_type, args.data_dir, config, rendering_phase)
-    if hasattr(ds, 'get_camera_params'):
-        params = ds.get_camera_params()
-        if params:
-            view_strat = SingleViewStrategy(
-                params.get('H', 64), params.get('W', 64), params.get('focal', 130.0),
-                {'eye': params['eye'], 'center': params['center'], 'up': params['up']})
-    elif hasattr(ds, 'H') and hasattr(ds, 'W'):
-        view_strat = SingleViewStrategy(
-            ds.H, ds.W, ds.focal,
-            ds.get_camera_params() if hasattr(ds, 'get_camera_params') else None)
+    view_strat = create_view_strategy(ds, set(rendering_phase.active_losses))
 
 # -- data_dirs --
 data_dirs = {"sequence": args.data_dir}

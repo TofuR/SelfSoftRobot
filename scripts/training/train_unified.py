@@ -32,10 +32,8 @@ import torch
 
 from config.params import load_config
 from src.utils.config_utils import resolve_config
+from src.utils.data_detect import detect_action_dim
 from src.training.trainer_unified import UnifiedTrainer
-from src.rendering.view_strategy import (
-    SingleViewStrategy, MultiViewStrategy,
-)
 
 
 def create_model(model_type, action_dim, config):
@@ -121,21 +119,6 @@ def create_model(model_type, action_dim, config):
         raise ValueError(f"Unknown model type: {model_type}")
 
 
-def detect_action_dim(model_type, data_dir, config):
-    """从数据中探测 action_dim。"""
-    import numpy as np
-    import glob
-
-    npz_files = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
-    if not npz_files:
-        raise FileNotFoundError(f"No data in {data_dir}")
-
-    sample = np.load(npz_files[0])
-    if 'actions' in sample:
-        return sample['actions'].shape[-1]
-    raise ValueError(f"No 'actions' field in {npz_files[0]}")
-
-
 def train(args):
     defaults = load_config("training")
     config = resolve_config(defaults, {
@@ -153,7 +136,7 @@ def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # ── 探测 action_dim ──
-    action_dim = detect_action_dim(args.model, args.data_dir, config)
+    action_dim = detect_action_dim(args.data_dir)
 
     # ── 创建模型 ──
     model = create_model(args.model, action_dim, config).to(device)
@@ -170,34 +153,25 @@ def train(args):
 
     if needs_rendering:
         from src.training.dataset_factory import create_dataset
-        from src.training.spec import PhaseSpec
+        from src.rendering.view_strategy import create_view_strategy, MultiViewStrategy
 
         rendering_phase = next(p for p in spec.phases if p.supervision_mode == "rendering")
-        active_losses = set(rendering_phase.active_losses)
         ds = create_dataset(rendering_phase.dataset_type, args.data_dir, config, rendering_phase)
 
-        if hasattr(ds, 'cam_system') and ds.cam_system.n_views >= 2:
-            view_strat = MultiViewStrategy(
-                ds.cam_system,
-                with_depth="depth" in active_losses or args.depth,
-                with_consistency="consist" in active_losses or args.consistency,
-                with_reprojection="reproj" in active_losses or args.consistency)
-            print(f"  ViewStrategy: MultiView ({ds.cam_system.n_views} views)")
-        elif hasattr(ds, 'get_camera_params'):
-            params = ds.get_camera_params()
-            if params:
-                cam = params
-                view_strat = SingleViewStrategy(
-                    cam.get('H', 64), cam.get('W', 64), cam.get('focal', 130.0),
-                    {'eye': cam['eye'], 'center': cam['center'], 'up': cam['up']})
-                print(f"  ViewStrategy: SingleView")
-        elif hasattr(ds, 'H') and hasattr(ds, 'W'):
-            view_strat = SingleViewStrategy(
-                ds.H, ds.W, ds.focal,
-                ds.get_camera_params() if hasattr(ds, 'get_camera_params') else None)
-            print(f"  ViewStrategy: SingleView (from dataset)")
+        # CLI 参数可以强制启用 depth/consistency（即使 active_losses 里没有）
+        active_losses = set(rendering_phase.active_losses)
+        if args.depth:
+            active_losses.add("depth")
+        if args.consistency:
+            active_losses.update(["consist", "reproj"])
 
-        if view_strat is None:
+        view_strat = create_view_strategy(ds, active_losses)
+
+        if isinstance(view_strat, MultiViewStrategy):
+            print(f"  ViewStrategy: MultiView ({ds.cam_system.n_views} views)")
+        elif view_strat is not None:
+            print(f"  ViewStrategy: SingleView")
+        else:
             print("  WARNING: rendering phase needs ViewStrategy but couldn't create one")
 
     else:

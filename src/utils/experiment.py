@@ -36,8 +36,7 @@ def create_experiment(base_dir, config=None):
 
     exp_name = f"{prefix}{max_idx + 1}"
     exp_dir = os.path.join(base_dir, exp_name)
-    os.makedirs(os.path.join(exp_dir, "vis"), exist_ok=True)
-    os.makedirs(os.path.join(exp_dir, "model"), exist_ok=True)
+    os.makedirs(exp_dir, exist_ok=True)
 
     if config is not None:
         save_config(exp_dir, config)
@@ -107,6 +106,7 @@ def save_gif(exp_dir, filename, frames_pred, frames_gt, epoch_idx,
 
     ani = animation.FuncAnimation(fig, update, frames=n_frames, blit=True)
     save_path = os.path.join(exp_dir, "vis", filename)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
     ani.save(save_path, writer='pillow', fps=fps)
     plt.close()
     return save_path

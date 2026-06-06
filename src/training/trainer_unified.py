@@ -14,11 +14,9 @@ Loss 分两层:
     trainer.train(data_dirs, n_epochs_per_phase={...})
 """
 
-import glob
+import csv
 import os
 import torch
-import torch.nn.functional as F
-import numpy as np
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -26,6 +24,7 @@ from src.training.phase_strategy import PhaseStrategy
 from src.rendering.view_strategy import ViewStrategy
 from src.training.dataset_factory import create_dataset, get_collate_fn
 from src.utils.experiment import create_experiment
+from src.evaluation.shape_evaluation import evaluate_shape_during_training
 from config.params import load_config
 from src.evaluation.surface_sampling import sample_gt_surface, model_output_to_pointcloud
 from src.evaluation.shape_metrics import chamfer_distance, f_score, hausdorff_distance
@@ -230,78 +229,6 @@ class UnifiedTrainer:
 
         self.views.setup(self.device, self.config)
 
-    def _evaluate_shape(self, phase_spec, data_dir, epoch, exp_dir):
-        """在训练中运行形状评估，结果保存到 shape_metrics.json。"""
-        import json as _json
-        eval_cfg = self.config.get("evaluation", {})
-        n_eval = eval_cfg.get("n_eval_samples", 100)
-        n_gt = eval_cfg.get("n_gt_points", 1000)
-        thresholds = eval_cfg.get("fscore_thresholds", [0.005, 0.01, 0.02])
-
-        # 确定模型类型
-        model_type = self.model_tag
-        if model_type not in ("flowmatch", "mstnf", "cmstnf", "ms_scnf",
-                              "sdf", "skeleton_sdf"):
-            return
-
-        npz_files = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
-        if not npz_files:
-            return
-        if n_eval > 0 and len(npz_files) > n_eval:
-            indices = np.linspace(0, len(npz_files) - 1, n_eval, dtype=int)
-            npz_files = [npz_files[i] for i in indices]
-
-        self.model.eval()
-        all_results = []
-        for npz_path in npz_files:
-            data = np.load(npz_path, allow_pickle=True)
-            T = len(data["actions"])
-            t = T // 2
-            try:
-                from scripts.evaluation.evaluate_shape import evaluate_single_sample
-                result = evaluate_single_sample(
-                    self.model, model_type, data, t,
-                    self.config.get("temporal", {}).get("window_size", 20),
-                    self.device, {},
-                    {"n_gt_points": n_gt, "n_pred_points": n_gt,
-                     "fscore_thresholds": thresholds,
-                     "density_threshold": eval_cfg.get("density_threshold", 0.5),
-                     "grid_res": eval_cfg.get("grid_res", 30)})
-                if result is not None:
-                    all_results.append(result)
-            except Exception:
-                pass
-
-        self.model.train()
-
-        if not all_results:
-            return
-
-        metrics = {"phase": phase_spec.name, "epoch": epoch,
-                   "n_samples": len(all_results)}
-        for key in all_results[0]:
-            values = [r[key] for r in all_results]
-            metrics[key] = {"mean": float(np.mean(values)),
-                            "std": float(np.std(values))}
-
-        metrics_path = os.path.join(exp_dir, "shape_metrics.json")
-        history = {"model": type(self.model).__name__,
-                   "data": data_dir, "evaluations": []}
-        if os.path.exists(metrics_path):
-            with open(metrics_path, "r") as f:
-                history = _json.load(f)
-        history["evaluations"].append(metrics)
-        with open(metrics_path, "w") as f:
-            _json.dump(history, f, indent=2, ensure_ascii=False)
-
-        cd = metrics.get("chamfer_distance", {}).get("mean", 0)
-        hd = metrics.get("hausdorff_distance", {}).get("mean", 0)
-        mid_key = [k for k in metrics if "f_score" in k]
-        mid_fs = metrics[mid_key[len(mid_key)//2]]["mean"] if mid_key else 0
-        pf1 = metrics.get("proj_f1", {}).get("mean", 0)
-        print(f"  [Eval] Epoch {epoch} | CD={cd:.5f} | F@10mm={mid_fs:.3f} | "
-              f"HD={hd:.5f} | ProjF1={pf1:.3f}")
-
     def train(self, data_dirs, exp_dir=None, n_epochs_per_phase=None,
               skip_phases=None):
         """统一训练入口。
@@ -366,6 +293,11 @@ class UnifiedTrainer:
             phase_dir = os.path.join(exp_dir, f"phase_{phase_spec.name}")
             os.makedirs(os.path.join(phase_dir, "model"), exist_ok=True)
 
+            # 初始化 loss log CSV（第一个 epoch 后根据实际 loss 名写 header）
+            csv_path = os.path.join(phase_dir, "loss_log.csv")
+            csv_file = open(csv_path, "w", newline="", encoding="utf-8")
+            csv_header_written = False
+
             for epoch in range(1, n_epochs + 1):
                 self.model.train()
                 self._current_epoch = epoch
@@ -406,6 +338,30 @@ class UnifiedTrainer:
                     f"{k}={v / max(n_batches, 1):.4f}" for k, v in epoch_details.items())
                 print(f"  Epoch {epoch} | Loss: {avg:.5f} | {detail_str}")
 
+                # 写入 loss log CSV
+                current_lr = optimizer.param_groups[0]["lr"]
+                loss_names = sorted(epoch_details.keys())
+                if not csv_header_written:
+                    header = ["epoch", "total"] + loss_names + ["lr"]
+                    csv_writer = csv.DictWriter(csv_file, fieldnames=header)
+                    csv_writer.writeheader()
+                    csv_header_written = True
+                csv_row = {"epoch": epoch, "total": f"{avg:.6f}", "lr": f"{current_lr:.8f}"}
+                for k, v in epoch_details.items():
+                    csv_row[k] = f"{v / max(n_batches, 1):.6f}"
+                csv_writer.writerow(csv_row)
+                csv_file.flush()
+
+                # 每 10 epoch 或最后一个 epoch 打印编码器参数
+                temporal = getattr(self.model, "temporal", None)
+                if temporal is not None and (epoch % 10 == 0 or epoch == 1 or epoch == n_epochs):
+                    if hasattr(temporal, "alphas"):
+                        a = temporal.alphas.detach().cpu().numpy()
+                        print(f"    alphas: {[round(x, 4) for x in a]}")
+                    elif hasattr(temporal, "decays"):
+                        d = temporal.decays.detach().cpu().numpy()
+                        print(f"    decays: {[round(x, 4) for x in d]}")
+
                 if avg < best_val:
                     best_val = avg
                     torch.save(self.model.state_dict(),
@@ -419,9 +375,12 @@ class UnifiedTrainer:
                 # 形状评估（每 eval_interval epoch）
                 eval_interval = self.config.get("evaluation", {}).get("eval_interval", 0)
                 if eval_interval > 0 and (epoch % eval_interval == 0 or epoch == n_epochs):
-                    self._evaluate_shape(phase_spec, data_dir, epoch, exp_dir)
+                    evaluate_shape_during_training(
+                        self.model, self.model_tag, self.config,
+                        self.device, phase_spec.name, data_dir, epoch, exp_dir)
 
             # 保存 Phase 权重
+            csv_file.close()
             save_path = self._save_phase_modules(phase_dir, phase_spec)
             if save_path:
                 saved_modules_by_phase[phase_spec.name] = {
