@@ -100,7 +100,7 @@ def scan_npz_files(data_dir):
 
 def get_action_window(npz_path, frame_idx, window_size, norm_factor):
     d = np.load(npz_path)
-    actions = d['actions'].astype(np.float32) * norm_factor
+    actions = d['actions'].astype(np.float32) / norm_factor
     start = max(0, frame_idx - window_size + 1)
     window = actions[start:frame_idx + 1]
     if len(window) < window_size:

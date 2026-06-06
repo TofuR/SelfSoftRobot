@@ -61,8 +61,12 @@ def render_skeleton_html(result, gt_skeleton=None, pred_skeleton=None, title="")
     import plotly.graph_objects as go
 
     fig = go.Figure()
+
+    # 收集所有点的范围，用于设置等比例坐标轴
+    all_pts = []
     pts = result.get('points')
     if pts is not None:
+        all_pts.append(pts)
         fig.add_trace(go.Scatter3d(
             x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
             mode='lines+markers',
@@ -70,11 +74,28 @@ def render_skeleton_html(result, gt_skeleton=None, pred_skeleton=None, title="")
             line=dict(color='blue', width=4),
             name='Predicted skeleton',
         ))
+    if gt_skeleton is not None:
+        all_pts.append(gt_skeleton.T)  # (3, N) → (N, 3)
+
+    # 计算等比例坐标轴范围（避免细长臂被压扁）
+    if all_pts:
+        combined = np.concatenate(all_pts, axis=0)
+        ranges = combined.max(axis=0) - combined.min(axis=0)
+        max_range = max(ranges.max(), 0.01)
+        centers = (combined.max(axis=0) + combined.min(axis=0)) / 2
+        fig.update_layout(scene=dict(
+            xaxis=dict(range=[centers[0] - max_range/2, centers[0] + max_range/2]),
+            yaxis=dict(range=[centers[1] - max_range/2, centers[1] + max_range/2]),
+            zaxis=dict(range=[centers[2] - max_range/2, centers[2] + max_range/2]),
+            aspectmode='cube',
+        ))
+    else:
+        fig.update_layout(scene=dict(aspectmode='data'))
+
     _add_skeleton_traces(fig, gt_skeleton, pred_skeleton)
     fig.update_layout(
         title=title or 'Skeleton Prediction',
-        scene=dict(aspectmode='data'),
-        width=700, height=600, margin=dict(l=0, r=0, t=30, b=0),
+        width=700, height=700, margin=dict(l=0, r=0, t=30, b=0),
     )
     return fig
 
