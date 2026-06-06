@@ -4,12 +4,16 @@ Flow Matching 的核心组件：预测条件速度场 u_theta(X_t, t | c)。
 
 架构:
   SinusoidalPositionEmbedding(t) → t_emb
-  拼接 [physics_state, t_emb] → FiLM 参数 (gamma, beta)
+  Action → action_embed (per-point broadcast)
+  Z坐标 → z_embed (per-point)
+  action_embed × z_embed → interaction (物理耦合)
+  拼接 [cond, t_emb, interaction] → FiLM 参数 (gamma, beta)
   逐点 MLP + FiLM 调制 → 预测速度
 
-FiLM (Feature-wise Linear Modulation):
-  h' = gamma * h + beta
-  通过仿射变换注入条件信息，比拼接方式参数更少、调制更灵活。
+关键设计:
+  - Action 直接注入 velocity net（不经过 EMA 瓶颈）
+  - Action × Z 交互项：显式建模"不同位置对 action 的响应不同"
+  - EMA cond 提供时序上下文（迟滞），action_embed 提供精确条件
 """
 
 import math
@@ -45,21 +49,27 @@ class SinusoidalPositionEmbedding(nn.Module):
 
 
 class FiLMVelocityNet(nn.Module):
-    """FiLM 条件速度网络。
+    """FiLM 条件速度网络（带直接 action 注入 + action-z 交互）。
 
-    逐点处理输入点云，通过 FiLM 层注入条件信息（动作编码 + 时间），
-    预测每个点在 Flow Matching ODE 中的速度。
+    与纯 FiLM 的区别:
+      - 原方案: FiLM(cond, t_emb, z_emb) — cond 被 EMA 瓶颈压缩，不同 action 几乎无区别
+      - 新方案: FiLM(cond, t_emb, action_z_interaction) — action 直接参与，与 z 位置耦合
+
+    物理动机:
+      软臂弯曲 δ(z) ∝ action × z²，即变形量 = action × 位置响应函数。
+      交互项让网络直接看到"在 z 位置，当前 action 的效果"，而非从 EMA 压缩后间接推断。
 
     Args:
         point_dim: 点坐标维度（默认 3D）。
-        cond_dim: 条件向量维度（与 MultiScaleEMA hidden_dim 对齐）。
+        cond_dim: EMA 条件向量维度（时序上下文/迟滞）。
+        action_dim: 原始 action 维度。
         time_dim: 时间嵌入维度。
         hidden_dim: MLP 隐层维度。
         n_layers: FiLM 调制层数。
     """
 
-    def __init__(self, point_dim=3, cond_dim=128, time_dim=64,
-                 hidden_dim=256, n_layers=6):
+    def __init__(self, point_dim=3, cond_dim=128, action_dim=2,
+                 time_dim=64, hidden_dim=256, n_layers=6):
         super().__init__()
         self.point_dim = point_dim
         self.hidden_dim = hidden_dim
@@ -72,26 +82,44 @@ class FiLMVelocityNet(nn.Module):
             nn.SiLU(),
         )
 
-        # Z 坐标嵌入：让每个点根据自身 z 位置获得不同的 FiLM 参数
-        self.z_embed = nn.Sequential(
-            nn.Linear(1, 32),
+        # Action 嵌入：直接从原始 action 值生成 per-point 特征
+        # 不经过 EMA 瓶颈，保留精确的 action 信息
+        action_embed_dim = 32
+        self.action_embed = nn.Sequential(
+            nn.Linear(action_dim, action_embed_dim),
             nn.SiLU(),
-            nn.Linear(32, 32),
+            nn.Linear(action_embed_dim, action_embed_dim),
         )
+
+        # Z 坐标嵌入：per-point 位置感知
         z_embed_dim = 32
+        self.z_embed = nn.Sequential(
+            nn.Linear(1, z_embed_dim),
+            nn.SiLU(),
+            nn.Linear(z_embed_dim, z_embed_dim),
+        )
+
+        # Action × Z 交互：建模"位置 × 条件"的物理耦合
+        # 软臂: 基底(z小)几乎不动，末端(z大)响应最大
+        interaction_dim = 32
+        self.interaction = nn.Sequential(
+            nn.Linear(action_embed_dim + z_embed_dim, interaction_dim),
+            nn.SiLU(),
+            nn.Linear(interaction_dim, interaction_dim),
+        )
 
         # 点坐标输入层
         self.point_in = nn.Linear(point_dim, hidden_dim)
 
-        # FiLM 调制层: [cond + time_emb + z_emb] → (gamma, beta)
-        # z_emb 是 per-point 的 → FiLM 输出也是 per-point
-        film_input_dim = cond_dim + time_dim + z_embed_dim
+        # FiLM 调制层: [cond(EMA) + t_emb + interaction] → (gamma, beta)
+        # cond 提供时序上下文，interaction 提供精确 action-z 耦合
+        film_input_dim = cond_dim + time_dim + interaction_dim
         self.film_layers = nn.ModuleList([
             nn.Linear(film_input_dim, 2 * hidden_dim)
             for _ in range(n_layers)
         ])
 
-        # MLP 中间层（FiLM 调制后接的线性层）
+        # MLP 中间层
         self.mlp_layers = nn.ModuleList()
         for i in range(n_layers - 1):
             self.mlp_layers.append(nn.Linear(hidden_dim, hidden_dim))
@@ -106,13 +134,14 @@ class FiLMVelocityNet(nn.Module):
             nn.init.zeros_(layer.bias)
             layer.bias.data[:self.hidden_dim] = 1.0
 
-    def forward(self, x_t, t, cond):
+    def forward(self, x_t, t, cond, action=None):
         """预测条件速度场。
 
         Args:
-            x_t:  (B, N, 3) 时间 t 处的带噪点云。
-            t:    (B, 1) Flow 时间步 ∈ [0, 1]。
-            cond: (B, cond_dim) 条件向量（MultiScaleEMA 输出）。
+            x_t:    (B, N, 3) 时间 t 处的带噪点云。
+            t:      (B, 1) Flow 时间步 ∈ [0, 1]。
+            cond:   (B, cond_dim) EMA 条件向量（时序上下文/迟滞）。
+            action: (B, action_dim) 当前帧原始 action 值。None 时退化为纯 EMA 条件。
 
         Returns:
             velocity: (B, N, 3) 预测速度。
@@ -124,25 +153,37 @@ class FiLMVelocityNet(nn.Module):
 
         # Z 坐标嵌入（per-point）
         z_coord = x_t[:, :, 2:3]  # (B, N, 1)
-        z_emb = self.z_embed(z_coord)  # (B, N, 32)
+        z_emb = self.z_embed(z_coord)  # (B, N, z_embed_dim)
 
-        # FiLM 条件: [cond, t_emb, z_emb] → per-point (gamma, beta)
+        # Action 嵌入 + 与 Z 交互
+        if action is not None:
+            a_emb = self.action_embed(action)  # (B, action_embed_dim)
+            a_emb = a_emb.unsqueeze(1).expand(-1, N, -1)  # (B, N, action_embed_dim)
+        else:
+            # 退化模式：无 action 信息时用零填充
+            a_emb = torch.zeros(B, N, 32, device=x_t.device)
+
+        # Action × Z 交互: [a_emb, z_emb] → interaction
+        interaction_input = torch.cat([a_emb, z_emb], dim=-1)  # (B, N, a_dim + z_dim)
+        interaction = self.interaction(interaction_input)  # (B, N, interaction_dim)
+
+        # FiLM 条件: [cond(EMA), t_emb, interaction(action×z)]
         film_input = torch.cat([
-            cond.unsqueeze(1).expand(-1, N, -1),   # (B, N, cond_dim)
-            t_emb.unsqueeze(1).expand(-1, N, -1),  # (B, N, time_dim)
-            z_emb,                                   # (B, N, 32)
-        ], dim=-1)  # (B, N, cond_dim + time_dim + 32)
+            cond.unsqueeze(1).expand(-1, N, -1),   # (B, N, cond_dim) — 时序上下文
+            t_emb.unsqueeze(1).expand(-1, N, -1),  # (B, N, time_dim) — 时间
+            interaction,                             # (B, N, interaction_dim) — action-z 耦合
+        ], dim=-1)
 
         # 点特征
         h = self.point_in(x_t)  # (B, N, hidden_dim)
 
-        # 逐层 FiLM 调制 + 残差连接（现在 per-point 调制）
+        # 逐层 FiLM 调制 + 残差连接
         for i in range(self.n_layers):
-            h_residual = h  # 保存用于残差连接
+            h_residual = h
 
             gamma_beta = self.film_layers[i](film_input)  # (B, N, 2*hidden_dim)
-            gamma = gamma_beta[:, :, :self.hidden_dim]    # (B, N, hidden_dim)
-            beta = gamma_beta[:, :, self.hidden_dim:]      # (B, N, hidden_dim)
+            gamma = gamma_beta[:, :, :self.hidden_dim]
+            beta = gamma_beta[:, :, self.hidden_dim:]
 
             h = gamma * h + beta  # per-point FiLM 调制
 

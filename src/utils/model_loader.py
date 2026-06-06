@@ -216,8 +216,14 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
             ode_solver=pc_cfg.get('ode_solver', 'euler'),
             n_points=pc_cfg.get('n_surface_points', 1000),
         ).to(device)
-        # strict=False: 旧 checkpoint 没有 pc_center/pc_scale buffer
+        # velocity_net 新增了 action_embed/interaction/z_embed 模块
+        # 旧 checkpoint 无这些权重 → strict=False 允许部分加载
+        # strict=False: 旧 checkpoint 没有 pc_center/pc_scale/action_norm_factor buffer
         model.load_state_dict(state_dict, strict=False)
+
+        # 从 checkpoint 恢复 action_norm_factor（优先于文件）
+        if 'action_norm_factor' in state_dict:
+            norm_factor = state_dict['action_norm_factor'].item()
 
     elif model_type == 'ms_scnf':
         from src.models.model_ms_scnf import MSSCNFModel

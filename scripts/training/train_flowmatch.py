@@ -1,10 +1,15 @@
 """train_flowmatch.py -- Flow Matching 点云生成训练 via UnifiedTrainer。
 
+改进:
+  - action_recon loss: 强制编码器保留 action 信息
+  - compactness loss: 惩罚 z-band 内 x,y 扩散（攻击扇形）
+  - action_norm_factor 保存到 checkpoint（推理时自动恢复）
+
 Usage:
-    CUDA_VISIBLE_DEVICES=0 python scripts/training/train_flowmatch.py
-    CUDA_VISIBLE_DEVICES=0 python scripts/training/train_flowmatch.py \
+    CUDA_VISIBLE_DEVICES=3 python scripts/training/train_flowmatch.py
+    CUDA_VISIBLE_DEVICES=3 python scripts/training/train_flowmatch.py \
         --data_dir data/seq_rr_3d --n_epochs 500
-    CUDA_VISIBLE_DEVICES=0 python scripts/training/train_flowmatch.py \
+    CUDA_VISIBLE_DEVICES=3 python scripts/training/train_flowmatch.py \
         --sigma 0.3 --ode_steps 50 --velocity_net_hidden 256
 """
 
@@ -47,6 +52,9 @@ parser.add_argument("--velocity_net_hidden", type=int, default=None)
 parser.add_argument("--velocity_net_layers", type=int, default=None)
 parser.add_argument("--time_embed_dim", type=int, default=None)
 parser.add_argument("--n_surface_points", type=int, default=None)
+parser.add_argument("--encoder", type=str, default="ema",
+                    choices=["ema", "fractional"],
+                    help="Temporal encoder: ema or fractional")
 args = parser.parse_args()
 
 config = resolve_training_config({
@@ -85,21 +93,24 @@ model = FlowMatchPointCloudModel(
     ode_steps=pc_cfg.get("ode_steps", 50),
     ode_solver=pc_cfg.get("ode_solver", "euler"),
     n_points=pc_cfg.get("n_surface_points", 1000),
+    encoder_type=args.encoder,
 ).to(device)
 
 spec = model.training_spec
 n_params = sum(p.numel() for p in model.parameters())
 print("\nModel: FlowMatchPointCloud")
 print(f"  Action dim: {action_dim}")
+print(f"  Encoder: {args.encoder}")
 print(f"  Parameters: {n_params:,}")
 print(f"  Sigma: {model.sigma}")
 print(f"  ODE steps: {model.ode_steps} ({model.ode_solver})")
-print(f"  Phases: {[p.name for p in spec.phases]}")
+print(f"  Active losses: {spec.phases[0].active_losses}")
+print(f"  Loss weights: { {k: v for k, v in config.get('loss_weights', {}).items() if not k.startswith('_')} }")
 
 # -- data_dirs --
 data_dirs = {"sequence": args.data_dir}
 
-# -- Set point cloud normalization from dataset --
+# -- Set normalization from dataset (pc + action) --
 from src.data.dataset_pointcloud import PointCloudDataset
 norm_dataset = PointCloudDataset(
     args.data_dir,
@@ -107,7 +118,13 @@ norm_dataset = PointCloudDataset(
     n_surface_points=pc_cfg.get("n_surface_points", 1000),
 )
 pc_center, pc_scale = norm_dataset.get_normalization_params()
-model.set_normalization(pc_center, pc_scale)
+action_norm_factor = norm_dataset.norm_factor  # max(|all_actions|)
+
+# 保存到模型 buffer → 随 checkpoint 一起保存
+model.set_normalization(pc_center, pc_scale, action_norm_factor)
+print(f"  Action norm factor: {action_norm_factor:.4f}")
+print(f"  PC center: {pc_center}")
+print(f"  PC scale: {pc_scale}")
 
 # -- Train (no ViewStrategy -- pointcloud supervision) --
 trainer = UnifiedTrainer(model, view_strategy=None, config=config)
