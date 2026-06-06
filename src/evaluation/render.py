@@ -57,16 +57,13 @@ def render_skeleton_html(result, gt_skeleton=None, pred_skeleton=None, title="")
 
     用于 SpatialSequence/PCSpatial 等直接输出骨架坐标的模型。
     result 格式同 query_skeleton_direct 返回值。
+    坐标轴固定为仿真全局范围，避免帧间跳变。
     """
     import plotly.graph_objects as go
 
     fig = go.Figure()
-
-    # 收集所有点的范围，用于设置等比例坐标轴
-    all_pts = []
     pts = result.get('points')
     if pts is not None:
-        all_pts.append(pts)
         fig.add_trace(go.Scatter3d(
             x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
             mode='lines+markers',
@@ -74,25 +71,23 @@ def render_skeleton_html(result, gt_skeleton=None, pred_skeleton=None, title="")
             line=dict(color='blue', width=4),
             name='Predicted skeleton',
         ))
-    if gt_skeleton is not None:
-        all_pts.append(gt_skeleton.T)  # (3, N) → (N, 3)
-
-    # 计算等比例坐标轴范围（避免细长臂被压扁）
-    if all_pts:
-        combined = np.concatenate(all_pts, axis=0)
-        ranges = combined.max(axis=0) - combined.min(axis=0)
-        max_range = max(ranges.max(), 0.01)
-        centers = (combined.max(axis=0) + combined.min(axis=0)) / 2
-        fig.update_layout(scene=dict(
-            xaxis=dict(range=[centers[0] - max_range/2, centers[0] + max_range/2]),
-            yaxis=dict(range=[centers[1] - max_range/2, centers[1] + max_range/2]),
-            zaxis=dict(range=[centers[2] - max_range/2, centers[2] + max_range/2]),
-            aspectmode='cube',
-        ))
-    else:
-        fig.update_layout(scene=dict(aspectmode='data'))
-
     _add_skeleton_traces(fig, gt_skeleton, pred_skeleton)
+
+    # 固定坐标轴：仿真全局范围 + 少量 margin，等比例显示
+    # x≈0, y∈[-0.35, 0.30], z∈[-0.05, 0.55]
+    # 最大跨度 0.6，以此为基准等比例缩放
+    max_range = 0.6
+    fig.update_layout(scene=dict(
+        xaxis=dict(range=[-0.3, 0.3]),
+        yaxis=dict(range=[-0.35, 0.25]),
+        zaxis=dict(range=[-0.05, 0.55]),
+        aspectmode='cube',
+        camera=dict(
+            eye=dict(x=1.5, y=0.0, z=0.5),
+            center=dict(x=0.0, y=0.0, z=-0.1),
+            up=dict(x=0, y=0, z=1),
+        ),
+    ))
     fig.update_layout(
         title=title or 'Skeleton Prediction',
         width=700, height=700, margin=dict(l=0, r=0, t=30, b=0),
@@ -259,10 +254,26 @@ def render_animation(results, model_type, threshold, gt_skeletons,
             step['args'][0]['visible'][i * n_traces_per_frame + j] = True
         steps.append(step)
 
+    # 坐标轴：骨架模型固定范围，其他模型自适应
+    if is_skeleton:
+        scene_cfg = dict(
+            xaxis=dict(range=[-0.3, 0.3]),
+            yaxis=dict(range=[-0.35, 0.25]),
+            zaxis=dict(range=[-0.05, 0.55]),
+            aspectmode='cube',
+            camera=dict(
+                eye=dict(x=1.5, y=0.0, z=0.5),
+                center=dict(x=0.0, y=0.0, z=-0.1),
+                up=dict(x=0, y=0, z=1),
+            ),
+        )
+    else:
+        scene_cfg = dict(aspectmode='data')
+
     fig.update_layout(
         sliders=[dict(active=0, steps=steps, currentvalue=dict(prefix='Frame '))],
         title=f'{model_type.upper()} — Animation ({n_frames} frames)',
-        scene=dict(aspectmode='data'),
+        scene=scene_cfg,
         width=800, height=700, margin=dict(l=0, r=0, t=50, b=50),
     )
 
