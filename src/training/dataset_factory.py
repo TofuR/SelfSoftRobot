@@ -99,6 +99,14 @@ def create_dataset(dataset_type: str, data_dir: str, config: dict,
             n_surface_points=pc_cfg.get("n_surface_points", 1000),
         )
 
+    elif dataset_type == "spatial_sequence":
+        from src.data.dataset_spatial import SpatialSequenceDataset
+        return SpatialSequenceDataset(
+            data_dir,
+            seq_len=seq_len,
+            pairs="smooth" in phase_spec.active_losses,
+        )
+
     else:
         raise ValueError(f"Unknown dataset_type: {dataset_type}")
 
@@ -123,6 +131,9 @@ def get_collate_fn(dataset_type: str, dataset: Dataset):
         return _collate_skeleton_sdf
     elif dataset_type == "pointcloud":
         return _collate_pointcloud
+    elif dataset_type == "spatial_sequence":
+        from src.data.dataset_spatial import spatial_collate_fn
+        return spatial_collate_fn
     else:
         raise ValueError(f"Unknown dataset_type: {dataset_type}")
 

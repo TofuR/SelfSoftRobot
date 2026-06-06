@@ -28,7 +28,10 @@
         "recon_next": 0.3,
         "smoothness": 0.1,
         "cd": 0.1,
-        "_doc": "recon_current=当前帧重建主目标，recon_next=下一帧预测(鼓励时序一致性)，smoothness=物理状态变化惩罚，cd=端点Chamfer Distance辅助损失(Flow Matching用)"
+        "compact": 1.0,
+        "skeleton": 1.0,
+        "spatial_smooth": 0.5,
+        "_doc": "skeleton=骨架回归MSE权重(SpatialSequenceModel用), spatial_smooth=空间平滑约束权重。其余同各模型通用权重"
     },
 
     "model": {

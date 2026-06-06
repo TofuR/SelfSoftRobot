@@ -26,4 +26,10 @@ def __getattr__(name):
     if name == "FlowMatchPointCloudModel":
         from .model_flowmatch import FlowMatchPointCloudModel
         return FlowMatchPointCloudModel
+    if name == "SpatialSequenceModel":
+        from .model_spatial_sequence import SpatialSequenceModel
+        return SpatialSequenceModel
+    if name == "PCSpatialSequenceModel":
+        from .model_pc_spatial import PCSpatialSequenceModel
+        return PCSpatialSequenceModel
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
