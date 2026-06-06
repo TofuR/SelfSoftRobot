@@ -39,6 +39,8 @@ parser.add_argument("--phase", type=str, default=None,
 args = parser.parse_args()
 
 config = resolve_training_config({
+    "optimization.n_epochs": args.n_epochs,
+    "optimization.lr": args.lr,
     "temporal.window_size": args.window_size,
     "temporal.n_scales": args.n_scales,
     "temporal.hidden_dim": args.hidden_dim,

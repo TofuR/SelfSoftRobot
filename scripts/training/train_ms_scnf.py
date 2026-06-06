@@ -40,6 +40,8 @@ parser.add_argument("--w_render", type=float, default=None)
 args = parser.parse_args()
 
 config = resolve_training_config({
+    "optimization.n_epochs": args.n_epochs,
+    "optimization.lr": args.lr,
     "ms_scnf.w_skeleton_fine": args.w_skeleton_fine,
     "ms_scnf.w_skeleton_medium": args.w_skeleton_medium,
     "ms_scnf.w_skeleton_coarse": args.w_skeleton_coarse,

@@ -38,6 +38,8 @@ parser.add_argument("--deform_lr", type=float, default=None)
 args = parser.parse_args()
 
 config = resolve_training_config({
+    "optimization.n_epochs": args.n_epochs,
+    "optimization.lr": args.lr,
     "canonical.deform_lr": args.deform_lr,
 })
 

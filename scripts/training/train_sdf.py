@@ -37,6 +37,8 @@ parser.add_argument("--n_off_surface", type=int, default=None, help="Off-surface
 args = parser.parse_args()
 
 config = resolve_training_config({
+    "optimization.n_epochs": args.n_epochs,
+    "optimization.lr": args.lr,
     "temporal.window_size": args.window_size,
     "temporal.n_scales": args.n_scales,
     "temporal.hidden_dim": args.hidden_dim,

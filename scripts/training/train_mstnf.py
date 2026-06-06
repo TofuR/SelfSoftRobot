@@ -29,6 +29,8 @@ parser.add_argument("--window_size", type=int, default=None)
 args = parser.parse_args()
 
 config = resolve_training_config({
+    "optimization.n_epochs": args.n_epochs,
+    "optimization.lr": args.lr,
     "optimization.batch_size": args.batch_size,
     "temporal.window_size": args.window_size,
 })
