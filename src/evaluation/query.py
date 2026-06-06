@@ -183,7 +183,11 @@ def query_skeleton_direct(model, action_window):
         dict: {skeleton: (1, N, 3) numpy, points: (N, 3) numpy}
               坐标为反归一化后的世界坐标。
     """
-    pred = model(action_window)  # (1, N, 3) 归一化空间
+    # SpatialSequence 有 forward(tensor)，PCSpatial 只有 forward_predictive(batch)
+    if hasattr(model, 'forward_predictive'):
+        pred = model.forward_predictive({"action_window": action_window})
+    else:
+        pred = model(action_window)  # (1, N, 3) 归一化空间
     pred_np = pred.cpu().numpy()
     # 反归一化到世界坐标
     center = model.pc_center.cpu().numpy()   # (1, 1, 3)
