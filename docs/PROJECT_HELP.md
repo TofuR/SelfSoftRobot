@@ -42,7 +42,8 @@ SelfSoftRobot/
 ├── src/
 │   ├── encoders/                    # 时序编码器（从 models/ 提取）
 │   │   ├── multi_scale_ema.py       #   MultiScaleEMA（多尺度指数移动平均）
-│   │   └── fractional_memory.py     #   FractionalMemory（分数阶记忆编码器）
+│   │   ├── fractional_memory.py     #   FractionalMemory（分数阶幂律记忆编码器）
+│   │   └── gamma_laguerre.py        #   GammaLaguerreMemory（Gamma 延迟峰记忆核）
 │   ├── fields/                      # 神经场模块（从 models/ 提取）
 │   │   ├── canonical.py             #   CanonicalField（规范场）
 │   │   ├── deformation.py           #   DeformationField（变形场）
@@ -761,6 +762,7 @@ L_smooth:        时序平滑（TemporalMixin）
 | `MLPDecoder` | 通用解码 MLP：`input → 2d → 2d → d → d/2 → output`，density 用 softplus 激活 |
 | `MultiScaleEMA` | 多尺度指数移动平均：用 N 个可学习衰减率分别做 EMA，再加权拼接 |
 | `FractionalMemory` | 分数阶记忆：用 Grünwald-Letnikov 离散化实现幂律衰减记忆核，接口与 EMA 兼容 |
+| `GammaLaguerreMemory` | Gamma/Laguerre 延迟核：`w_t = t^(k-1) * λ^t / Z`，钟罩形权重捕获延迟峰值响应，k=1 退化为 EMA |
 | `TemporalLSTMEncoder` | LSTM 时序编码器（旧版，已被 EMA 替代） |
 
 **`skeleton_heads.py` 骨架回归头**（从 model_ms_scnf.py 提取，供 MS-SCNF 和 SkeletonSDF 复用）：
@@ -785,6 +787,7 @@ L_smooth:        时序平滑（TemporalMixin）
 |------|------|------|
 | `src/encoders/` | `multi_scale_ema.py` | `MultiScaleEMA` — 多尺度指数移动平均时序编码 |
 | | `fractional_memory.py` | `FractionalMemory` — 分数阶幂律记忆核（GL 离散化） |
+| | `gamma_laguerre.py` | `GammaLaguerreMemory` — Gamma 延迟峰记忆核（k/λ 可学习） |
 | `src/fields/` | `canonical.py` | `CanonicalField` — 规范场 MLP |
 | | `deformation.py` | `DeformationField` — 变形场 MLP |
 | | `skeleton_density.py` | `SkeletonConditionedDensity` — 骨架局部柱坐标条件密度场 (dist + t_axial) |
@@ -859,7 +862,15 @@ L_smooth:        时序平滑（TemporalMixin）
 | `sdf` | **SDF 专用**：表面/近表面/离表面采样点数、SDF/法向量/Eikonal 权重 |
 | `evaluation` | **评估**：网格分辨率、动画 FPS |
 
-CLI 参数在 `src/config/args.py` 定义，运行时可覆盖 `training.json` 默认值。
+CLI 参数在 `src/config/args.py` 定义，运行时可覆盖 `training.json` 默认值。共享 CLI 基础设施：
+
+| 工具函数 | 作用 |
+|---------|------|
+| `add_common_args(parser)` | 10 个通用参数（data_dir, lr, n_epochs, batch_size, num_workers, window_size, n_scales, hidden_dim, eval_interval, seed） |
+| `add_two_phase_args(parser)` | 两阶段参数（phase, exp_dir, phase1_epochs, phase2_epochs） |
+| `build_common_overrides(args)` | 从 args 自动提取覆盖项，避免每个脚本重复写字典 |
+| `resolve_training_config(overrides)` | 合并 CLI 覆盖到 training.json 默认值（跳过 None 值） |
+| `resolve_phase_epochs(spec, config, ...)` | 统一两阶段 epoch 分配逻辑 |
 
 ### 3.8 3D 评估指标：`src/training/metrics_3d.py`
 
