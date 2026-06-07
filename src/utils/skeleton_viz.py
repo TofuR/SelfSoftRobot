@@ -6,6 +6,8 @@
 
 import numpy as np
 import torch
+import matplotlib
+matplotlib.use('Agg')  # 非交互后端，服务器上保存图片用
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 import matplotlib.animation as animation
@@ -105,23 +107,46 @@ def plot_multi_scale(pred_dict, gt=None, save_path=None, show=True, bounds=None)
     plt.close()
 
 
-def plot_error_along_arm(errors, title="Node-wise Error", save_path=None, show=True):
+def plot_error_along_arm(errors, title="Node-wise Error", save_path=None, show=True,
+                         arm_length=0.5, rod_radius=0.015):
     """沿杆体的逐节点误差分布。
 
     Args:
-        errors: (N,) 每个节点的 L2 误差。
+        errors: (N,) 每个节点的 L2 误差（米）。
+        arm_length: 臂长（米），用于右侧 Y 轴百分比。
+        rod_radius: 半径（米），用于参考线。
     """
-    fig, ax = plt.subplots(figsize=(10, 4))
-    nodes = np.arange(len(errors))
-    ax.bar(nodes, errors, color='salmon', alpha=0.8)
-    ax.set_xlabel('Node Index (base → tip)')
-    ax.set_ylabel('L2 Error (m)')
-    ax.set_title(title)
+    N = len(errors)
+    nodes = np.arange(N)
+    err_mm = np.asarray(errors) * 1000  # m → mm
 
-    mean_err = np.mean(errors)
-    ax.axhline(mean_err, color='red', linestyle='--', label=f'Mean: {mean_err:.4f}m')
-    ax.legend()
+    fig, ax1 = plt.subplots(figsize=(10, 4))
 
+    # 三段着色: base / mid / tip
+    n_base = N // 3
+    n_mid = 2 * N // 3
+    ax1.bar(nodes[:n_base], err_mm[:n_base], color='#4CAF50', alpha=0.8, label='Base')
+    ax1.bar(nodes[n_base:n_mid], err_mm[n_base:n_mid], color='#FF9800', alpha=0.8, label='Mid')
+    ax1.bar(nodes[n_mid:], err_mm[n_mid:], color='#F44336', alpha=0.8, label='Tip')
+
+    mean_mm = np.mean(err_mm)
+    ax1.axhline(mean_mm, color='red', linestyle='--', linewidth=1.5,
+                label=f'Mean: {mean_mm:.2f}mm')
+    ax1.axhline(rod_radius * 1000, color='blue', linestyle=':', linewidth=1,
+                label=f'Radius: {rod_radius*1000:.1f}mm')
+
+    ax1.set_xlabel('Node Index (base → tip)')
+    ax1.set_ylabel('L2 Error (mm)')
+    ax1.set_title(title)
+    ax1.legend(loc='upper left', fontsize=8)
+
+    # 右侧 Y 轴: % of arm length
+    ax2 = ax1.twinx()
+    max_mm = max(err_mm.max(), mean_mm * 1.5)
+    ax2.set_ylim(0, max_mm / (arm_length * 1000) * 100)
+    ax2.set_ylabel('% of Arm Length')
+
+    plt.tight_layout()
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
     if show:
@@ -303,24 +328,31 @@ def render_density_field(model, action_window, bounds, grid_res=30,
     return grid_points[mask]
 
 
-def print_metrics(pred, gt, label=""):
-    """计算并打印 3D 评估指标。
+def print_metrics(pred, gt, label="", arm_length=0.5, rod_radius=0.015):
+    """计算并打印 3D 评估指标（含相对误差）。
 
     Args:
         pred: (N, 3) numpy array。
         gt:   (N, 3) numpy array。
+        arm_length: 臂长（米）。
+        rod_radius: 半径（米）。
     """
     import torch
     pred_t = torch.from_numpy(pred).float()
     gt_t = torch.from_numpy(gt).float()
 
-    from src.training.metrics_3d import mean_node_error, endpoint_error, curve_smoothness, chamfer_distance
+    from src.training.metrics_3d import evaluate_skeleton
 
-    mne = mean_node_error(pred_t.unsqueeze(0), gt_t.unsqueeze(0)).item()
-    epe = endpoint_error(pred_t.unsqueeze(0), gt_t.unsqueeze(0)).item()
-    smooth = curve_smoothness(pred_t.unsqueeze(0)).item()
-    cd = chamfer_distance(pred_t.unsqueeze(0), gt_t.unsqueeze(0)).item()
+    r = evaluate_skeleton(pred_t.unsqueeze(0), gt_t.unsqueeze(0),
+                          arm_length, rod_radius)
 
     prefix = f"[{label}] " if label else ""
-    print(f"{prefix}MNE={mne:.6f}m  EPE={epe:.6f}m  Smooth={smooth:.6f}  CD={cd:.6f}")
-    return {'mne': mne, 'epe': epe, 'smoothness': smooth, 'cd': cd}
+    mne_mm = r['mean_node_err'] * 1000
+    epe_mm = r['endpoint_err'] * 1000
+    max_mm = r['max_node_err'] * 1000
+    print(f"{prefix}MNE={mne_mm:.2f}mm ({r['mean_pct_arm']:.2f}%arm, "
+          f"{r['mean_pct_radius']:.1f}%R)  "
+          f"EPE={epe_mm:.2f}mm ({r['endpoint_pct_arm']:.2f}%arm, "
+          f"{r['endpoint_pct_radius']:.1f}%R)  "
+          f"Max={max_mm:.2f}mm  CD={r['chamfer_distance']:.6f}")
+    return r

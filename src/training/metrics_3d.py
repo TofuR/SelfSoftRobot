@@ -74,3 +74,78 @@ def curve_smoothness(skeleton):
 
     second_diff = skeleton[:, 2:] - 2 * skeleton[:, 1:-1] + skeleton[:, :-2]
     return (second_diff ** 2).sum(-1).sqrt().mean()
+
+
+def node_errors(pred, gt):
+    """逐节点 L2 误差。
+
+    Args:
+        pred: (B, N, 3) 或 (N, 3)。
+        gt:   (B, N, 3) 或 (N, 3)。
+
+    Returns:
+        (B, N) 或 (N,) — 每个节点的 L2 距离（米）。
+    """
+    return ((pred - gt) ** 2).sum(-1).sqrt()
+
+
+def max_node_error(pred, gt):
+    """最差节点 L2 误差。
+
+    Args:
+        pred: (B, N, 3) 或 (N, 3)。
+        gt:   (B, N, 3) 或 (N, 3)。
+
+    Returns:
+        标量最大节点误差。
+    """
+    return node_errors(pred, gt).max()
+
+
+def evaluate_skeleton(pred, gt, arm_length=0.5, rod_radius=0.015):
+    """骨架综合评估 — 绝对/相对/逐节点指标一次性计算。
+
+    Args:
+        pred:       (B, N, 3) 或 (N, 3) 预测骨架（米，世界坐标）。
+        gt:         (B, N, 3) 或 (N, 3) GT 骨架（米，世界坐标）。
+        arm_length: 臂长（米），默认 0.5。
+        rod_radius: 杆半径（米），默认 0.015。
+
+    Returns:
+        dict 包含:
+          绝对指标 (m): mean_node_err, endpoint_err, max_node_err, chamfer_distance
+          相对指标 (%): mean_pct_arm, endpoint_pct_arm, mean_pct_radius, endpoint_pct_radius
+          逐节点:      per_node_err (N,) ndarray — 每节点平均 L2（跨 batch）
+    """
+    import numpy as np
+
+    if pred.dim() == 2:
+        pred = pred.unsqueeze(0)
+        gt = gt.unsqueeze(0)
+
+    # 逐节点误差 (B, N)
+    errs = node_errors(pred, gt)
+
+    # 聚合
+    mean_err = errs.mean().item()
+    ep_err = errs[:, -1].mean().item()
+    max_err = errs.max().item()
+    cd = chamfer_distance(pred, gt).item()
+
+    # 逐节点平均（跨 batch）
+    per_node = errs.mean(dim=0).cpu().numpy()  # (N,)
+
+    return {
+        # 绝对指标 (m)
+        'mean_node_err': mean_err,
+        'endpoint_err': ep_err,
+        'max_node_err': max_err,
+        'chamfer_distance': cd,
+        # 相对指标 (%)
+        'mean_pct_arm': mean_err / arm_length * 100,
+        'endpoint_pct_arm': ep_err / arm_length * 100,
+        'mean_pct_radius': mean_err / rod_radius * 100,
+        'endpoint_pct_radius': ep_err / rod_radius * 100,
+        # 逐节点
+        'per_node_err': per_node,
+    }
