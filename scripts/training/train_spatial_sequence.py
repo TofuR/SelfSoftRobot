@@ -4,9 +4,16 @@
 替代 Flow Matching 的无结构点云生成。
 
 Usage:
+    # 默认（fractional 编码器）
     CUDA_VISIBLE_DEVICES=0 python scripts/training/train_spatial_sequence.py
+
+    # 切换编码器：ema / fractional / gamma
     CUDA_VISIBLE_DEVICES=0 python scripts/training/train_spatial_sequence.py \
-        --data_dir data/seq_rz_c2_sk --n_epochs 500 --encoder fractional
+        --data_dir data/seq_rz_c2_sk --n_epochs 500 --encoder gamma
+
+    # 其他参数
+    CUDA_VISIBLE_DEVICES=0 python scripts/training/train_spatial_sequence.py \
+        --encoder ema --window_size 60 --n_scales 6 --hidden_dim 256
 """
 
 import os
@@ -19,30 +26,22 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 import argparse
 import torch
 
-from src.config.args import add_common_args, resolve_training_config
+from src.config.args import (add_common_args, resolve_training_config,
+                              build_common_overrides)
 from src.utils.data_detect import detect_action_dim, detect_n_nodes
 from src.training.trainer_unified import UnifiedTrainer
 
 
 parser = argparse.ArgumentParser()
 add_common_args(parser, data_dir_default="data/seq_rz_c2_sk")
-parser.add_argument("--window_size", type=int, default=None)
-parser.add_argument("--n_scales", type=int, default=None)
-parser.add_argument("--hidden_dim", type=int, default=None)
 parser.add_argument("--encoder", type=str, default="fractional",
-                    choices=["ema", "fractional"],
+                    choices=["ema", "fractional", "gamma"],
                     help="Temporal encoder type")
 parser.add_argument("--n_nodes", type=int, default=None,
                     help="Number of skeleton nodes (auto-detect if None)")
 args = parser.parse_args()
 
-config = resolve_training_config({
-    "optimization.n_epochs": args.n_epochs,
-    "optimization.lr": args.lr,
-    "temporal.window_size": args.window_size,
-    "temporal.n_scales": args.n_scales,
-    "temporal.hidden_dim": args.hidden_dim,
-})
+config = resolve_training_config(build_common_overrides(args))
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

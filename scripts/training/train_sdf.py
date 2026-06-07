@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 import argparse
 import torch
 
-from src.config.args import add_common_args, resolve_training_config
+from src.config.args import add_common_args, resolve_training_config, build_common_overrides
 from src.utils.data_detect import detect_action_dim
 from src.training.trainer_unified import UnifiedTrainer
 
@@ -28,20 +28,13 @@ add_common_args(parser, data_dir_default="data/seq_rz_3d")
 parser.add_argument("--w_sdf", type=float, default=None)
 parser.add_argument("--w_normal", type=float, default=None)
 parser.add_argument("--w_grad", type=float, default=None)
-parser.add_argument("--window_size", type=int, default=None)
-parser.add_argument("--n_scales", type=int, default=None)
-parser.add_argument("--hidden_dim", type=int, default=None)
 parser.add_argument("--n_surface", type=int, default=None, help="Surface sample count")
 parser.add_argument("--n_near_surface", type=int, default=None, help="Near-surface sample count")
 parser.add_argument("--n_off_surface", type=int, default=None, help="Off-surface sample count")
 args = parser.parse_args()
 
-config = resolve_training_config({
-    "optimization.n_epochs": args.n_epochs,
-    "optimization.lr": args.lr,
-    "temporal.window_size": args.window_size,
-    "temporal.n_scales": args.n_scales,
-    "temporal.hidden_dim": args.hidden_dim,
+overrides = build_common_overrides(args)
+overrides.update({
     "sdf.w_sdf": args.w_sdf,
     "sdf.w_normal": args.w_normal,
     "sdf.w_grad": args.w_grad,
@@ -49,6 +42,7 @@ config = resolve_training_config({
     "sdf.n_near_surface": args.n_near_surface,
     "sdf.n_off_surface": args.n_off_surface,
 })
+config = resolve_training_config(overrides)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

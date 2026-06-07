@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 import argparse
 import torch
 
-from src.config.args import add_common_args, add_two_phase_args, resolve_training_config
+from src.config.args import (add_common_args, add_two_phase_args, resolve_training_config, build_common_overrides, resolve_phase_epochs)
 from src.utils.data_detect import detect_action_dim
 from src.training.trainer_unified import UnifiedTrainer
 from src.rendering.view_strategy import create_view_strategy
@@ -39,14 +39,14 @@ parser.add_argument("--w_skeleton_coarse", type=float, default=None)
 parser.add_argument("--w_render", type=float, default=None)
 args = parser.parse_args()
 
-config = resolve_training_config({
-    "optimization.n_epochs": args.n_epochs,
-    "optimization.lr": args.lr,
+overrides = build_common_overrides(args)
+overrides.update({
     "ms_scnf.w_skeleton_fine": args.w_skeleton_fine,
     "ms_scnf.w_skeleton_medium": args.w_skeleton_medium,
     "ms_scnf.w_skeleton_coarse": args.w_skeleton_coarse,
     "ms_scnf.w_render": args.w_render,
 })
+config = resolve_training_config(overrides)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -95,25 +95,7 @@ if rendering_phase is not None:
 # -- data_dirs --
 data_dirs = {"sequence": args.data_dir}
 
-# -- Phase selection via n_epochs_per_phase --
-n_epochs_per_phase = None
-if args.phase is not None:
-    n_epochs_per_phase = {}
-    for p in spec.phases:
-        if args.phase == 1 and p.name == "skeleton":
-            n_epochs_per_phase[p.name] = config["optimization"]["n_epochs"]
-        elif args.phase == 2 and p.name == "joint":
-            n_epochs_per_phase[p.name] = config["optimization"]["n_epochs"]
-        else:
-            n_epochs_per_phase[p.name] = 0
-elif spec.is_two_phase:
-    can_cfg = config.get("canonical", {})
-    n_epochs_per_phase = {}
-    for p in spec.phases:
-        if p.name in ("canonical", "skeleton"):
-            n_epochs_per_phase[p.name] = can_cfg.get("phase1_epochs", 50)
-        else:
-            n_epochs_per_phase[p.name] = args.n_epochs or config["optimization"]["n_epochs"]
+n_epochs_per_phase = resolve_phase_epochs(spec, config, phase=args.phase, n_epochs_override=args.n_epochs)
 
 # -- Train --
 trainer = UnifiedTrainer(model, view_strat, config=config)
