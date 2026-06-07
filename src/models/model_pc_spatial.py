@@ -23,6 +23,7 @@ import torch.nn.functional as F
 from .mixins import TemporalMixin
 from src.encoders.fractional_memory import FractionalMemory
 from src.encoders.multi_scale_ema import MultiScaleEMA
+from src.encoders.gamma_laguerre import GammaLaguerreMemory
 from src.training.spec import TrainingSpec, PhaseSpec
 from src.data.dataset_pointcloud import _sample_surface
 
@@ -72,7 +73,12 @@ class PCSpatialSequenceModel(nn.Module, TemporalMixin):
         self.register_buffer('action_norm_factor', torch.tensor(1.0))
 
         # ── 预测分支 ──
-        EncoderClass = FractionalMemory if encoder_type == "fractional" else MultiScaleEMA
+        _ENCODERS = {
+            "ema": MultiScaleEMA,
+            "fractional": FractionalMemory,
+            "gamma": GammaLaguerreMemory,
+        }
+        EncoderClass = _ENCODERS.get(encoder_type, FractionalMemory)
         self.temporal = EncoderClass(
             action_dim=action_dim,
             n_scales=n_orders,
