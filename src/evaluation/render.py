@@ -5,6 +5,7 @@
 
 import io
 import os
+import warnings
 import numpy as np
 
 
@@ -286,7 +287,9 @@ def render_animation(results, model_type, threshold, gt_skeletons,
 def render_png(fig, output_path, scale=1):
     """导出 PNG。"""
     try:
-        img_bytes = fig.to_image(format='png', scale=scale)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            img_bytes = fig.to_image(format='png', scale=scale)
         with open(output_path, 'wb') as f:
             f.write(img_bytes)
         print(f"  PNG: {os.path.relpath(output_path)}")
@@ -319,7 +322,9 @@ def render_gif(results, model_type, threshold, gt_skeletons,
                                       title=f'Frame {frame_indices[i]}')
         fig.update_layout(width=600, height=500, margin=dict(l=0, r=0, t=30, b=0))
         try:
-            img_bytes = fig.to_image(format='png', scale=1)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                img_bytes = fig.to_image(format='png', scale=1)
             images.append(Image.open(io.BytesIO(img_bytes)))
         except Exception as e:
             print(f"  GIF export failed: {e}")

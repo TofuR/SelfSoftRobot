@@ -16,6 +16,7 @@ Loss 分两层:
 
 import csv
 import os
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -355,10 +356,20 @@ class UnifiedTrainer:
                 # 每 10 epoch 或最后一个 epoch 打印编码器参数
                 temporal = getattr(self.model, "temporal", None)
                 if temporal is not None and (epoch % 10 == 0 or epoch == 1 or epoch == n_epochs):
-                    if hasattr(temporal, "alphas"):
+                    # GammaLaguerre 编码器：打印 k（阶次/峰值延迟）和 λ（衰减率）
+                    if hasattr(temporal, "ks") and hasattr(temporal, "lambdas"):
+                        ks = temporal.ks.detach().cpu().numpy()
+                        lambdas = temporal.lambdas.detach().cpu().numpy()
+                        print(f"    Gamma kernels:")
+                        for i in range(len(ks)):
+                            peak = (ks[i] - 1) / max(-np.log(max(lambdas[i], 0.01)), 0.01)
+                            print(f"      [{i}] k={ks[i]:.2f}, λ={lambdas[i]:.3f}, peak≈{peak:.1f} frames")
+                    elif hasattr(temporal, "alphas") and hasattr(temporal, "_compute_gl_weights"):
+                        # FractionalMemory
                         a = temporal.alphas.detach().cpu().numpy()
                         print(f"    alphas: {[round(x, 4) for x in a]}")
                     elif hasattr(temporal, "decays"):
+                        # MultiScaleEMA
                         d = temporal.decays.detach().cpu().numpy()
                         print(f"    decays: {[round(x, 4) for x in d]}")
 
