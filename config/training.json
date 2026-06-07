@@ -110,7 +110,7 @@
         "bounds_margin": 0.03,
         "marching_cubes_level": 0,
         "fps": 3,
-        "eval_interval": 0,
+        "eval_interval": 50,
         "n_eval_samples": 100,
         "n_gt_points": 1000,
         "fscore_thresholds": [0.005, 0.01, 0.02],
