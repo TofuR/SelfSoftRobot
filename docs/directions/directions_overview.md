@@ -2,6 +2,7 @@
 
 > 基于文献调研和深度讨论，从"出发点（真问题）"推导出的研究方向体系
 > 核心出发点：软体机器人自建模 = 带迟滞的 3D 全身状态估计
+> 最后更新：2026-06-08
 
 ---
 
@@ -16,111 +17,171 @@
 
 ---
 
-## 方向关系图
+## 方向关系图（全景）
 
 ```
 出发点: 带迟滞的 3D 全身状态估计
     │
-    ├──────────────────────────────────────────────┐
+    ├────────────────── 已实现 ───────────────────┐
     │                                              │
-    ▼                                              ▼
-┌────────────────┐                         ┌──────────────┐
-│  迟滞如何建模？  │                         │ 状态如何表示？ │
-│                │                         │              │
-│ ┌────────────┐ │                         │ ┌──────────┐ │
-│ │ 分数阶记忆核 │ │                         │ │ 空间序列  │ │
-│ │ (替代 EMA) │ │                         │ │ (z-slice)│ │
-│ └────────────┘ │                         │ └──────────┘ │
-└────────┬───────┘                         └──────┬───────┘
-         │                                        │
-         │    预测分支                              │ 预测分支
-         │        │                                │   │
-         └────────┼────────────────────────────────┘   │
-                  ▼                                        │
-         ┌────────────────┐                               │
-         │ 预测-修正框架   │◄──────────────────────────────┘
-         │                │
-         │  预测: history  │
-         │  修正: vision   │
-         └────────┬───────┘
-                  │
-                  ▼
-         ┌────────────────┐
-         │ 拓扑引导残差流  │  ← 可选的精细化模块
-         │ (物理先验+残差) │
-         └────────────────┘
+    │  ✅ 分数阶记忆核 ───→ ✅ 空间序列生成         │
+    │       (编码器)           (GRU 沿 Z 轴)        │
+    │                          │                   │
+    │                     ✅ 预测-修正框架           │
+    │                    (PC-Spatial 两阶段)        │
+    │                                              │
+    │  已归档至 docs/archived/directions/           │
+    └──────────────────────────────────────────────┘
+    │
+    ├─────── 核心技术层（解决超前预测）──────┐
+    │                                       │
+    │  ┌────────────────┐                   │
+    │  │Gamma/Laguerre   │ ← 已实现编码器     │
+    │  │延迟峰值权重     │   待验证效果        │
+    │  └────────────────┘                   │
+    │  ┌────────────────┐                   │
+    │  │自回归状态动力学 │ ← 待实现           │
+    │  └────────────────┘                   │
+    │  ┌────────────────┐                   │
+    │  │Action偏置分析   │ ← 待消融验证       │
+    │  └────────────────┘                   │
+    └───────────────────────────────────────┘
+    │
+    ├─────── 形状表达层 ──────┐
+    │                        │
+    │  ┌──────────────────┐  │
+    │  │骨架→形状转换      │  │  固定半径→可变半径/学习截面
+    │  │(skeleton_to_shape)│  │
+    │  └──────────────────┘  │
+    │  ┌──────────────────┐  │
+    │  │拓扑引导残差流     │  │  物理粗变形 + FM 残差
+    │  └──────────────────┘  │
+    │  ┌──────────────────┐  │
+    │  │从轮廓恢复形状     │  │  Visual Hull + 骨架条件
+    │  │(shape_from_       │  │
+    │  │ silhouette)       │  │
+    │  └──────────────────┘  │
+    └────────────────────────┘
+    │
+    ├─────── 感知与部署层 ────┐
+    │                        │
+    │  ┌──────────────────┐  │
+    │  │多视角 2D→3D 骨架  │  │  双视角三角化/可微渲染
+    │  │(multi_view_2d_    │  │
+    │  │ to_3d_skeleton)   │  │
+    │  └──────────────────┘  │
+    │  ┌──────────────────┐  │
+    │  │视觉辅助部署       │  │  在线适应 + 残差修正
+    │  │(vision_corrected) │  │
+    │  └──────────────────┘  │
+    │  ┌──────────────────┐  │
+    │  │Sim-to-Real 迁移   │  │  残差物理/域随机化
+    │  │(sim_to_real)      │  │
+    │  └──────────────────┘  │
+    └────────────────────────┘
+    │
+    ├─────── 建模方法论层 ────┐
+    │                        │
+    │  ┌──────────────────┐  │
+    │  │单DOF分解与组合    │  │  独立训练+叠加/模态分解
+    │  │(per_dof_          │  │
+    │  │ decomposition)    │  │
+    │  └──────────────────┘  │
+    └────────────────────────┘
 ```
 
 ---
 
-## 各方向文档
+## 第一层：核心技术（解决超前预测）
 
-| 方向 | 文档 | 解决的子问题 | 核心思想 |
-|------|------|------------|---------|
-| **分数阶记忆核** | [fractional_order_memory.md](fractional_order_memory.md) | 时序依赖 | 用分数阶微积分替代 EMA，物理上有根据 |
-| **预测-修正框架** | [predictive_corrective_state_estimation.md](predictive_corrective_state_estimation.md) | 2D→3D 信息瓶颈 | 时序先验 + 视觉修正，类似 Kalman 滤波 |
-| **空间序列生成** | [spatial_sequence_generation.md](spatial_sequence_generation.md) | 3D 状态表示 | z-slice 截面参数序列替代原始点云 |
-| **拓扑引导残差流** | [topology_guided_residual_flow.md](topology_guided_residual_flow.md) | 精细化 | 物理粗变形 + Flow Matching 学习残差 |
+### 问题
+
+训练 SpatialSequence 和 PC-Spatial 后发现，模型预测的中心线**系统性超前**于 GT。
+
+### 三个方向
+
+| 方向 | 文档 | 解决的子问题 | 核心思想 | 状态 |
+|------|------|------------|---------|------|
+| **Gamma/Laguerre 编码** | [gamma_laguerre_temporal_encoding.md](gamma_laguerre_temporal_encoding.md) | "何时响应" | Gamma 分布权重有延迟峰值 | ✅ 编码器已实现 |
+| **自回归状态动力学** | [autoregressive_state_dynamics.md](autoregressive_state_dynamics.md) | "当前在哪" | 前一步物理状态作为输入 | 待实现 |
+| **Action 偏置分析** | [temporal_encoding_bias_analysis.md](temporal_encoding_bias_analysis.md) | "短路问题" | current_action 拼接绕过迟滞 | 待消融 |
+
+```
+问题：预测超前于真实响应
+    │
+    ├─ 原因1：权重形态不匹配 → Gamma/Laguerre
+    ├─ 原因2：current_action 短路 → Action 偏置消融
+    └─ 原因3：缺少物理状态反馈 → 自回归动力学
+```
+
+建议优先级：
+1. **Action 偏置消融**（零成本验证）
+2. **Gamma/Laguerre 编码**（已实现，待完整训练验证）
+3. **自回归状态动力学**（改动较大，但最根本）
 
 ---
 
-## 三个子问题 → 四个技术方案
+## 第二层：形状表达（骨架→完整形状）
 
-| 子问题 | 对应技术 | 详细文档 |
-|--------|---------|---------|
-| 1. 如何编码迟滞历史？ | **分数阶记忆核** | [fractional_order_memory.md](fractional_order_memory.md) |
-| 2. 如何表示 3D 全身状态？ | **空间序列生成** | [spatial_sequence_generation.md](spatial_sequence_generation.md) |
-| 3. 如何从 2D 视觉推断 3D？ | **预测-修正框架** | [predictive_corrective_state_estimation.md](predictive_corrective_state_estimation.md) |
-| (可选) 如何精细化？ | **拓扑引导残差流** | [topology_guided_residual_flow.md](topology_guided_residual_flow.md) |
+当前所有模型退化为骨架预测，丢失了表面/截面信息。
 
-每个技术都是为解决出发点中的具体子问题而自然出现的，不是模块叠加。
+| 方向 | 文档 | 核心思想 | 优先级 |
+|------|------|---------|--------|
+| **骨架→形状转换** | [skeleton_to_shape_conversion.md](skeleton_to_shape_conversion.md) | 可变半径 / 学习截面 / 3DGS | ★★★ |
+| **拓扑引导残差流** | [topology_guided_residual_flow.md](topology_guided_residual_flow.md) | 物理粗变形 + FM 残差 | ★★☆ |
+| **从轮廓恢复形状** | [shape_from_silhouette.md](shape_from_silhouette.md) | 骨架条件 Visual Hull | ★★☆ |
+
+---
+
+## 第三层：感知与部署
+
+从仿真走向实际应用的路径。
+
+| 方向 | 文档 | 核心思想 | 优先级 |
+|------|------|---------|--------|
+| **多视角 2D→3D 骨架** | [multi_view_2d_to_3d_skeleton.md](multi_view_2d_to_3d_skeleton.md) | 双视角三角化 / 可微渲染 | ★★☆ |
+| **视觉辅助部署** | [vision_corrected_deployment.md](vision_corrected_deployment.md) | 在线适应 + 残差修正 | ★★☆ |
+| **Sim-to-Real 迁移** | [sim_to_real_transfer.md](sim_to_real_transfer.md) | 残差物理 / 域随机化 | ★☆☆ |
+
+---
+
+## 第四层：建模方法论
+
+| 方向 | 文档 | 核心思想 | 优先级 |
+|------|------|---------|--------|
+| **单 DOF 分解与组合** | [per_dof_decomposition.md](per_dof_decomposition.md) | 独立训练 + 模态叠加 | ★☆☆ |
+
+---
+
+## 已归档方向
+
+以下方向已实现，归档至 `docs/archived/directions/`：
+
+| 方向 | 原文档 | 实现位置 |
+|------|--------|---------|
+| **分数阶记忆核** | [fractional_order_memory.md](../archived/directions/fractional_order_memory.md) | `src/encoders/fractional_memory.py` |
+| **空间序列生成** | [spatial_sequence_generation.md](../archived/directions/spatial_sequence_generation.md) | `src/models/model_spatial_sequence.py` |
+| **预测-修正框架** | [predictive_corrective_state_estimation.md](../archived/directions/predictive_corrective_state_estimation.md) | `src/models/model_pc_spatial.py` |
+
+---
+
+## 文献调研
+
+完整文献综述见 [docs/papers/literature_review_shape_reconstruction.md](../papers/literature_review_shape_reconstruction.md)。
+
+核心论文笔记：
+- [Tang 2026 — 全身形状控制](../papers/notes_tang2026_whole_body_shape.md)
+- [Yu 2026 — 可解释形状自建模](../papers/notes_yu2026_shape_interpretable.md)
 
 ---
 
 ## 与现有工作的差异化
 
-| 维度 | Yu 2026 | Chen 2025 | **我们** |
-|------|---------|-----------|---------|
-| 核心问题 | 负载适应 | 迟滞建模 | **视觉 + 迟滞 + 3D 状态估计** |
-| 时序建模 | 无 | 方向 sign | **分数阶记忆核** |
-| 推理方式 | feedforward | feedforward | **predictive-corrective** |
-| 感知 | 2 相机 | OptiTrack 8 相机 | **单/双相机** |
-
----
-
-## 建议实施路线
-
-```
-Phase 1: 验证核心假设
-  ├── 量化仿真器中的迟滞效应（数据说话）
-  ├── 实现 FractionalMemory 替代 EMA
-  └── 对比实验：EMA vs 分数阶 vs 无时序
-
-Phase 2: 构建预测分支
-  ├── 实现 SpatialGRU 空间序列生成
-  ├── 用 PyElastica 3D GT 直接监督
-  └── 验证截面参数表示的充分性
-
-Phase 3: 加入修正分支
-  ├── 实现视觉修正网络
-  ├── 可微渲染提供训练信号
-  └── 消融：有/无修正的对比
-
-Phase 4: 整合与迁移
-  ├── 组合所有模块
-  ├── Sim-to-Real 域适应
-  └── 真实软臂部署验证
-```
-
----
-
-## 历史版本
-
-旧版 5 方向体系（已归档）：
-- direction_1: 形态发现
-- direction_2: 纯 2D 自建模
-- direction_3: 多相机系统
-- direction_4: Sim-to-Real 迁移
-- direction_5: 时序迟滞建模
-
-这些方向的想法已被整合到新体系中。详见 [brainstorm_research_directions.md](../papers/brainstorm_research_directions.md)。
+| 维度 | Yu 2026 (T-RO) | Tang 2026 (ICRA) | SoftNeRF (IROS) | **我们** |
+|------|---------|-----------|-----------|---------|
+| 核心问题 | 形状+控制 | 负载适应 | NeRF 自建模 | **迟滞 + 3D 状态估计** |
+| 时序建模 | 无 | 无 | 无 | **Gamma/Laguerre 延迟核** |
+| 形状表示 | Bézier 控制点 | 图像隐式 | NeRF 密度场 | **3D 骨架 + 可变表面** |
+| 推理方式 | feedforward | 在线优化 | 渲染优化 | **predictive-corrective** |
+| 感知 | 2 相机 | 图像反馈 | 多视角渲染 | **单/双相机** |
+| 验证平台 | 真实机器人 | 真实机器人 | 真实/仿真 | **PyElastica 仿真** |

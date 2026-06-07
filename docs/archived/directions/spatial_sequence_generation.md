@@ -1,7 +1,15 @@
 # 方向灵感：空间序列生成 (Spatial Sequential Propagation)
 
+> **状态：已实现 ✅**
 > 来源：PROJECT_HELP.md 中的结构归纳偏置思考
 > 核心思想：将软臂沿 Z 轴切片为空间序列，用状态空间模型自下而上传递空间记忆
+>
+> ## 实现位置
+> - 模型：`src/models/model_spatial_sequence.py` — `SpatialSequenceModel` 类（GRU 沿 Z 轴）
+> - 训练脚本：`scripts/training/train_spatial_sequence.py`
+> - 数据集：`src/data/dataset_spatial.py` — `SpatialSequenceDataset`
+> - 评估：支持 `predict_skeleton()` 和 `predict_pointcloud()`
+> - PROJECT_HELP：已记录在管线表中（"空间序列"行）
 
 ---
 

@@ -1,8 +1,15 @@
 # 方向灵感：分数阶记忆核替代 EMA 建模迟滞
 
-> 状态：待实验验证
+> **状态：已实现 ✅**
 > 来源：从软体材料物理本质出发推导出的迟滞建模方法
 > 与 spatial_sequence_generation、topology_guided_residual_flow 可组合
+>
+> ## 实现位置
+> - 编码器：`src/encoders/fractional_memory.py` — `FractionalMemory` 类
+> - 使用模型：`src/models/model_spatial_sequence.py`、`src/models/model_pc_spatial.py`
+> - 训练脚本：`scripts/training/train_spatial_sequence.py`、`scripts/training/train_pc_spatial.py`
+> - 数据集：`src/data/dataset_spatial.py`
+> - PROJECT_HELP：已记录在管线表中（"分数阶记忆"行）
 
 ---
 

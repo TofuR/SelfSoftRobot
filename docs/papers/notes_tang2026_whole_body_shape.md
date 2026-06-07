@@ -1,6 +1,6 @@
 # 阅读笔记：Learning to Control the Whole-body Shape of a Soft Robotic Arm in Unknown Situations
 
-> Tang, Wang, Rus, Laschi — ICRA 2020 Poster
+> Tang, Wang, Rus, Laschi — ICRA 2026 Poster
 > Southeast University / MIT / NUS
 
 ## 一句话概括
@@ -53,7 +53,7 @@
 
 ## 与本项目的关联
 
-| 维度 | Tang 2020 | SelfSoftRobot |
+| 维度 | Tang 2026 | SelfSoftRobot |
 |------|-----------|---------------|
 | 形状表示 | 图像 + CNN 隐式表示 | 3D 点云 + Neural Field 显式表示 |
 | 控制方式 | CNN 直接输出动作 | 先建模后控制（学习形状模型） |

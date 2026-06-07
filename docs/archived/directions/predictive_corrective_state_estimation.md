@@ -1,8 +1,15 @@
 # 方向灵感：预测-修正框架（Predictive-Corrective State Estimation）
 
-> 状态：概念阶段
+> **状态：已实现 ✅**
 > 来源：从"软体机器人状态估计"这一根本问题出发的思考
 > 核心思想：时序模型做先验预测，视觉观测做在线修正
+>
+> ## 实现位置
+> - 模型：`src/models/model_pc_spatial.py` — `PCSpatialSequenceModel` 类（两阶段：predictive + corrective）
+> - 训练脚本：`scripts/training/train_pc_spatial.py`
+> - 数据集：`src/data/dataset_spatial.py`（同 SpatialSequence，Phase 2 额外需要 images）
+> - 评估：支持 `predict_skeleton(action_window, images=...)`
+> - PROJECT_HELP：已记录在管线表中（"预测-修正"行）
 
 ---
 
