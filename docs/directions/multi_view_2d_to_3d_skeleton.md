@@ -2,7 +2,7 @@
 
 > 状态：待探索
 > 优先级：中高
-> 关联：Yu 2026 (T-RO) 的 Bézier 双视角方法、导管双平面透视
+> 关联：Yu 2026 (arXiv) 的 Bézier 双视角方法、导管双平面透视
 
 ---
 
@@ -93,7 +93,7 @@ Li et al. (ICRA 2023) 的可微渲染方法：
 
 ## 相关文献
 
-- Yu 2026 (T-RO)：Bézier 双视角形状重建 + Neural ODE 控制
+- Yu 2026 (arXiv)：Bézier 双视角形状重建 + Neural ODE 控制
 - Li et al. (ICRA 2023)：可微渲染形状重建 (arXiv:2302.14039)
 - Guide3D (ACCV 2024)：双平面 X 射线 3D 重建数据集 (arXiv:2410.22224)
 - 单视角导丝重建 (RiTA 2024)：arXiv:2311.11209

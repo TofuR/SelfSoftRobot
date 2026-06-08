@@ -1,6 +1,6 @@
 # 阅读笔记：Shape-Interpretable Visual Self-Modeling Enables Geometry-Aware Continuum Robot Control
 
-> Peng Yu, Xin Wang, Ning Tan — IEEE T-RO 2026 (arXiv:2603.01751v1, March 2026)
+> Peng Yu, Xin Wang, Ning Tan — arXiv:2603.01751, March 2026
 > Sun Yat-sen University, Guangzhou, China
 
 ## 一句话概括

@@ -101,5 +101,5 @@ Gao et al. 的方法：
 - Tang 2026 (ICRA Poster)：CNN + 在线策略优化适应未知负载
 - ETH RA-L 2024：残差物理 sim-to-real (Best Paper Award)
 - PC-Spatial 模型：`src/models/model_pc_spatial.py`
-- Yu 2026 (T-RO)：视觉感知管线（Bézier + 双视角）
+- Yu 2026 (arXiv)：视觉感知管线（Bézier + 双视角）
 - Yang et al. (CoRL 2025)：解耦 sim-to-real
