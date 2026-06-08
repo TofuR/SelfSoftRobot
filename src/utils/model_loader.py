@@ -278,7 +278,20 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
         # n_orders 从 temporal 权重推断, n_nodes 默认 31
         n_orders = train_cfg['temporal'].get('n_scales', 4)
         n_nodes = saved_cfg.get('n_nodes', 31) if saved_cfg else 31
-        encoder_type = 'fractional' if any('raw_alphas' in k for k in state_dict) else 'ema'
+        if any('raw_alphas' in k for k in state_dict):
+            encoder_type = 'fractional'
+        elif any('temporal.k_offsets' in k or 'temporal.logit_lambdas' in k for k in state_dict):
+            encoder_type = 'gamma'
+        elif any('temporal.cls_token' in k for k in state_dict):
+            encoder_type = 'transformer'
+        elif any('temporal.tcn_layers' in k for k in state_dict):
+            encoder_type = 'tcn'
+        elif any('temporal.gru.weight' in k for k in state_dict):
+            encoder_type = 'gru'
+        elif any('raw_decays' in k for k in state_dict):
+            encoder_type = 'ema'
+        else:
+            encoder_type = saved_cfg.get('encoder_type', 'ema') if saved_cfg else 'ema'
         hidden_dim = saved_cfg.get('hidden_dim', train_cfg['temporal']['hidden_dim']) if saved_cfg else train_cfg['temporal']['hidden_dim']
 
         if model_type == 'spatial_sequence':
