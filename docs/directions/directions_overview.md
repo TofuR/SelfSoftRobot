@@ -2,7 +2,7 @@
 
 > 基于文献调研和深度讨论，从"出发点（真问题）"推导出的研究方向体系
 > 核心出发点：软体机器人自建模 = 带迟滞的 3D 全身状态估计
-> 最后更新：2026-06-08
+> 最后更新：2026-06-09
 
 ---
 
@@ -30,20 +30,26 @@
     │                     ✅ 预测-修正框架           │
     │                    (PC-Spatial 两阶段)        │
     │                                              │
+    │  ✅ Gamma/Laguerre 延迟峰值权重（编码器已实现） │
+    │  ✅ 顺序敏感编码器 GRU/Transformer/TCN         │
+    │                                              │
     │  已归档至 docs/archived/directions/           │
     └──────────────────────────────────────────────┘
     │
     ├─────── 核心技术层（解决超前预测）──────┐
     │                                       │
     │  ┌────────────────┐                   │
-    │  │Gamma/Laguerre   │ ← 已实现编码器     │
-    │  │延迟峰值权重     │   待验证效果        │
-    │  └────────────────┘                   │
-    │  ┌────────────────┐                   │
     │  │自回归状态动力学 │ ← 待实现           │
     │  └────────────────┘                   │
     │  ┌────────────────┐                   │
     │  │Action偏置分析   │ ← 待消融验证       │
+    │  └────────────────┘                   │
+    │  ┌────────────────┐                   │
+    │  │Action窗口降采样 │ ← 待实现           │
+    │  │(10x冗余消除)    │                    │
+    │  └────────────────┘                   │
+    │  ┌────────────────┐                   │
+    │  │迟滞信息容量分析 │ ← 待理论验证        │
     │  └────────────────┘                   │
     └───────────────────────────────────────┘
     │
@@ -98,25 +104,26 @@
 
 训练 SpatialSequence 和 PC-Spatial 后发现，模型预测的中心线**系统性超前**于 GT。
 
-### 三个方向
+### 方向列表
 
 | 方向 | 文档 | 解决的子问题 | 核心思想 | 状态 |
 |------|------|------------|---------|------|
-| **Gamma/Laguerre 编码** | [gamma_laguerre_temporal_encoding.md](gamma_laguerre_temporal_encoding.md) | "何时响应" | Gamma 分布权重有延迟峰值 | ✅ 编码器已实现 |
-| **自回归状态动力学** | [autoregressive_state_dynamics.md](autoregressive_state_dynamics.md) | "当前在哪" | 前一步物理状态作为输入 | 待实现 |
-| **Action 偏置分析** | [temporal_encoding_bias_analysis.md](temporal_encoding_bias_analysis.md) | "短路问题" | current_action 拼接绕过迟滞 | 待消融 |
+| **自回归状态动力学** | [01_autoregressive_state_dynamics.md](01_autoregressive_state_dynamics.md) | "当前在哪" | 前一步物理状态作为输入 | 待实现 |
+| **迟滞信息容量分析** | [02_hysteresis_information_capacity.md](02_hysteresis_information_capacity.md) | "能学多少" | 编码器容量 vs 迟滞复杂度 | 待理论验证 |
+| **Action 窗口降采样** | [03_action_window_downsampling.md](03_action_window_downsampling.md) | "输入冗余" | 10x 重复 action 用 stride 消除 | 待实现 |
+| **Action 偏置分析** | [04_temporal_encoding_bias_analysis.md](04_temporal_encoding_bias_analysis.md) | "短路问题" | current_action 拼接绕过迟滞 | 待消融 |
 
 ```
 问题：预测超前于真实响应
     │
-    ├─ 原因1：权重形态不匹配 → Gamma/Laguerre
+    ├─ 原因1：输入冗余（10x重复） → Action 窗口降采样
     ├─ 原因2：current_action 短路 → Action 偏置消融
     └─ 原因3：缺少物理状态反馈 → 自回归动力学
 ```
 
 建议优先级：
-1. **Action 偏置消融**（零成本验证）
-2. **Gamma/Laguerre 编码**（已实现，待完整训练验证）
+1. **Action 窗口降采样**（零成本验证，提升所有编码器效率）
+2. **Action 偏置消融**（零成本验证）
 3. **自回归状态动力学**（改动较大，但最根本）
 
 ---
@@ -127,9 +134,9 @@
 
 | 方向 | 文档 | 核心思想 | 优先级 |
 |------|------|---------|--------|
-| **骨架→形状转换** | [skeleton_to_shape_conversion.md](skeleton_to_shape_conversion.md) | 可变半径 / 学习截面 / 3DGS | ★★★ |
-| **拓扑引导残差流** | [topology_guided_residual_flow.md](topology_guided_residual_flow.md) | 物理粗变形 + FM 残差 | ★★☆ |
-| **从轮廓恢复形状** | [shape_from_silhouette.md](shape_from_silhouette.md) | 骨架条件 Visual Hull | ★★☆ |
+| **骨架→形状转换** | [05_skeleton_to_shape_conversion.md](05_skeleton_to_shape_conversion.md) | 可变半径 / 学习截面 / 3DGS | ★★★ |
+| **拓扑引导残差流** | [09_topology_guided_residual_flow.md](09_topology_guided_residual_flow.md) | 物理粗变形 + FM 残差 | ★★☆ |
+| **从轮廓恢复形状** | [07_shape_from_silhouette.md](07_shape_from_silhouette.md) | 骨架条件 Visual Hull | ★★☆ |
 
 ---
 
@@ -139,9 +146,9 @@
 
 | 方向 | 文档 | 核心思想 | 优先级 |
 |------|------|---------|--------|
-| **多视角 2D→3D 骨架** | [multi_view_2d_to_3d_skeleton.md](multi_view_2d_to_3d_skeleton.md) | 双视角三角化 / 可微渲染 | ★★☆ |
-| **视觉辅助部署** | [vision_corrected_deployment.md](vision_corrected_deployment.md) | 在线适应 + 残差修正 | ★★☆ |
-| **Sim-to-Real 迁移** | [sim_to_real_transfer.md](sim_to_real_transfer.md) | 残差物理 / 域随机化 | ★☆☆ |
+| **多视角 2D→3D 骨架** | [06_multi_view_2d_to_3d_skeleton.md](06_multi_view_2d_to_3d_skeleton.md) | 双视角三角化 / 可微渲染 | ★★☆ |
+| **视觉辅助部署** | [10_vision_corrected_deployment.md](10_vision_corrected_deployment.md) | 在线适应 + 残差修正 | ★★☆ |
+| **Sim-to-Real 迁移** | [11_sim_to_real_transfer.md](11_sim_to_real_transfer.md) | 残差物理 / 域随机化 | ★☆☆ |
 
 ---
 
@@ -149,7 +156,7 @@
 
 | 方向 | 文档 | 核心思想 | 优先级 |
 |------|------|---------|--------|
-| **单 DOF 分解与组合** | [per_dof_decomposition.md](per_dof_decomposition.md) | 独立训练 + 模态叠加 | ★☆☆ |
+| **单 DOF 分解与组合** | [08_per_dof_decomposition.md](08_per_dof_decomposition.md) | 独立训练 + 模态叠加 | ★☆☆ |
 
 ---
 
@@ -162,6 +169,8 @@
 | **分数阶记忆核** | [fractional_order_memory.md](../archived/directions/fractional_order_memory.md) | `src/encoders/fractional_memory.py` |
 | **空间序列生成** | [spatial_sequence_generation.md](../archived/directions/spatial_sequence_generation.md) | `src/models/model_spatial_sequence.py` |
 | **预测-修正框架** | [predictive_corrective_state_estimation.md](../archived/directions/predictive_corrective_state_estimation.md) | `src/models/model_pc_spatial.py` |
+| **Gamma/Laguerre 延迟编码** | [gamma_laguerre_temporal_encoding.md](../archived/directions/gamma_laguerre_temporal_encoding.md) | `src/encoders/gamma_laguerre.py` |
+| **顺序敏感编码器 (GRU/Transformer/TCN)** | — (直接实现) | `src/encoders/temporal_gru.py`, `temporal_transformer.py`, `temporal_tcn.py` |
 
 ---
 
