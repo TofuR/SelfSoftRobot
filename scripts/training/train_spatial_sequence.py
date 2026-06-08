@@ -7,13 +7,13 @@ Usage:
     # 默认（fractional 编码器）
     CUDA_VISIBLE_DEVICES=0 python scripts/training/train_spatial_sequence.py
 
-    # 切换编码器：ema / fractional / gamma
+    # 切换编码器：ema / fractional / gamma / gru / transformer / tcn
     CUDA_VISIBLE_DEVICES=0 python scripts/training/train_spatial_sequence.py \
         --data_dir data/seq_rz_c2_sk --n_epochs 500 --encoder gamma
 
     # 其他参数
     CUDA_VISIBLE_DEVICES=0 python scripts/training/train_spatial_sequence.py \
-        --encoder ema --window_size 60 --n_scales 6 --hidden_dim 256
+        --encoder fractional --window_size 60 --n_scales 6 --hidden_dim 256
 """
 
 import os
@@ -35,7 +35,7 @@ from src.training.trainer_unified import UnifiedTrainer
 parser = argparse.ArgumentParser()
 add_common_args(parser, data_dir_default="data/seq_rz_c2_sk")
 parser.add_argument("--encoder", type=str, default="fractional",
-                    choices=["ema", "fractional", "gamma"],
+                    choices=["ema", "fractional", "gamma", "gru", "transformer", "tcn"],
                     help="Temporal encoder type")
 parser.add_argument("--n_nodes", type=int, default=None,
                     help="Number of skeleton nodes (auto-detect if None)")

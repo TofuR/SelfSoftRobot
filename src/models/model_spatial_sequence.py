@@ -27,6 +27,9 @@ from .mixins import TemporalMixin
 from src.encoders.fractional_memory import FractionalMemory
 from src.encoders.multi_scale_ema import MultiScaleEMA
 from src.encoders.gamma_laguerre import GammaLaguerreMemory
+from src.encoders.temporal_gru import TemporalGRU
+from src.encoders.temporal_transformer import TemporalTransformer
+from src.encoders.temporal_tcn import TemporalTCN
 from src.training.spec import TrainingSpec, PhaseSpec
 from src.data.dataset_pointcloud import _sample_surface
 
@@ -82,6 +85,9 @@ class SpatialSequenceModel(nn.Module, TemporalMixin):
             "ema": MultiScaleEMA,
             "fractional": FractionalMemory,
             "gamma": GammaLaguerreMemory,
+            "gru": TemporalGRU,
+            "transformer": TemporalTransformer,
+            "tcn": TemporalTCN,
         }
         EncoderClass = _ENCODERS.get(encoder_type, FractionalMemory)
         self.temporal = EncoderClass(
