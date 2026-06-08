@@ -151,7 +151,8 @@ class UnifiedTrainer:
         # 模型特有参数
         for attr in ('skeleton_mode', 'rod_radius', 'd_filter', 'n_freqs',
                      'n_fine', 'n_medium', 'n_coarse', 'deform_n_freqs',
-                     'fourier_n_freq', 'bspline_n_ctrl', 'catmullrom_n_ctrl'):
+                     'fourier_n_freq', 'bspline_n_ctrl', 'catmullrom_n_ctrl',
+                     'encoder_type'):
             val = getattr(model, attr, None)
             if val is not None:
                 config[attr] = val
@@ -368,10 +369,19 @@ class UnifiedTrainer:
                         # FractionalMemory
                         a = temporal.alphas.detach().cpu().numpy()
                         print(f"    alphas: {[round(x, 4) for x in a]}")
+                    elif hasattr(temporal, "cls_token"):
+                        # TemporalTransformer
+                        cls_norm = temporal.cls_token.norm().item()
+                        print(f"    Transformer: CLS norm={cls_norm:.4f}, heads={temporal.n_heads}, layers={temporal.n_layers}")
+                    elif hasattr(temporal, "tcn_layers"):
+                        # TemporalTCN
+                        n_l = len(temporal.tcn_layers)
+                        print(f"    TCN: {n_l} dilated conv layers")
                     elif hasattr(temporal, "decays"):
-                        # MultiScaleEMA
+                        # MultiScaleEMA or TemporalGRU (synthetic decays)
                         d = temporal.decays.detach().cpu().numpy()
-                        print(f"    decays: {[round(x, 4) for x in d]}")
+                        enc_name = type(temporal).__name__
+                        print(f"    {enc_name}: decays={[round(x, 4) for x in d]}")
 
                 if avg < best_val:
                     best_val = avg
