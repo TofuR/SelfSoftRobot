@@ -75,7 +75,7 @@ There is no formal test suite. Validation is done through notebooks and the eval
 
 ```
 src/
-  encoders/          # Temporal encoders (MultiScaleEMA)
+  encoders/          # Temporal encoders (MultiScaleEMA, GammaLaguerre, TemporalGRU, TemporalTransformer, TemporalTCN)
   fields/            # Neural fields (CanonicalField, DeformationField, SkeletonConditionedDensity)
   heads/             # Skeleton regression heads (point/fourier/bspline/catmullrom)
   rendering/         # View strategies (SingleView, MultiView)
@@ -107,6 +107,10 @@ Shared components:
 ### Extracted Modules
 
 - `src/encoders/multi_scale_ema.py`: `MultiScaleEMA` — multi-scale exponential moving average
+- `src/encoders/gamma_laguerre.py`: `GammaLaguerreMemory` — Gamma distribution kernels with delayed peak
+- `src/encoders/temporal_gru.py`: `TemporalGRU` — order-sensitive GRU over action window
+- `src/encoders/temporal_transformer.py`: `TemporalTransformer` — self-attention with CLS token
+- `src/encoders/temporal_tcn.py`: `TemporalTCN` — causal dilated 1D convolution
 - `src/fields/`: `CanonicalField`, `DeformationField`, `SkeletonConditionedDensity`
 - `src/heads/skeleton_heads.py`: 4 skeleton parameterizations (point/fourier/bspline/catmullrom), factory function `create_skeleton_head()`
 - `src/rendering/view_strategy.py`: `SingleViewStrategy` / `MultiViewStrategy`
