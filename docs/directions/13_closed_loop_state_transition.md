@@ -1,10 +1,13 @@
 # 方向：闭环状态转移模型——从"稳态推断"到"一步状态转移"
 
-> 状态：设计已锁定，待开新 branch 实现 Stage 0
+> 状态：Stage 0（`StateTransitionSpatialModel`）+ 全 GT 驱动窗口框架（[14](14_gt_observed_transition.md)，**当前主线**）已实现并 smoke 验证
 > 基础模型：`model_spatial_sequence.py` 的 `SpatialSequenceModel`
 > 相对方向：比 [01_autoregressive_state_dynamics.md](01_autoregressive_state_dynamics.md) 更进一步
 > 核心思想：`s_t = F(s_{t-1}, a_t, z_{t-1})` —— 把前一步物理状态 + 可学习迟滞潜变量作为显式输入，让模型学习状态转移而非状态推断
 > 创建：2026-06-15
+
+> ⚠️ 主线已确定：见下方"〇·五、主线确定"。本方向的"纯自回归 rollout"（推理时一路喂模型自己的预测）**退为未来扩展**（无法每步采集真实状态的场景）。当前主线是姊妹方向 [14_gt_observed_transition.md](14_gt_observed_transition.md) 的**全 GT 驱动窗口框架**——前一状态永远来自真实观测（仿真 GT / 实物图像骨架化）。
+
 
 ## 设计锁定（本会话确认的关键约束）
 
@@ -14,6 +17,38 @@
 4. **3D 纯监督先行**，正向转移模型优先（非逆向/联合）。
 5. `prev_skeleton = positions[t-1]` 已在 `.npz`（连续逐帧），Stage 0 **无需重采数据**。
 6. **向后兼容**：`SpatialSequenceModel` / `PCSpatial` / 现有 dataset / trainer 调用一字不改。
+
+---
+
+## 〇·五、主线确定：GT 驱动窗口框架（当前主线）vs 自回归 rollout（未来扩展）
+
+经过多轮讨论，确认实际部署模型是**单步状态转移 + 前一状态永远真实**，而非"一路自回归推下去"：
+
+```
+每一步：输入 (真实的 s_{t-1}, action_t) → 模型 → 预测 ŝ_t
+         ↑ s_{t-1} 总是真实：仿真=positions[t-1]（GT），实物=图像骨架化
+```
+
+由此分流出两条路径，**当前主线是 GT 驱动窗口框架**：
+
+| 维度 | GT 驱动窗口框架（方向 14，**主线**） | 纯自回归 rollout（本方向 13，**未来扩展**） |
+|------|--------------------------------------|----------------------------------------------|
+| 前一状态 s_{t-1} 来源 | **真实观测**（GT/图像骨架化） | 模型自己的上一步预测 |
+| 误差累积 | s 不漂移（每步重置真实） | s 误差累积（漂移比可达 1000×） |
+| z 演化喂什么 | 恒喂真实 s | 喂预测（train/inference gap） |
+| 适用场景 | **当前部署**（每步都能观测） | 无法每步观测、需多步前瞻预测 |
+| 训练/推理一致性 | 完全一致（TF=1.0） | 需 scheduled sampling 弥合 gap |
+
+**冒烟验证结论**（cuda3，episode_len=12，3 epoch）：GT 窗口框架 z drift ratio=2.06x（z 温和演化、收敛有界），对比纯自回归 rollout 漂移比 1170× → **GT 框架是当前部署的唯一合理选择**，rollout 留待"去除部署时状态采集"再启用。
+
+### 窗口模式关键设计（主线采用，详见 [14](14_gt_observed_transition.md) §4–6）
+
+1. **z 演化范围 = 状态窗口 K 步，可打乱**：z 不跨样本叠加，只在每个样本的窗口 `[s_{t-K}...s_{t-1}]` 内演化 K 步（每步喂真实 s）。样本自包含 → 样本间可 shuffle。K 默认 = action_window（40），可调。
+2. **z_0 = cond-only 初始化**（暂不用动作+状态联合）：K=40 演化下 z_0 留存 ≈ 0.9^40 ≈ 2%，初始化方式影响小；先简后消融（zero-init baseline 对比）。
+3. **dense supervision（每步预测 + 每步 loss）——z 学习的关键**：z 无 GT，sparse（只预测窗口最后一步）会让 BPTT 穿 40 层、梯度到不了早期 Φ_z；dense 给每个演化步直接梯度，且几乎免费（z 演化本就 K 次 forward）。**无数据泄漏**（预测 ŝ_{j+1} 的 GT 是 s_{j+1}，而 s_{j+1} 从未出现在预测路径，标准 teacher forcing）。
+4. **部署/评估只看最后一步 ŝ_t**：dense 是训练手段（帮 z 学）；部署无 GT 不算 loss，直接用最后一步预测。可选递增权重（`--dense_step_weight linear`）缓解早期窗口噪声。
+
+
 
 ---
 
