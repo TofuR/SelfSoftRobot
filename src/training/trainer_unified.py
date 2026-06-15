@@ -96,6 +96,65 @@ class UnifiedTrainer:
         losses["total"] = sum(v for k, v in losses.items() if not k.endswith("_monitor"))
         return losses
 
+    def _compute_sequence_losses(self, batch, phase_spec):
+        """Stage 1 序列级损失：episode 内逐步 rollout + scheduled sampling + z 跨帧演化。
+
+        与逐帧 _compute_losses 的区别：
+          - z 在序列内逐步演化（经 model.forward_sequence），真正成为迟滞潜变量
+          - 梯度穿过 T 步（BPTT），训练 z 的转移动力学
+          - scheduled sampling：每步按 teacher_forcing_ratio 决定下一步的 prev_skeleton
+            取 GT（teacher forcing）还是模型上一步预测（闭环），弥合 train/inference gap
+
+        batch（episode 模式）:
+          action_windows: (B, T, seq_len, D)
+          gt_skeletons:   (B, T, N, 3)
+          init_skeleton:  (B, N, 3)
+        """
+        import random
+        device = self.device
+        action_windows = batch["action_windows"].to(device)   # (B, T, K, D)
+        gt_skeletons = batch["gt_skeletons"].to(device)        # (B, T, N, 3)
+        init_skeleton = batch["init_skeleton"].to(device)      # (B, N, 3)
+
+        T = action_windows.shape[1]
+        tf_ratio = getattr(phase_spec, "teacher_forcing_ratio", 0.5)
+
+        # 构建 scheduled-sampling 的 teacher_states：逐步决定该步 prev 用 GT 还是空（闭环）。
+        # model.forward_sequence 接收 teacher_states：非 None 时下一步 prev = GT。
+        # 为实现 per-step mixing，这里按步生成 teacher mask 序列：mask[t]=True 表示
+        # "第 t 步预测后，下一步的 prev 用 GT"。
+        losses = {}
+        total = 0.0
+        z_t = self.model.init_z_from_action(action_windows[:, 0])
+        s_prev = init_skeleton
+        s_prev_prev = init_skeleton
+        preds = []
+
+        for t in range(T):
+            out = self.model.forward(
+                action_windows[:, t], s_prev, s_prev_prev, z_t)
+            s_pred = out["skeleton"]
+            z_t = out["latent_z"]
+            preds.append(s_pred)
+
+            # scheduled sampling：决定下一步的 prev_skeleton
+            use_teacher = random.random() < tf_ratio
+            s_prev_prev = s_prev
+            s_prev = gt_skeletons[:, t] if use_teacher else s_pred
+
+        pred_seq = torch.stack(preds, dim=1)  # (B, T, N, 3)
+
+        # 逐步 MSE（skeleton）+ 空间平滑（用 torch 原生，与本文件不含 F 的风格一致）
+        if "skeleton" in phase_spec.active_losses:
+            losses["skeleton"] = ((pred_seq - gt_skeletons) ** 2).mean()
+        if "spatial_smooth" in phase_spec.active_losses:
+            pd = pred_seq[:, :, 1:, :] - pred_seq[:, :, :-1, :]
+            gd = gt_skeletons[:, :, 1:, :] - gt_skeletons[:, :, :-1, :]
+            losses["spatial_smooth"] = ((pd - gd) ** 2).mean()
+
+        losses["total"] = sum(losses.values())
+        return losses
+
     def _build_exp_config(self, data_dirs, n_epochs_per_phase):
         """构建完整的实验配置 dict，用于保存到 config.json。"""
         opt_cfg = self.config.get("optimization", {})
@@ -313,8 +372,12 @@ class UnifiedTrainer:
 
                 pbar = tqdm(loader, desc=f"[{phase_spec.name}] Epoch {epoch}/{n_epochs}")
                 for batch in pbar:
-                    forward_fn = self.phase.get_forward_fn()
-                    losses = self._compute_losses(forward_fn, batch, phase_spec)
+                    # Stage 1 episode 模式走序列级损失（z 跨帧演化 + scheduled sampling）
+                    if getattr(phase_spec, 'use_episode_mode', False):
+                        losses = self._compute_sequence_losses(batch, phase_spec)
+                    else:
+                        forward_fn = self.phase.get_forward_fn()
+                        losses = self._compute_losses(forward_fn, batch, phase_spec)
 
                     # warmup 缩放跨视角 loss
                     if self._warmup_factor < 1.0:

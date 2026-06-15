@@ -34,6 +34,11 @@ class PhaseSpec:
         dataset_kwargs: 传给数据集构造器的额外参数
         save_modules: 阶段结束时保存的子模块名列表
         load_modules: 阶段开始时从前面阶段加载的子模块 {"module_name": "prev_phase_name"}
+        use_episode_mode: Stage 1 序列级训练开关。True 时 trainer 走 _compute_sequence_losses
+                         （episode 内逐步 rollout + scheduled sampling + z 跨帧演化），False 走逐帧独立路径。
+        teacher_forcing_ratio: episode 模式下用 GT 前一步骨架的概率（scheduled sampling）。
+                              1.0=纯 teacher forcing，0.0=纯闭环（喂自身预测）。
+        episode_len: episode 模式下单条序列长度（时间步数）。
     """
     name: str
     freeze_modules: list[str] = field(default_factory=list)
@@ -47,6 +52,10 @@ class PhaseSpec:
     save_modules: list[str] = field(default_factory=list)
     load_modules: dict[str, str] = field(default_factory=dict)
     use_gt_skeleton: bool = False
+    # ── Stage 1 序列级训练（闭环状态转移用，默认关闭，向后兼容）──
+    use_episode_mode: bool = False
+    teacher_forcing_ratio: float = 0.5
+    episode_len: int = 20
 
 
 @dataclass

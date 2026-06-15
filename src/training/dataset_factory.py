@@ -108,13 +108,15 @@ def create_dataset(dataset_type: str, data_dir: str, config: dict,
         )
 
     elif dataset_type == "state_transition":
-        # 闭环状态转移：额外返回前一步骨架（prev_gt_skeleton/prev_prev_gt_skeleton）。
+        # 闭环状态转移：额外返回前一步骨架（单帧模式）或连续序列（episode 模式）。
         # 继承 SpatialSequenceDataset，复用通用 collate（spatial_collate_fn）。
         from src.data.dataset_spatial import StateTransitionDataset
         return StateTransitionDataset(
             data_dir,
             seq_len=seq_len,
             pairs="smooth" in phase_spec.active_losses,
+            episode_mode=getattr(phase_spec, "use_episode_mode", False),
+            episode_len=getattr(phase_spec, "episode_len", 20),
         )
 
     else:

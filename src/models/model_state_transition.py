@@ -274,6 +274,53 @@ class StateTransitionSpatialModel(nn.Module, TemporalMixin):
 
         return {"skeleton": skeleton, "latent_z": z_t}
 
+    def forward_sequence(self, action_windows, init_skeleton, teacher_states=None):
+        """序列级前向：沿时间逐步 rollout，z 跨帧演化（Stage 1 序列训练用）。
+
+        与单步 forward 的区别：
+          - z 在序列内逐步演化（真正成为迟滞潜变量，而非每步从 cond 重初始化）
+          - 梯度穿过所有时间步（BPTT），训练 z 的转移动力学
+          - teacher_states 提供 scheduled sampling：每步的"前一步骨架"按需取 GT 或自身预测
+
+        Args:
+            action_windows: (B, T, seq_len, D) 每步动作窗口。
+            init_skeleton: (B, N, 3) 首步前驱骨架（归一化空间，rollout 初始化）。
+            teacher_states: (B, T, N, 3) | None。每步的 GT 骨架（归一化空间），
+                           用于 scheduled sampling 决定 prev_skeleton 取 GT 还是自身预测。
+                           None 时纯闭环（每步都喂自身预测）。
+
+        Returns:
+            dict:
+              'skeletons': (B, T, N, 3) 每步预测中心线（归一化空间）。
+              'final_z':   (B, z_dim) 序列末尾的 z（供后续分析）。
+        """
+        B, T = action_windows.shape[0], action_windows.shape[1]
+        device = action_windows.device
+
+        # 首步 z 从首步 action_window 初始化（冷启动）
+        z_t = self.init_z_from_action(action_windows[:, 0])  # (B, z_dim)
+        s_prev = init_skeleton                  # (B, N, 3)
+        s_prev_prev = init_skeleton             # 首步无 t-2，v=0
+
+        skeletons = []
+        for t in range(T):
+            out = self.forward(action_windows[:, t], s_prev, s_prev_prev, z_t)
+            s_pred = out["skeleton"]            # (B, N, 3)
+            z_t = out["latent_z"]               # z 跨帧演化（BPTT 梯度穿过）
+            skeletons.append(s_pred)
+
+            # scheduled sampling：更新下一步的 s_prev。
+            # 若提供 teacher_states，下一步的 prev 用 GT（teacher forcing），
+            # 否则用当前预测（闭环）——实际 mixing 由 trainer 按概率决定，这里只承接 trainer 传入的 prev。
+            if teacher_states is not None:
+                s_prev_prev = s_prev
+                s_prev = teacher_states[:, t]   # teacher forcing：下一步 prev = GT
+            else:
+                s_prev_prev = s_prev
+                s_prev = s_pred                 # 闭环：下一步 prev = 自身预测
+
+        return {"skeletons": torch.stack(skeletons, dim=1), "final_z": z_t}
+
     def compute_losses(self, batch: dict, phase_spec) -> dict:
         """计算训练损失（warm start，从 batch 取 GT 前一步骨架作 teacher forcing）。
 
