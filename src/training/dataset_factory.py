@@ -107,6 +107,16 @@ def create_dataset(dataset_type: str, data_dir: str, config: dict,
             pairs="smooth" in phase_spec.active_losses,
         )
 
+    elif dataset_type == "state_transition":
+        # 闭环状态转移：额外返回前一步骨架（prev_gt_skeleton/prev_prev_gt_skeleton）。
+        # 继承 SpatialSequenceDataset，复用通用 collate（spatial_collate_fn）。
+        from src.data.dataset_spatial import StateTransitionDataset
+        return StateTransitionDataset(
+            data_dir,
+            seq_len=seq_len,
+            pairs="smooth" in phase_spec.active_losses,
+        )
+
     else:
         raise ValueError(f"Unknown dataset_type: {dataset_type}")
 
@@ -132,6 +142,11 @@ def get_collate_fn(dataset_type: str, dataset: Dataset):
     elif dataset_type == "pointcloud":
         return _collate_pointcloud
     elif dataset_type == "spatial_sequence":
+        from src.data.dataset_spatial import spatial_collate_fn
+        return spatial_collate_fn
+    elif dataset_type == "state_transition":
+        # 闭环状态转移：dict 样本新增 prev_gt_skeleton/prev_prev_gt_skeleton 键，
+        # spatial_collate_fn 是通用 dict 合并，自动 stack 新键，无需单独 collate。
         from src.data.dataset_spatial import spatial_collate_fn
         return spatial_collate_fn
     else:

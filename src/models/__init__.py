@@ -32,4 +32,7 @@ def __getattr__(name):
     if name == "PCSpatialSequenceModel":
         from .model_pc_spatial import PCSpatialSequenceModel
         return PCSpatialSequenceModel
+    if name == "StateTransitionSpatialModel":
+        from .model_state_transition import StateTransitionSpatialModel
+        return StateTransitionSpatialModel
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

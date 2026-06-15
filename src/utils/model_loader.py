@@ -119,6 +119,15 @@ def _detect_model_type(state_dict):
     if has_skel and has_sdf_net and not has_density:
         return 'skeleton_sdf', 0
 
+    # StateTransition: 可学习迟滞潜变量模型（z_cell + state_encoder + delta_head）
+    # 检测放在 spatial_sequence 之前：本模型有 gru 但无 slice_head（用 delta_head），
+    # 不会误命中 spatial_sequence 分支，但显式检测更清晰。
+    has_z_cell = any('z_cell' in k for k in keys)
+    has_state_encoder = any('state_encoder' in k for k in keys)
+    has_delta_head = any('delta_head' in k for k in keys)
+    if has_z_cell and (has_state_encoder or has_delta_head):
+        return 'state_transition', 0
+
     # SpatialSequence: gru + slice_head（无 correction）
     has_gru = any('gru' in k for k in keys)
     has_slice = any('slice_head' in k for k in keys)
@@ -323,6 +332,48 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
 
         model.load_state_dict(state_dict, strict=False)
         # norm_factor 从 checkpoint buffer 恢复
+        if 'action_norm_factor' in state_dict:
+            norm_factor = state_dict['action_norm_factor'].item()
+
+    elif model_type == 'state_transition':
+        # StateTransitionSpatialModel — 闭环状态转移 + 可学习潜变量 z
+        n_nodes = saved_cfg.get('n_nodes', 31) if saved_cfg else 31
+        z_dim = saved_cfg.get('z_dim', 16) if saved_cfg else 16
+        if saved_cfg and 'n_scales' in saved_cfg:
+            n_orders = saved_cfg['n_scales']
+        else:
+            n_orders = train_cfg['temporal'].get('n_scales', 4)
+            for k, v in state_dict.items():
+                if k == 'temporal.raw_alphas':
+                    n_orders = v.shape[0]
+                    break
+                if k == 'temporal.order_weights':
+                    n_orders = v.shape[0]
+                    break
+        # encoder_type 推断（与 spatial_sequence 分支一致）
+        if any('raw_alphas' in k for k in state_dict):
+            encoder_type = 'fractional'
+        elif any('temporal.k_offsets' in k or 'temporal.logit_lambdas' in k for k in state_dict):
+            encoder_type = 'gamma'
+        elif any('temporal.cls_token' in k for k in state_dict):
+            encoder_type = 'transformer'
+        elif any('temporal.tcn_layers' in k for k in state_dict):
+            encoder_type = 'tcn'
+        elif any('temporal.gru.weight' in k for k in state_dict):
+            encoder_type = 'gru'
+        elif any('raw_decays' in k for k in state_dict):
+            encoder_type = 'ema'
+        else:
+            encoder_type = saved_cfg.get('encoder_type', 'ema') if saved_cfg else 'ema'
+        hidden_dim = saved_cfg.get('hidden_dim', train_cfg['temporal']['hidden_dim']) if saved_cfg else train_cfg['temporal']['hidden_dim']
+
+        from src.models.model_state_transition import StateTransitionSpatialModel
+        model = StateTransitionSpatialModel(
+            action_dim=action_dim, window_size=window_size,
+            n_orders=n_orders, hidden_dim=hidden_dim,
+            n_nodes=n_nodes, encoder_type=encoder_type, z_dim=z_dim,
+        ).to(device)
+        model.load_state_dict(state_dict, strict=False)
         if 'action_norm_factor' in state_dict:
             norm_factor = state_dict['action_norm_factor'].item()
 
