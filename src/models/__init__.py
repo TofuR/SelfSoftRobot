@@ -35,4 +35,7 @@ def __getattr__(name):
     if name == "StateTransitionSpatialModel":
         from .model_state_transition import StateTransitionSpatialModel
         return StateTransitionSpatialModel
+    if name == "GTObservedTransitionModel":
+        from .model_gt_transition import GTObservedTransitionModel
+        return GTObservedTransitionModel
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

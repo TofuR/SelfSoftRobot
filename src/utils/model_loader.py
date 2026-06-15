@@ -366,13 +366,26 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
         else:
             encoder_type = saved_cfg.get('encoder_type', 'ema') if saved_cfg else 'ema'
         hidden_dim = saved_cfg.get('hidden_dim', train_cfg['temporal']['hidden_dim']) if saved_cfg else train_cfg['temporal']['hidden_dim']
+        episode_len = saved_cfg.get('episode_len', 20) if saved_cfg else 20
 
-        from src.models.model_state_transition import StateTransitionSpatialModel
-        model = StateTransitionSpatialModel(
-            action_dim=action_dim, window_size=window_size,
-            n_orders=n_orders, hidden_dim=hidden_dim,
-            n_nodes=n_nodes, encoder_type=encoder_type, z_dim=z_dim,
-        ).to(device)
+        # 按 config.json 的 model 字段区分全 GT 驱动子类（二者 state_dict key 相同，
+        # 无法靠 key 检测区分；GTObservedTransitionModel 在 config 里记录了类名）
+        is_gt_observed = bool(saved_cfg and saved_cfg.get('model') == 'GTObservedTransitionModel')
+        if is_gt_observed:
+            from src.models.model_gt_transition import GTObservedTransitionModel
+            model = GTObservedTransitionModel(
+                action_dim=action_dim, window_size=window_size,
+                n_orders=n_orders, hidden_dim=hidden_dim,
+                n_nodes=n_nodes, encoder_type=encoder_type, z_dim=z_dim,
+                episode_len=episode_len,
+            ).to(device)
+        else:
+            from src.models.model_state_transition import StateTransitionSpatialModel
+            model = StateTransitionSpatialModel(
+                action_dim=action_dim, window_size=window_size,
+                n_orders=n_orders, hidden_dim=hidden_dim,
+                n_nodes=n_nodes, encoder_type=encoder_type, z_dim=z_dim,
+            ).to(device)
         model.load_state_dict(state_dict, strict=False)
         if 'action_norm_factor' in state_dict:
             norm_factor = state_dict['action_norm_factor'].item()
