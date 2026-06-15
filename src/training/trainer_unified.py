@@ -145,8 +145,17 @@ class UnifiedTrainer:
         pred_seq = torch.stack(preds, dim=1)  # (B, T, N, 3)
 
         # 逐步 MSE（skeleton）+ 空间平滑（用 torch 原生，与本文件不含 F 的风格一致）
+        # dense supervision：T 步每步都算 loss，给无 GT 的 z 每步直接梯度（关键）。
+        # 可选递增权重（dense_step_weight="linear"）：窗口早期 z 浅、信息量低，
+        # 权重随步数递增，让最后几步（接近部署目标）贡献更大。默认等权。
         if "skeleton" in phase_spec.active_losses:
-            losses["skeleton"] = ((pred_seq - gt_skeletons) ** 2).mean()
+            per_step_mse = ((pred_seq - gt_skeletons) ** 2).mean(dim=(2, 3))  # (B, T)
+            weight_mode = getattr(phase_spec, "dense_step_weight", "uniform")
+            if weight_mode == "linear":
+                w = torch.arange(1, T + 1, device=device, dtype=per_step_mse.dtype) / T  # 1/T..1
+                losses["skeleton"] = (per_step_mse * w).mean()
+            else:
+                losses["skeleton"] = per_step_mse.mean()
         if "spatial_smooth" in phase_spec.active_losses:
             pd = pred_seq[:, :, 1:, :] - pred_seq[:, :, :-1, :]
             gd = gt_skeletons[:, :, 1:, :] - gt_skeletons[:, :, :-1, :]
