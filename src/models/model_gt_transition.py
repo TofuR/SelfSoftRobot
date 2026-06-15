@@ -52,16 +52,19 @@ class GTObservedTransitionModel(StateTransitionSpatialModel):
                 supervision_mode="spatial_sequence",
                 active_losses=["skeleton", "spatial_smooth", "smooth"],
                 forward_attr="forward",
-                # 全 GT 驱动：episode 序列训练（z 跨帧演化），s 总是真实（TF=1.0）
+                # 全 GT 驱动窗口模式：z 在窗口内 K 步演化（每步喂真实 s），
+                # dense supervision（每步预测都算 loss，给无 GT 的 z 直接梯度），
+                # s 恒真实（TF=1.0），样本自包含可打乱。
+                # episode_len 默认对齐 action_window（=window_size），K 可调。
                 use_episode_mode=True,
                 teacher_forcing_ratio=1.0,
-                episode_len=20,
+                episode_len=40,
             ),
         ],
     )
 
     def __init__(self, action_dim=2, n_nodes=31, hidden_dim=128, window_size=20,
-                 n_orders=4, encoder_type="fractional", z_dim=16, episode_len=20):
+                 n_orders=4, encoder_type="fractional", z_dim=16, episode_len=40):
         super().__init__(
             action_dim=action_dim, n_nodes=n_nodes, hidden_dim=hidden_dim,
             window_size=window_size, n_orders=n_orders, encoder_type=encoder_type,
