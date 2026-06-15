@@ -169,3 +169,43 @@ def spatial_collate_fn(batch):
         else:
             result[k] = torch.stack(vals, dim=0)
     return result
+
+
+class StateTransitionDataset(SpatialSequenceDataset):
+    """闭环状态转移数据集：在 SpatialSequenceDataset 基础上额外返回前一步骨架。
+
+    用于 StateTransitionSpatialModel，模型学习状态转移 s_t = F(s_{t-1}, a_t, z_{t-1})，
+    需要前一步的 GT 中心线作为输入（teacher forcing）。
+
+    额外返回（相对父类）:
+      prev_gt_skeleton:      (n_nodes, 3) 归一化后的 positions[t-1]（前一步中心线）
+      prev_prev_gt_skeleton: (n_nodes, 3) 归一化后的 positions[t-2]（用于速度 v = s_{t-1} - s_{t-2}）
+
+    边界说明:
+      父类样本循环 t ∈ [seq_len-1, end]，其中 end = T-1（pairs=True）或 T。
+      因此 t-1 ≥ seq_len-2 ≥ 0，t-2 ≥ seq_len-3，positions[t-1]/[t-2] 恒为同一 episode
+      内的有效前驱帧，**无需 zero-pad**，也无跨 episode 污染。
+
+    归一化:
+      前一步骨架复用父类在同一数据集上计算的 pc_center / pc_scale（同一空间坐标系，
+      仅时间步更早），保证与 gt_skeleton 处于同一归一化空间。
+    """
+
+    def __getitem__(self, idx):
+        # 复用父类：返回 action_window, gt_skeleton(t), gt_radii, action_window_next
+        result = super().__getitem__(idx)
+
+        seq_id, t = self.samples[idx]
+        data = self.data_cache[seq_id]
+
+        # 前一步骨架 positions[t-1]: (3, N) → (N, 3) → 归一化（与父类 gt_skeleton 一致）
+        prev_skeleton = data['positions'][t - 1].astype(np.float32).T
+        prev_skeleton = (prev_skeleton - self.pc_center) / self.pc_scale
+
+        # 前两步骨架 positions[t-2]: 用于计算速度 v = s_{t-1} - s_{t-2}
+        prev_prev_skeleton = data['positions'][t - 2].astype(np.float32).T
+        prev_prev_skeleton = (prev_prev_skeleton - self.pc_center) / self.pc_scale
+
+        result["prev_gt_skeleton"] = torch.from_numpy(prev_skeleton).float()
+        result["prev_prev_gt_skeleton"] = torch.from_numpy(prev_prev_skeleton).float()
+        return result
