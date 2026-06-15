@@ -48,8 +48,11 @@ parser.add_argument("--n_nodes", type=int, default=None,
                     help="Number of skeleton nodes (auto-detect if None)")
 parser.add_argument("--z_dim", type=int, default=16,
                     help="Dimension of learnable hysteretic latent z")
-parser.add_argument("--episode_len", type=int, default=20,
-                    help="Sequence length per episode (time steps)")
+parser.add_argument("--episode_len", type=int, default=40,
+                    help="State window length K (= z evolution steps); default aligns action_window")
+parser.add_argument("--dense_step_weight", type=str, default="uniform",
+                    choices=["uniform", "linear"],
+                    help="Dense supervision weighting: uniform (等权) or linear (递增，最后步权重大)")
 args = parser.parse_args()
 
 config = resolve_training_config(build_common_overrides(args))
@@ -76,10 +79,12 @@ model = GTObservedTransitionModel(
 ).to(device)
 
 spec = model.training_spec
+# 透传 dense 监督权重模式到 spec（trainer 的 _compute_sequence_losses 读取）
+spec.phases[0].dense_step_weight = args.dense_step_weight
 n_params = sum(p.numel() for p in model.parameters())
-print("\nModel: GTObservedTransition (全 GT 驱动单步转移, z 跨帧演化)")
+print("\nModel: GTObservedTransition (全 GT 驱动窗口, z 跨帧演化, dense supervision)")
 print(f"  Action dim: {action_dim}, N nodes: {n_nodes}, Encoder: {args.encoder}, z_dim: {args.z_dim}")
-print(f"  episode_len: {args.episode_len}, teacher_forcing_ratio: {spec.phases[0].teacher_forcing_ratio}")
+print(f"  episode_len(K): {args.episode_len}, teacher_forcing_ratio: {spec.phases[0].teacher_forcing_ratio}, dense_step_weight: {args.dense_step_weight}")
 print(f"  Parameters: {n_params:,}")
 print(f"  Active losses: {spec.phases[0].active_losses}")
 
