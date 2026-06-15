@@ -151,7 +151,7 @@ def main():
     parser.add_argument('--output', default=None)
     parser.add_argument('--grid_res', type=int, default=None)
     parser.add_argument('--threshold', type=float, default=None)
-    parser.add_argument('--no-gif', action='store_true', help='跳过 GIF 输出（帧数多时可大幅加速）')
+    parser.add_argument('--gif', action='store_true', help='生成 GIF 动画（默认跳过以加速）')
     args = parser.parse_args()
 
     from config.params import load_config
@@ -331,13 +331,13 @@ def main():
         fig = render_density_html(all_results[mid], threshold, all_gt[mid], all_pred[mid])
     render_png(fig, png_path)
 
-    # GIF（帧数多时可跳过以加速）
-    if not args.no_gif:
+    # GIF（默认跳过，--gif 时才生成）
+    if args.gif:
         gif_path = os.path.join(output_dir, f"{base_name}.gif")
         render_gif(all_results, model_type, threshold, all_gt, all_pred,
                    frame_indices, sdf_mode=sdf_mode, output_path=gif_path)
     else:
-        print("  (跳过 GIF 输出)")
+        print("  (跳过 GIF，使用 --gif 生成动画)")
 
     print(f"\n完成! 输出目录: {output_dir}")
 

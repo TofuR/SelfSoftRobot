@@ -160,6 +160,28 @@
 
 ---
 
+## 第五层：科学问题（超越工程优化）
+
+> 不是"换一个模型"或"加一个模块"，而是发现关于软体机器人物理世界的新规律。
+
+| 方向 | 文档 | 核心科学问题 | 类型 |
+|------|------|------------|------|
+| **形状即记忆** | [12_scientific_problems.md](12_scientific_problems_soft_robot_self_modeling.md) §A | 当前形状能解码多少加载历史？ | 信息论 |
+| **IK 可逆性** | [12_scientific_problems.md](12_scientific_problems_soft_robot_self_modeling.md) §B | 迟滞条件下逆运动学何时有唯一解？ | 控制论 |
+| **视觉材料发现** | [12_scientific_problems.md](12_scientific_problems_soft_robot_self_modeling.md) §C | 机器人能否从视觉观测推断自身材料属性？ | 逆问题 |
+
+```
+物理记忆
+   ╱        ╲
+读取（A）   写入/消除歧义（B）
+   ╲        ╱
+  粘弹性记忆信道
+      ↑
+材料属性决定信道（C）
+```
+
+---
+
 ## 已归档方向
 
 以下方向已实现，归档至 `docs/archived/directions/`：

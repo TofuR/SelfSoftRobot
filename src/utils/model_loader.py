@@ -275,9 +275,20 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
 
     elif model_type in ('spatial_sequence', 'pc_spatial'):
         # SpatialSequence / PCSpatial — skeleton-only 模型
-        # n_orders 从 temporal 权重推断, n_nodes 默认 31
-        n_orders = train_cfg['temporal'].get('n_scales', 4)
+        # n_orders 推断优先级: saved_cfg > state_dict 权重形状 > 全局默认
         n_nodes = saved_cfg.get('n_nodes', 31) if saved_cfg else 31
+        if saved_cfg and 'n_scales' in saved_cfg:
+            n_orders = saved_cfg['n_scales']
+        else:
+            n_orders = train_cfg['temporal'].get('n_scales', 4)
+            # 从 state_dict 权重形状推断（覆盖默认值）
+            for k, v in state_dict.items():
+                if k == 'temporal.raw_alphas':
+                    n_orders = v.shape[0]
+                    break
+                if k == 'temporal.order_weights':
+                    n_orders = v.shape[0]
+                    break
         if any('raw_alphas' in k for k in state_dict):
             encoder_type = 'fractional'
         elif any('temporal.k_offsets' in k or 'temporal.logit_lambdas' in k for k in state_dict):
