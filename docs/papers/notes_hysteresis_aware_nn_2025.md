@@ -72,7 +72,7 @@
 
 4. **闭环控制的隐藏状态问题**：
    - 本文指出 RNN 在闭环控制中的隐藏状态管理是个未解决问题
-   - 这与我们的方向 01（[自回归状态动力学](../directions/01_autoregressive_state_dynamics.md)）中的假设二（状态转移）直接相关
+   - 这与我们的方向 01（[自回归状态动力学（已归档）](../archived/directions/01_autoregressive_state_dynamics.md)，现由 [13](../directions/13_closed_loop_state_transition.md)/[14](../directions/14_gt_observed_transition.md)/[15](../directions/15_open_loop_windowed_transition.md) 实现）中的假设二（状态转移）直接相关
    - 如果能从形状推断隐状态（自回归），就能绕过 RNN 隐藏状态的初始化问题
 
 ## 局限

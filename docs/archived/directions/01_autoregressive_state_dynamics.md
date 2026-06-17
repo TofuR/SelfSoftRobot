@@ -1,6 +1,13 @@
 # 方向：自回归状态动力学——从"猜状态"到"推状态"
 
-> 状态：概念阶段
+> 🗄️ **已归档（2026-06-17）**：本方向的核心 idea（prev_state 反馈输入、teacher forcing、scheduled sampling、Δ 预测、速度项、冷启动回退）已**全部实现**于状态转移模型族：
+> - `src/models/model_state_transition.py` `StateTransitionSpatialModel`（方向 [13](../../directions/13_closed_loop_state_transition.md)）
+> - `src/models/model_gt_transition.py` `GTObservedTransitionModel`（方向 [14](../../directions/14_gt_observed_transition.md)，**当前主线**）
+> - `src/models/model_open_loop_transition.py` `OpenLoopTransitionModel`（方向 [15](../../directions/15_open_loop_windowed_transition.md)）
+>
+> 本文保留作历史/理论记录（稳态假设批判、scheduled sampling 推导），后续工作以 13/14/15 为准。
+
+> 状态：概念阶段（已实现，见上）
 > 解决问题：模型只有 action 输入，没有物理状态反馈，导致预测超前
 > 核心思想：将前一步的物理状态（或预测状态）作为输入，让模型学习状态转移而非状态推断
 

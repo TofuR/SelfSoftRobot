@@ -2,7 +2,7 @@
 
 > 状态：Stage 0（`StateTransitionSpatialModel`）+ 全 GT 驱动窗口框架（[14](14_gt_observed_transition.md)，**当前主线**）已实现并 smoke 验证
 > 基础模型：`model_spatial_sequence.py` 的 `SpatialSequenceModel`
-> 相对方向：比 [01_autoregressive_state_dynamics.md](01_autoregressive_state_dynamics.md) 更进一步
+> 相对方向：比 [01 自回归状态动力学（已归档）](../archived/directions/01_autoregressive_state_dynamics.md) 更进一步
 > 核心思想：`s_t = F(s_{t-1}, a_t, z_{t-1})` —— 把前一步物理状态 + 可学习迟滞潜变量作为显式输入，让模型学习状态转移而非状态推断
 > 创建：2026-06-15
 

@@ -122,4 +122,4 @@ python scripts/training/train_spatial_sequence.py --encoder gamma --action_strid
 ## 四、与其他方向的关系
 
 - **迟滞信息容量实验** (`hysteresis_information_capacity.md`)：降采样后有效序列更长，互信息实验结果可能变化
-- **自回归状态动力学** (`autoregressive_state_dynamics.md`)：更长的有效历史窗口 → 更好的迟滞建模
+- **状态转移主线** ([13](13_closed_loop_state_transition.md)/[14](14_gt_observed_transition.md)/[15](15_open_loop_windowed_transition.md)，原 01 已归档)：更长的有效历史窗口 → 更好的迟滞建模

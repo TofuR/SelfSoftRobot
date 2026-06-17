@@ -122,7 +122,7 @@
 
 | 方向 | 文档 | 解决的子问题 | 核心思想 | 状态 |
 |------|------|------------|---------|------|
-| **自回归状态动力学** | [01_autoregressive_state_dynamics.md](01_autoregressive_state_dynamics.md) | "当前在哪" | 前一步物理状态作为输入 | 已实现(见13/14/15) |
+| **自回归状态动力学** | [01（已归档）](../archived/directions/01_autoregressive_state_dynamics.md) | "当前在哪" | 前一步物理状态作为输入 | 已实现(见13/14/15) |
 | **迟滞信息容量分析** | [02_hysteresis_information_capacity.md](02_hysteresis_information_capacity.md) | "能学多少" | 编码器容量 vs 迟滞复杂度 | 待理论验证 |
 | **Action 窗口降采样** | [03_action_window_downsampling.md](03_action_window_downsampling.md) | "输入冗余" | 10x 重复 action 用 stride 消除 | 待实现 |
 | **Action 偏置分析** | [04_temporal_encoding_bias_analysis.md](04_temporal_encoding_bias_analysis.md) | "短路问题" | current_action 拼接绕过迟滞 | 待消融 |
@@ -207,6 +207,7 @@
 | **预测-修正框架** | [predictive_corrective_state_estimation.md](../archived/directions/predictive_corrective_state_estimation.md) | `src/models/model_pc_spatial.py` |
 | **Gamma/Laguerre 延迟编码** | [gamma_laguerre_temporal_encoding.md](../archived/directions/gamma_laguerre_temporal_encoding.md) | `src/encoders/gamma_laguerre.py` |
 | **顺序敏感编码器 (GRU/Transformer/TCN)** | — (直接实现) | `src/encoders/temporal_gru.py`, `temporal_transformer.py`, `temporal_tcn.py` |
+| **自回归状态动力学** | [01_autoregressive_state_dynamics.md](../archived/directions/01_autoregressive_state_dynamics.md) | `src/models/model_state_transition.py` + `model_gt_transition.py` + `model_open_loop_transition.py`（方向 13/14/15） |
 
 ---
 

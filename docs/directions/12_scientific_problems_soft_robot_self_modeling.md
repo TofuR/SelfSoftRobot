@@ -323,7 +323,7 @@ PyElastica 的材料参数（E, ν, damping）可控。可以：
 
 | 现有方向 | 与本方向的关系 |
 |---------|-------------|
-| [01 自回归状态动力学](01_autoregressive_state_dynamics.md) | 假设二（状态方程）的物理基础。本方向回答"状态方程需要多少历史" |
+| [01 自回归状态动力学（已归档）](../archived/directions/01_autoregressive_state_dynamics.md) → [13/14/15](13_closed_loop_state_transition.md) | 假设二（状态方程）的物理基础。本方向回答"状态方程需要多少历史" |
 | [02 迟滞信息容量](02_hysteresis_information_capacity.md) | **直接延伸**。02 提出了互信息框架，本方向将其正式化为解码问题 + 解析界 |
 | [03 动作窗口下采样](03_action_window_downsampling.md) | 窗口长度选择的理论依据：应该 ≥ T* |
 | [04 时序编码偏差分析](04_temporal_encoding_bias_analysis.md) | 编码器核形状应匹配物理松弛核 G(t) |

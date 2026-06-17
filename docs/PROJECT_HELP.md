@@ -118,9 +118,9 @@ SelfSoftRobot/
 │   │   ├── train_flowmatch.py       #   FlowMatch 点云薄包装
 │   │   ├── train_spatial_sequence.py #  SpatialSequence 薄包装
 │   │   ├── train_pc_spatial.py      #   PCSpatial 薄包装
-│   │   ├── train_state_transition.py #  StateTransition Stage0 薄包装（单帧）
-│   │   ├── train_state_transition_s1.py # StateTransition Stage1 序列级训练
+│   │   ├── train_open_loop_transition.py # OpenLoopTransition 窗口开环（热启动 gt_transition + tf 退火）
 │   │   └── train_gt_transition.py   #   GTObservedTransition 薄包装（主线）
+│   │       # (train_state_transition.py / _s1.py 已归档至 docs/archived/trainers/，被 train_gt/open_loop_transition 取代)
 │   ├── evaluation/
 │   │   ├── evaluate_3d.py           #   3D 几何评估脚本
 │   │   ├── visualize_3d_shape.py    #   3D SDF/mesh 可视化
@@ -1413,8 +1413,8 @@ CUDA_VISIBLE_DEVICES=3 python scripts/evaluation/eval_gt_transition.py \
 **（可选）训练 StateTransition 自回归版（未来扩展）**
 
 ```bash
-# Stage 0：单帧 teacher forcing
-CUDA_VISIBLE_DEVICES=3 python scripts/training/train_state_transition.py --n_epochs 5
+# 状态转移：开环训练（热启动 gt_transition + 纯闭环；Stage0/Stage1 脚本已归档）
+CUDA_VISIBLE_DEVICES=3 python scripts/training/train_open_loop_transition.py --n_epochs 5
 
 # 评估纯自回归 rollout（s 和 z 都喂预测，监测漂移）
 CUDA_VISIBLE_DEVICES=3 python scripts/evaluation/eval_rollout.py \
