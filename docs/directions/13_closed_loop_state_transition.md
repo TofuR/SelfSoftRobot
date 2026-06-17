@@ -8,6 +8,11 @@
 
 > ⚠️ 主线已确定：见下方"〇·五、主线确定"。本方向的"纯自回归 rollout"（推理时一路喂模型自己的预测）**退为未来扩展**（无法每步采集真实状态的场景）。当前主线是姊妹方向 [14_gt_observed_transition.md](14_gt_observed_transition.md) 的**全 GT 驱动窗口框架**——前一状态永远来自真实观测（仿真 GT / 实物图像骨架化）。
 
+> 📝 **2026-06-17 更新（勘误 + 定位收窄）**：
+> 1. **1170× 勘误**：本文引用的"纯自回归 rollout 漂移比 1170×"（§〇·五冒烟结论）与表格"1000×"来自 `eval_rollout.py` 旧版——onestep 参考与 rollout 共用单条 `z_t`，分母被 rollout 演化的 z 污染。bug 已修（现维护独立 `z_t` rollout + `z_tf` 干净 teacher-forced 参考，见 [15 §五 Bug 1](15_open_loop_windowed_transition.md)）。故 1170× 非干净比值，定量待重测；**无界累积的定性结论不变**。
+> 2. **定位收窄**：姊妹方向 [15 窗口开环](15_open_loop_windowed_transition.md) 已实现"每 K 步重观测的有界开环"。故本方向 13 现仅覆盖 s_{t-1}-来源轴上**唯一不被 14/15 覆盖**的点：**无界/多步前瞻 rollout**（运行中完全不重观测）。三方向分类见 [15 §〇](15_open_loop_windowed_transition.md)。
+> 3. **脚本更替**：Stage 0/1 文件计划表中的 `train_state_transition.py`（逐帧）/`train_state_transition_s1.py`（固定 tf）已被 `train_gt_transition.py` + `train_open_loop_transition.py` 取代（`_s1` 尚有热启动 GRU 键迁移隐患：`load_state_dict(strict=False)` 未走 `_migrate_gru_keys`）。本文分析章节（§〇 稳态失效、§一 迟滞 z 设计、scheduled sampling/收缩映射误差界）仍是 14/15 共享的理论基础，保留。
+
 
 ## 设计锁定（本会话确认的关键约束）
 
