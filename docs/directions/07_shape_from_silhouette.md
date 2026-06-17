@@ -111,7 +111,7 @@ Flow Matching 生成点云 + 轮廓投影约束：
 | 相机标定 | `src/utils/camera_system.py` | 无 |
 | 投影/反投影 | `src/utils/camera.py` | Visual Hull 构建 |
 | 轮廓提取 | `src/utils/skeleton_2d.py` | 可适用于轮廓 |
-| 多视角策略 | `src/rendering/view_strategy.py` | 轮廓一致性 loss |
+| 多视角策略 | `src/rendering/view_strategy.py`（MultiViewStrategy 已含 with_consistency / w_consist） | Visual Hull 构建 + 骨架条件表面 + 可微轮廓投影 |
 
 ---
 
