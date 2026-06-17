@@ -38,7 +38,17 @@ class PhaseSpec:
                          （episode 内逐步 rollout + scheduled sampling + z 跨帧演化），False 走逐帧独立路径。
         teacher_forcing_ratio: episode 模式下用 GT 前一步骨架的概率（scheduled sampling）。
                               1.0=纯 teacher forcing，0.0=纯闭环（喂自身预测）。
+                              注意：当 tf_anneal_epochs>0 时，此值是退火起点（tf_schedule='staircase'
+                              时为前半段取值）；实际每 epoch 的有效 tf 由 trainer 按 epoch 重新计算。
+        tf_anneal_epochs: 把 teacher_forcing_ratio 退火到 tf_min 的 epoch 数。0=不退火（固定
+                         teacher_forcing_ratio，当前行为，向后兼容）。用于开环变体：从 GT 驱动热启动后
+                         平滑过渡到纯闭环，弥合 train/inference gap。
+        tf_min: 退火终点的 teacher forcing 比例（默认 0.0=纯闭环）。
+        tf_schedule: 退火形状。'linear'=线性插值；'staircase'=前半段保持起点、后半段切到 tf_min
+                    （避免中段 0<tf<1 下速度输入 GT/预测混入，推荐用于退火）。
         episode_len: episode 模式下单条序列长度（时间步数）。
+        dense_step_weight: 窗口内逐步 loss 的加权。'uniform'=等权；'linear'=后段权重更大
+                          （接近部署目标、累积误差更多）。显式声明，避免 getattr 默认值漂移导致静默 no-op。
     """
     name: str
     freeze_modules: list[str] = field(default_factory=list)
@@ -55,7 +65,12 @@ class PhaseSpec:
     # ── Stage 1 序列级训练（闭环状态转移用，默认关闭，向后兼容）──
     use_episode_mode: bool = False
     teacher_forcing_ratio: float = 0.5
+    # 开环变体退火（默认全 0/默认值 = 不退火，等价旧行为）
+    tf_anneal_epochs: int = 0
+    tf_min: float = 0.0
+    tf_schedule: str = "linear"
     episode_len: int = 20
+    dense_step_weight: str = "uniform"
 
 
 @dataclass

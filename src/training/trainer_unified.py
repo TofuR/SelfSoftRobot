@@ -54,6 +54,30 @@ class UnifiedTrainer:
         lw = self.config.get("loss_weights", {})
         return lw.get(loss_name, lw.get(f"w_{loss_name}", default))
 
+    def _effective_tf_ratio(self, phase_spec):
+        """计算当前 epoch 的有效 teacher forcing 比例（支持 epoch 退火）。
+
+        - tf_anneal_epochs <= 0：不退火，返回 nominal teacher_forcing_ratio（当前行为）。
+        - tf_schedule='staircase'：前半段保持 nominal、后半段切到 tf_min。
+          二值切换，避免中段 0<tf<1 下速度输入 GT/预测帧混入（推荐用于退火）。
+        - tf_schedule='linear'：nominal → tf_min 线性下降（每步独立 scheduled sampling；
+          中段速度输入会混入 GT/预测，仅当单步误差较大、需渐进过渡时才用）。
+
+        依赖 self._current_epoch（在 train() 主循环每 epoch 设置，trainer_unified.py:377）。
+        """
+        nominal = getattr(phase_spec, "teacher_forcing_ratio", 0.5)
+        anneal = getattr(phase_spec, "tf_anneal_epochs", 0)
+        if anneal <= 0:
+            return nominal
+        tf_min = getattr(phase_spec, "tf_min", 0.0)
+        schedule = getattr(phase_spec, "tf_schedule", "linear")
+        epoch = getattr(self, "_current_epoch", 1)
+        if schedule == "staircase":
+            return nominal if epoch <= anneal / 2 else tf_min
+        # linear：nominal → tf_min
+        frac = min(1.0, max(0.0, (epoch - 1) / max(anneal - 1, 1)))
+        return nominal + (tf_min - nominal) * frac
+
     def _compute_losses(self, forward_fn, batch, phase_spec):
         """根据 phase_spec 计算 loss。
 
@@ -117,16 +141,21 @@ class UnifiedTrainer:
         init_skeleton = batch["init_skeleton"].to(device)      # (B, N, 3)
 
         T = action_windows.shape[1]
-        tf_ratio = getattr(phase_spec, "teacher_forcing_ratio", 0.5)
+        # 有效 tf：支持 epoch 退火（tf_anneal_epochs>0 时按 schedule 从 nominal→tf_min）。
+        # 默认 tf_anneal_epochs=0 → 等于 nominal teacher_forcing_ratio（旧行为）。
+        tf_ratio = self._effective_tf_ratio(phase_spec)
 
         # 逐步单步转移：z 跨帧演化，s_prev 按 scheduled sampling 取 GT 或自身预测。
         # tf_ratio=1.0（GTObserved 主线）→ 纯 teacher forcing，prev 恒为 GT；
-        # tf_ratio=0.0 → 纯闭环；中间值 → 每步随机 mixing。
+        # tf_ratio=0.0（开环主线）→ 纯闭环（喂自身预测，仅 step-0 的 init_skeleton 是 GT 种子）；
+        # 中间值 → 每步独立 scheduled sampling（注意：此时速度输入 v=prev-prev_prev 会混入
+        #   GT/预测帧，是标准 scheduled sampling 性质；开环变体默认 tf=0 或 staircase 退火规避）。
         losses = {}
         z_t = self.model.init_z_from_action(action_windows[:, 0])
         s_prev = init_skeleton
         s_prev_prev = init_skeleton
         preds = []
+        z_norms = []  # 监测潜变量 z 漂移（z 无 GT，跨帧演化，漂移先于 skeleton loss 失稳）
 
         for t in range(T):
             out = self.model.forward(
@@ -134,6 +163,7 @@ class UnifiedTrainer:
             s_pred = out["skeleton"]
             z_t = out["latent_z"]
             preds.append(s_pred)
+            z_norms.append(z_t.norm())
 
             # scheduled sampling：决定下一步的 prev_skeleton
             s_prev_prev = s_prev
@@ -164,6 +194,11 @@ class UnifiedTrainer:
             gd = gt_skeletons[:, :, 1:, :] - gt_skeletons[:, :, :-1, :]
             spatial = ((pd - gd) ** 2).mean()
             losses["spatial_smooth"] = spatial * self._get_loss_weight("spatial_smooth", 1.0)
+
+        # 监控量（不进 total，但写 loss_log.csv）：z 范数轨迹（漂移预警）+ 有效 tf_ratio。
+        # 均存为 tensor——主循环 set_postfix 对每个非 total 值调 .item()，float 会崩。
+        losses["z_norm_monitor"] = torch.stack(z_norms).mean()
+        losses["tf_ratio_monitor"] = torch.tensor(float(tf_ratio))
 
         losses["total"] = sum(v for k, v in losses.items() if not k.endswith("_monitor"))
         return losses
