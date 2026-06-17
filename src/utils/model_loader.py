@@ -152,6 +152,42 @@ def _detect_model_type(state_dict):
     return 'mstnf', 0
 
 
+def _migrate_gru_keys(state_dict):
+    """透明迁移 GRUCell → nn.GRU 的 state_dict 键（向后兼容旧 checkpoint）。
+
+    背景：S1 优化把 model_state_transition 的逐节点 GRUCell 改为单次 nn.GRU，
+    state_dict 键由 gru.weight_ih/hh/bias_ih/bias_hh 变为 *_l0。
+    旧（GRUCell）checkpoint 加载到新（nn.GRU）模型时，strict=False 会静默忽略
+    这些键 → GRU 层保持随机初始化 → 输出全是噪声（蓝点）。本函数在加载前补上后缀。
+
+    权重 shape 完全一致（GRUCell 与单层 nn.GRU 的 ih/hh 矩阵同形），仅键名不同。
+
+    Args:
+        state_dict: 原始 state_dict（可能为 GRUCell 或 nn.GRU 格式）。
+
+    Returns:
+        迁移后的 state_dict（已是新格式则原样返回）。
+    """
+    renames = {
+        'gru.weight_ih': 'gru.weight_ih_l0',
+        'gru.weight_hh': 'gru.weight_hh_l0',
+        'gru.bias_ih': 'gru.bias_ih_l0',
+        'gru.bias_hh': 'gru.bias_hh_l0',
+    }
+    # 已是新格式（含 _l0 键）→ 无需迁移
+    if any(new in state_dict for new in renames.values()):
+        return state_dict
+    new_sd = dict(state_dict)
+    migrated = []
+    for old, new in renames.items():
+        if old in new_sd:
+            new_sd[new] = new_sd.pop(old)
+            migrated.append(old)
+    if migrated:
+        print(f"  [migrate] GRUCell → nn.GRU keys: {migrated}")
+    return new_sd
+
+
 def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
     """加载训练好的模型。
 
@@ -386,6 +422,10 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
                 n_orders=n_orders, hidden_dim=hidden_dim,
                 n_nodes=n_nodes, encoder_type=encoder_type, z_dim=z_dim,
             ).to(device)
+        # 透明迁移 GRUCell → nn.GRU 键（旧 checkpoint 兼容），再加载。
+        # 注意：仅本模型（state_transition）用 nn.GRU；spatial_sequence 仍用 GRUCell，
+        # 故迁移只在 state_transition 分支调用，避免误改其它模型。
+        state_dict = _migrate_gru_keys(state_dict)
         model.load_state_dict(state_dict, strict=False)
         if 'action_norm_factor' in state_dict:
             norm_factor = state_dict['action_norm_factor'].item()

@@ -9,6 +9,12 @@ import warnings
 import numpy as np
 
 
+# 直接输出骨架坐标的模型类型（lines+markers 渲染，固定相机视角）。
+# 单一事实源：render_animation / render_gif 的分支判断都引用它，
+# 避免新增骨架模型时遗漏（state_transition 之前漏在这里导致动画视角不固定）。
+_SKELETON_MODEL_TYPES = ('spatial_sequence', 'pc_spatial', 'state_transition')
+
+
 def _add_skeleton_traces(fig, gt_skeleton=None, pred_skeleton=None):
     """向 Plotly figure 添加骨架曲线。"""
     if gt_skeleton is not None:
@@ -181,7 +187,7 @@ def render_animation(results, model_type, threshold, gt_skeletons,
     n_frames = len(results)
     is_sdf = model_type in ('sdf', 'skeleton_sdf')
     is_pc = model_type == 'flowmatch'
-    is_skeleton = model_type in ('spatial_sequence', 'pc_spatial')
+    is_skeleton = model_type in _SKELETON_MODEL_TYPES
     fig = go.Figure()
 
     for i in range(n_frames):
@@ -311,7 +317,7 @@ def render_gif(results, model_type, threshold, gt_skeletons,
         if model_type in ('sdf', 'skeleton_sdf'):
             fig = render_sdf_html(results[i], sdf_mode, gt, pred,
                                   title=f'Frame {frame_indices[i]}')
-        elif model_type in ('spatial_sequence', 'pc_spatial'):
+        elif model_type in _SKELETON_MODEL_TYPES:
             fig = render_skeleton_html(results[i], gt, pred,
                                         title=f'Frame {frame_indices[i]}')
         elif model_type == 'flowmatch':

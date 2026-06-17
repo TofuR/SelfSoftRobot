@@ -17,6 +17,7 @@ import os
 import sys
 import glob
 import argparse
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -44,7 +45,13 @@ def select_from_list(items, prompt, allow_custom=False):
 
     print(f"\n{prompt}:")
     for i, item in enumerate(items):
-        print(f"  [{i}] {os.path.relpath(item, PROJECT_ROOT) if item.startswith('/') else item}")
+        rel_path = os.path.relpath(item, PROJECT_ROOT) if item.startswith('/') else item
+        # 对于 checkpoint，额外显示 (exp_id, phase) 以便识别
+        if 'train_log' in rel_path and rel_path.endswith('.pt'):
+            model_tag, exp_name, phase = parse_checkpoint_path(item)
+            print(f"  [{i}] {exp_name} | {phase} → {rel_path}")
+        else:
+            print(f"  [{i}] {rel_path}")
     if allow_custom:
         print(f"  [c] 自定义路径")
 
@@ -84,6 +91,30 @@ def scan_checkpoints():
     for pat in patterns:
         ckpts.extend(glob.glob(pat, recursive=True))
     return sorted(set(ckpts))
+
+
+def parse_checkpoint_path(ckpt_path):
+    """从 checkpoint 路径提取 (model_tag, exp_name, phase_name)。
+
+    例如: train_log/gt_transition/exp_20260616_3/phase_gt_transition/model/best_model.pt
+    返回: ('gt_transition', 'exp_20260616_3', 'gt_transition')
+
+    Args:
+        ckpt_path: checkpoint 文件路径
+
+    Returns:
+        (model_tag, exp_name, phase_name) 元组
+    """
+    parts = Path(ckpt_path).parts
+    try:
+        train_log_idx = parts.index('train_log')
+        model_tag = parts[train_log_idx + 1] if train_log_idx + 1 < len(parts) else 'unknown'
+        exp_name = parts[train_log_idx + 2] if train_log_idx + 2 < len(parts) else 'unknown'
+        phase_name = parts[train_log_idx + 3] if train_log_idx + 3 < len(parts) else ''
+        phase_name = phase_name.replace('phase_', '') if phase_name.startswith('phase_') else phase_name
+        return model_tag, exp_name, phase_name
+    except (ValueError, IndexError):
+        return 'unknown', 'unknown', ''
 
 
 def scan_data_dirs():
@@ -141,6 +172,21 @@ def prepare_gt_skeleton_tensor(gt_skeleton, device):
     if gt_skeleton is None:
         return None
     return torch.from_numpy(gt_skeleton.T.astype(np.float32)).unsqueeze(0).to(device)
+
+
+def prepare_prev_skeleton_tensor(model, gt_skeleton, device):
+    """(3, N) raw GT → (1, N, 3) 归一化空间（用模型自身的 pc_center/pc_scale）。
+
+    state_transition（GT-observed 单步转移）的 warm-start 需要归一化空间的前一步骨架。
+    必须用模型 buffer 归一化，与训练时数据集的归一化一致（否则 prev 与模型内部空间错位）。
+    """
+    if gt_skeleton is None:
+        return None
+    skel = gt_skeleton.T.astype(np.float32)  # (N, 3)
+    center = model.pc_center.detach().cpu().numpy().reshape(3)  # (3,)
+    scale = model.pc_scale.detach().cpu().numpy().reshape(3)    # (3,)
+    skel_norm = (skel - center) / scale
+    return torch.from_numpy(skel_norm).unsqueeze(0).to(device)
 
 
 # ──────────────────────────── 主流程 ────────────────────────────
@@ -228,7 +274,7 @@ def main():
     grid_res = input_int("[5] 网格分辨率", default_grid_res)
     is_sdf = model_type in ('sdf', 'skeleton_sdf')
     is_pc = model_type == 'flowmatch'
-    is_skeleton = model_type in ('spatial_sequence', 'pc_spatial')
+    is_skeleton = model_type in ('spatial_sequence', 'pc_spatial', 'state_transition')
     threshold = default_threshold
     sdf_mode = 'mesh'
 
@@ -254,8 +300,9 @@ def main():
           f"[{bounds[2]:.3f},{bounds[3]:.3f}] x [{bounds[4]:.3f},{bounds[5]:.3f}]")
 
     # ── Step 7: 逐帧查询 ──
-    exp_name = os.path.basename(os.path.dirname(os.path.dirname(ckpt_path)))
-    base_name = f"{model_type}_{exp_name}_frames{start_frame}-{end_frame}"
+    model_tag, exp_name, phase_name = parse_checkpoint_path(ckpt_path)
+    # 输出文件名格式: {model_type}_{exp_name}_{phase}_frames{start}-{end}
+    base_name = f"{model_type}_{exp_name}_{phase_name}_frames{start_frame}-{end_frame}"
 
     print(f"\n查询模型 ({model_type}), {n_vis} 帧...")
     all_results = []
@@ -274,7 +321,15 @@ def main():
 
         # 查询
         if is_skeleton:
-            result = query_skeleton_direct(model, action_window)
+            if model_type == 'state_transition':
+                # GT-observed 单步转移：用真实 GT[t-1] 作 warm-start（冷启动只会输出
+                # 一个 ≈0 的 Δ，退化成蓝点）。pred=ŝ_t，overlay 的 GT=GT[t]（目标）。
+                prev_raw = get_gt_skeleton(npz_path, max(0, fidx - 1))
+                prev_tensor = prepare_prev_skeleton_tensor(model, prev_raw, device)
+                result = query_skeleton_direct(model, action_window,
+                                                prev_skeleton=prev_tensor)
+            else:
+                result = query_skeleton_direct(model, action_window)
         elif is_sdf:
             result = query_sdf_field(model, action_window, bounds, grid_res, device,
                                       gt_skeleton=gt_skel_tensor)
