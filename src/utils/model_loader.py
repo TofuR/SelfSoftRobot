@@ -404,12 +404,25 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
         hidden_dim = saved_cfg.get('hidden_dim', train_cfg['temporal']['hidden_dim']) if saved_cfg else train_cfg['temporal']['hidden_dim']
         episode_len = saved_cfg.get('episode_len', 20) if saved_cfg else 20
 
-        # 按 config.json 的 model 字段区分全 GT 驱动子类（二者 state_dict key 相同，
-        # 无法靠 key 检测区分；GTObservedTransitionModel 在 config 里记录了类名）
-        is_gt_observed = bool(saved_cfg and saved_cfg.get('model') == 'GTObservedTransitionModel')
+        # 按 config.json 的 model 字段区分子类（三类继承同一基类 → state_dict key 完全
+        # 相同，无法靠 key 检测区分；子类在 config 里记录了类名）：
+        #   GTObservedTransitionModel（方向 14，每步真实 s）
+        #   OpenLoopTransitionModel（方向 15，窗口开环：1 帧 GT 种子 + K 步自回归）
+        #   StateTransitionSpatialModel（方向 13 基类，默认）
+        saved_model_name = (saved_cfg or {}).get('model')
+        is_gt_observed = saved_model_name == 'GTObservedTransitionModel'
+        is_open_loop = saved_model_name == 'OpenLoopTransitionModel'
         if is_gt_observed:
             from src.models.model_gt_transition import GTObservedTransitionModel
             model = GTObservedTransitionModel(
+                action_dim=action_dim, window_size=window_size,
+                n_orders=n_orders, hidden_dim=hidden_dim,
+                n_nodes=n_nodes, encoder_type=encoder_type, z_dim=z_dim,
+                episode_len=episode_len,
+            ).to(device)
+        elif is_open_loop:
+            from src.models.model_open_loop_transition import OpenLoopTransitionModel
+            model = OpenLoopTransitionModel(
                 action_dim=action_dim, window_size=window_size,
                 n_orders=n_orders, hidden_dim=hidden_dim,
                 n_nodes=n_nodes, encoder_type=encoder_type, z_dim=z_dim,

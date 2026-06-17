@@ -38,4 +38,7 @@ def __getattr__(name):
     if name == "GTObservedTransitionModel":
         from .model_gt_transition import GTObservedTransitionModel
         return GTObservedTransitionModel
+    if name == "OpenLoopTransitionModel":
+        from .model_open_loop_transition import OpenLoopTransitionModel
+        return OpenLoopTransitionModel
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
