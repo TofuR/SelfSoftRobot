@@ -16,6 +16,7 @@ Loss 分两层:
 
 import csv
 import os
+import random
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -97,12 +98,12 @@ class UnifiedTrainer:
         return losses
 
     def _compute_sequence_losses(self, batch, phase_spec):
-        """Stage 1 序列级损失：episode 内逐步 rollout + scheduled sampling + z 跨帧演化。
+        """序列级损失：episode 内逐步单步转移 + scheduled sampling + z 跨帧演化。
 
         与逐帧 _compute_losses 的区别：
-          - z 在序列内逐步演化（经 model.forward_sequence），真正成为迟滞潜变量
-          - 梯度穿过 T 步（BPTT），训练 z 的转移动力学
-          - scheduled sampling：每步按 teacher_forcing_ratio 决定下一步的 prev_skeleton
+          - z 在序列内逐步演化（逐步调用 model.forward，BPTT 梯度穿过 T 步），
+            真正成为迟滞潜变量
+          - scheduled sampling：按 teacher_forcing_ratio 决定下一步的 prev_skeleton
             取 GT（teacher forcing）还是模型上一步预测（闭环），弥合 train/inference gap
 
         batch（episode 模式）:
@@ -110,7 +111,6 @@ class UnifiedTrainer:
           gt_skeletons:   (B, T, N, 3)
           init_skeleton:  (B, N, 3)
         """
-        import random
         device = self.device
         action_windows = batch["action_windows"].to(device)   # (B, T, K, D)
         gt_skeletons = batch["gt_skeletons"].to(device)        # (B, T, N, 3)
@@ -119,12 +119,10 @@ class UnifiedTrainer:
         T = action_windows.shape[1]
         tf_ratio = getattr(phase_spec, "teacher_forcing_ratio", 0.5)
 
-        # 构建 scheduled-sampling 的 teacher_states：逐步决定该步 prev 用 GT 还是空（闭环）。
-        # model.forward_sequence 接收 teacher_states：非 None 时下一步 prev = GT。
-        # 为实现 per-step mixing，这里按步生成 teacher mask 序列：mask[t]=True 表示
-        # "第 t 步预测后，下一步的 prev 用 GT"。
+        # 逐步单步转移：z 跨帧演化，s_prev 按 scheduled sampling 取 GT 或自身预测。
+        # tf_ratio=1.0（GTObserved 主线）→ 纯 teacher forcing，prev 恒为 GT；
+        # tf_ratio=0.0 → 纯闭环；中间值 → 每步随机 mixing。
         losses = {}
-        total = 0.0
         z_t = self.model.init_z_from_action(action_windows[:, 0])
         s_prev = init_skeleton
         s_prev_prev = init_skeleton
@@ -138,9 +136,13 @@ class UnifiedTrainer:
             preds.append(s_pred)
 
             # scheduled sampling：决定下一步的 prev_skeleton
-            use_teacher = random.random() < tf_ratio
             s_prev_prev = s_prev
-            s_prev = gt_skeletons[:, t] if use_teacher else s_pred
+            if tf_ratio >= 1.0:
+                s_prev = gt_skeletons[:, t]          # 纯 teacher forcing
+            elif tf_ratio <= 0.0:
+                s_prev = s_pred                       # 纯闭环
+            else:
+                s_prev = gt_skeletons[:, t] if random.random() < tf_ratio else s_pred
 
         pred_seq = torch.stack(preds, dim=1)  # (B, T, N, 3)
 
@@ -153,15 +155,17 @@ class UnifiedTrainer:
             weight_mode = getattr(phase_spec, "dense_step_weight", "uniform")
             if weight_mode == "linear":
                 w = torch.arange(1, T + 1, device=device, dtype=per_step_mse.dtype) / T  # 1/T..1
-                losses["skeleton"] = (per_step_mse * w).mean()
+                skel = (per_step_mse * w).mean()
             else:
-                losses["skeleton"] = per_step_mse.mean()
+                skel = per_step_mse.mean()
+            losses["skeleton"] = skel * self._get_loss_weight("skeleton", 1.0)
         if "spatial_smooth" in phase_spec.active_losses:
             pd = pred_seq[:, :, 1:, :] - pred_seq[:, :, :-1, :]
             gd = gt_skeletons[:, :, 1:, :] - gt_skeletons[:, :, :-1, :]
-            losses["spatial_smooth"] = ((pd - gd) ** 2).mean()
+            spatial = ((pd - gd) ** 2).mean()
+            losses["spatial_smooth"] = spatial * self._get_loss_weight("spatial_smooth", 1.0)
 
-        losses["total"] = sum(losses.values())
+        losses["total"] = sum(v for k, v in losses.items() if not k.endswith("_monitor"))
         return losses
 
     def _build_exp_config(self, data_dirs, n_epochs_per_phase):

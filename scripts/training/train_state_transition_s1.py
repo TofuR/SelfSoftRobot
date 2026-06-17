@@ -92,7 +92,8 @@ s1_phase = PhaseSpec(
     name="state_transition_s1",
     dataset_type="state_transition",
     supervision_mode="spatial_sequence",
-    active_losses=list(base_phase.active_losses),
+    # episode 路径只计算 skeleton + spatial_smooth（无 action_window_next，不算 smooth）
+    active_losses=["skeleton", "spatial_smooth"],
     forward_attr="forward",
     use_episode_mode=True,                   # 关键：开启序列级训练
     teacher_forcing_ratio=args.teacher_forcing_ratio,
