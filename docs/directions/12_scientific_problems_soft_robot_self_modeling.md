@@ -1,7 +1,8 @@
 # 方向：软体机器人自建模中的科学问题——超越工程优化的思考
 
 > 状态：概念探索
-> 关联：[02_hysteresis_information_capacity](02_hysteresis_information_capacity.md)、[01_autoregressive_state_dynamics](01_autoregressive_state_dynamics.md)
+> 关联：[02_hysteresis_information_capacity](02_hysteresis_information_capacity.md)、[13/14/15 状态转移族](13_closed_loop_state_transition.md)
+> 📝 **2026-06-17 更新**：状态转移族（[13](13_closed_loop_state_transition.md)/[14](14_gt_observed_transition.md)/[15](15_open_loop_windowed_transition.md)）的可学习迟滞潜变量 **z 正是本文\"粘弹性记忆信道\"（§四/§八）的经验实例化**——[14 §一.2](14_gt_observed_transition.md) 明确 z 编码\"位置+动作之外的深度历史\"；本文 T\*（临界记忆长度，§四 h≈τ_max/Δt）对应窗口长度 K（[15 §一.3](15_open_loop_windowed_transition.md)）。⚠️ 注意：该定量预测假设幂律弛豫，而当前 PyElastica 仿真为**线性阻尼**（迟滞弱，见 [15 §三](15_open_loop_windowed_transition.md)），故现测得的记忆视界是**下界**，强迟滞验证留实物数据。
 > 目标：找到真正的科学问题——发现关于物理世界的规律，而非工程上的模型替换
 
 ---

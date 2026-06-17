@@ -4,6 +4,7 @@
 > 优先级：高（作为所有建模方向的先验实验）
 > 关联：自回归状态动力学（第〇节假设选择）、inspirations.md 方向二
 > 科学问题：软体机器人的当前形状编码了多少关于加载历史的信息？
+> 📝 **2026-06-17 更新**：本文原为"假设一(稳态) vs 假设二(状态转移)"的**工程选型先验实验**。该选型已务实解决——团队已确定构建状态转移模型（[13](13_closed_loop_state_transition.md)/[14](14_gt_observed_transition.md)/[15](15_open_loop_windowed_transition.md)），方向 13 设计锁定选 z 可学习、仿真保持线性阻尼、迟滞有效性留实物验证。故本文现为**纯科学/信息论实验**（解码容量、记忆视界），不再 gate 模型选型；实验设计（SVM/Ridge/MINE、1D-first）仍 sound 且未实现。原引用 autoregressive_state_dynamics.md（即将归档）改为指向 [13](13_closed_loop_state_transition.md)。
 
 ---
 
@@ -21,7 +22,7 @@
 
 ### 为什么这是先验实验
 
-在 [autoregressive_state_dynamics.md](autoregressive_state_dynamics.md) 第〇节中，我们讨论了两种建模假设：
+在 [13_closed_loop_state_transition.md](13_closed_loop_state_transition.md) §〇（继承自已归档的 01）中，我们讨论了两种建模假设：
 
 | 层次 | 问题 | 性质 |
 |------|------|------|
