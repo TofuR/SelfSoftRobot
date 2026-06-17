@@ -154,8 +154,12 @@ class StateTransitionSpatialModel(nn.Module, TemporalMixin):
             nn.Linear(hidden_dim, hidden_dim),
         )
 
-        # GRU：沿 Z 轴的空间状态传播（悬臂梁因果性，同 SpatialSequenceModel）
-        self.gru = nn.GRUCell(hidden_dim, hidden_dim)
+        # 沿 Z 轴的空间状态传播（悬臂梁因果性）。
+        # S1：用 nn.GRU 取代 GRUCell 逐节点循环——N 步递归融合为单次 cuDNN 核，
+        # 行为等价（同样门控递归），大幅减少核启动开销。
+        # 注意：state_dict 键由 GRUCell 的 weight_ih/weight_hh/bias_ih/bias_hh
+        #       变为 nn.GRU 的 *_l0，旧（GRUCell）checkpoint 不直接兼容，需迁移或重训。
+        self.gru = nn.GRU(hidden_dim, hidden_dim, num_layers=1, batch_first=True)
 
         # 每节点的增量预测头 Δ_raw（替代 SpatialSequenceModel 的绝对坐标 slice_head）
         self.delta_head = nn.Sequential(
@@ -253,73 +257,21 @@ class StateTransitionSpatialModel(nn.Module, TemporalMixin):
                 [prev_skeleton.reshape(B, -1), v.reshape(B, -1)], dim=-1)  # (B, 6N)
             h = self.state_encoder(state_input)  # (B, hidden_dim)
 
-        # ── 沿 Z 轴生成各节点增量 Δ ──
-        z_positions = self._get_z_positions(device)
-        skeleton = []
-
-        for i in range(self.n_nodes):
-            z_emb = self.z_embed(
-                z_positions[i:i + 1].unsqueeze(0).expand(B, -1))  # (B, hidden)
-            gru_input = cond + z_emb + z_proj
-            h = self.gru(gru_input, h)
-            delta_raw = self.delta_head(h)  # (B, 3)
-            delta = self.delta_scale * torch.tanh(delta_raw)  # 收缩约束
-            if prev_skeleton is None:
-                # 冷启动首帧：s_{t-1} 视为零，s_t = Δ
-                skeleton.append(delta)
-            else:
-                skeleton.append(prev_skeleton[:, i, :] + delta)
-
-        skeleton = torch.stack(skeleton, dim=1)  # (B, n_nodes, 3)
+        # ── 沿 Z 轴生成各节点增量 Δ（向量化：单次 nn.GRU + 单次 z_embed）──
+        # S2：节点位置嵌入仅依赖 ζ（固定），把原 N 次逐节点调用合并为 1 次（z_embed 仍可训练）
+        z_positions = self._get_z_positions(device)                      # (N,)
+        z_emb_all = self.z_embed(z_positions.view(self.n_nodes, 1))      # (N, H)
+        # S1：GRU 输入序列 (B, N, H)，每个节点 = cond + 该节点位置嵌入 + z 投影
+        gru_seq = (cond + z_proj).unsqueeze(1) + z_emb_all.unsqueeze(0)  # (B, N, H)
+        out, _ = self.gru(gru_seq, h.unsqueeze(0))                       # out (B, N, H)；h(种子)→h0(1,B,H)
+        delta = self.delta_scale * torch.tanh(self.delta_head(out))      # (B, N, 3)
+        if prev_skeleton is None:
+            # 冷启动首帧：s_{t-1} 视为零，s_t = Δ
+            skeleton = delta
+        else:
+            skeleton = prev_skeleton + delta                             # (B, N, 3)
 
         return {"skeleton": skeleton, "latent_z": z_t}
-
-    def forward_sequence(self, action_windows, init_skeleton, teacher_states=None):
-        """序列级前向：沿时间逐步 rollout，z 跨帧演化（Stage 1 序列训练用）。
-
-        与单步 forward 的区别：
-          - z 在序列内逐步演化（真正成为迟滞潜变量，而非每步从 cond 重初始化）
-          - 梯度穿过所有时间步（BPTT），训练 z 的转移动力学
-          - teacher_states 提供 scheduled sampling：每步的"前一步骨架"按需取 GT 或自身预测
-
-        Args:
-            action_windows: (B, T, seq_len, D) 每步动作窗口。
-            init_skeleton: (B, N, 3) 首步前驱骨架（归一化空间，rollout 初始化）。
-            teacher_states: (B, T, N, 3) | None。每步的 GT 骨架（归一化空间），
-                           用于 scheduled sampling 决定 prev_skeleton 取 GT 还是自身预测。
-                           None 时纯闭环（每步都喂自身预测）。
-
-        Returns:
-            dict:
-              'skeletons': (B, T, N, 3) 每步预测中心线（归一化空间）。
-              'final_z':   (B, z_dim) 序列末尾的 z（供后续分析）。
-        """
-        B, T = action_windows.shape[0], action_windows.shape[1]
-        device = action_windows.device
-
-        # 首步 z 从首步 action_window 初始化（冷启动）
-        z_t = self.init_z_from_action(action_windows[:, 0])  # (B, z_dim)
-        s_prev = init_skeleton                  # (B, N, 3)
-        s_prev_prev = init_skeleton             # 首步无 t-2，v=0
-
-        skeletons = []
-        for t in range(T):
-            out = self.forward(action_windows[:, t], s_prev, s_prev_prev, z_t)
-            s_pred = out["skeleton"]            # (B, N, 3)
-            z_t = out["latent_z"]               # z 跨帧演化（BPTT 梯度穿过）
-            skeletons.append(s_pred)
-
-            # scheduled sampling：更新下一步的 s_prev。
-            # 若提供 teacher_states，下一步的 prev 用 GT（teacher forcing），
-            # 否则用当前预测（闭环）——实际 mixing 由 trainer 按概率决定，这里只承接 trainer 传入的 prev。
-            if teacher_states is not None:
-                s_prev_prev = s_prev
-                s_prev = teacher_states[:, t]   # teacher forcing：下一步 prev = GT
-            else:
-                s_prev_prev = s_prev
-                s_prev = s_pred                 # 闭环：下一步 prev = 自身预测
-
-        return {"skeletons": torch.stack(skeletons, dim=1), "final_z": z_t}
 
     def compute_losses(self, batch: dict, phase_spec) -> dict:
         """计算训练损失（warm start，从 batch 取 GT 前一步骨架作 teacher forcing）。

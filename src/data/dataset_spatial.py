@@ -227,10 +227,6 @@ class StateTransitionDataset(SpatialSequenceDataset):
             for start_t in range(self.seq_len - 1, T - self.episode_len + 1):
                 self.samples.append((seq_id, start_t))
 
-    def _get_action_window_for(self, data, t):
-        """复用父类 _get_action_window（以 t 结尾的窗口）。"""
-        return self._get_action_window(data, t)
-
     def _normalize_skel(self, pos_3N):
         """(3, N) → (N, 3) 归一化，复用父类 pc_center/pc_scale。"""
         skel = pos_3N.astype(np.float32).T
@@ -268,7 +264,7 @@ class StateTransitionDataset(SpatialSequenceDataset):
         gt_skeletons = []
         for i in range(self.episode_len):
             t = start_t + i
-            aw = self._get_action_window_for(data, t)  # (seq_len, D)
+            aw = self._get_action_window(data, t)  # (seq_len, D)
             action_windows.append(aw)
             gt_skeletons.append(self._normalize_skel(data['positions'][t]))  # (N, 3)
 

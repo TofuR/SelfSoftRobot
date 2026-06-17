@@ -21,7 +21,7 @@ z 的处理（继承自 StateTransitionSpatialModel）:
   无 GT，端到端从 skeleton loss 学。在"每步真实 s"下，z 是唯一跨帧、唯一无 GT 的状态。
 
 实现:
-  继承 StateTransitionSpatialModel，复用全部 forward / forward_sequence / z_module。
+  继承 StateTransitionSpatialModel，复用全部 forward / z_module。
   仅固化 training_spec（episode 模式 + TF=1.0）+ 加 gt_observed_mode 标识 buffer（供
   model_loader 从 config.json 的 model 字段区分，不依赖 state_dict key）。
 
@@ -50,7 +50,9 @@ class GTObservedTransitionModel(StateTransitionSpatialModel):
                 name="gt_transition",
                 dataset_type="state_transition",
                 supervision_mode="spatial_sequence",
-                active_losses=["skeleton", "spatial_smooth", "smooth"],
+                # episode 路径只计算 skeleton + spatial_smooth
+                # （无 action_window_next，时序 smooth 无法沿用逐帧实现，故不声明）
+                active_losses=["skeleton", "spatial_smooth"],
                 forward_attr="forward",
                 # 全 GT 驱动窗口模式：z 在窗口内 K 步演化（每步喂真实 s），
                 # dense supervision（每步预测都算 loss，给无 GT 的 z 直接梯度），
