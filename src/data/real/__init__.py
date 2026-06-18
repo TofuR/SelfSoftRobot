@@ -7,6 +7,8 @@
 复用现有 src/utils/skeleton_2d（2D 骨架）与 src/calibration（标定）。
 """
 
-from src.data.real import io_video, segmentation, triangulation, assemble_npz
+from src.data.real import (io_video, segmentation, triangulation,
+                           assemble_npz, preprocess)
 
-__all__ = ["io_video", "segmentation", "triangulation", "assemble_npz"]
+__all__ = ["io_video", "segmentation", "triangulation",
+           "assemble_npz", "preprocess"]
