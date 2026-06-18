@@ -239,3 +239,66 @@ def evaluate_skeleton_during_training(model, model_tag, config, device,
         pn = metrics["per_node"]
         line += f"\n    Base={pn['base_mm']:.1f} Mid={pn['mid_mm']:.1f} Tip={pn['tip_mm']:.1f} mm"
     print(line)
+
+
+def evaluate_transition_during_training(model, model_tag, config, device,
+                                         phase_name, data_dir, epoch, exp_dir):
+    """状态转移族（gt_transition / open_loop / base）训练中 rollout 评估。
+
+    窗口开环 rollout：1 帧 GT 种子 + K 步自回归。指标保存到
+      exp_dir/eval_metrics.csv        每 eval epoch 一行摘要（便于快速查看/画图）
+      exp_dir/transition_metrics.json 完整 per-k 曲线 + 历史
+
+    仅对状态转移族生效（hasattr(model, 'init_z_from_action')）；spatial_sequence 等
+    走 evaluate_skeleton_during_training。
+    """
+    if not hasattr(model, 'init_z_from_action'):
+        return  # 非 state_transition 族
+
+    import csv
+    from src.evaluation.transition_metrics import (
+        evaluate_transition_rollout, format_summary_line)
+
+    eval_cfg = config.get("evaluation", {})
+    n_seqs = eval_cfg.get("n_eval_seqs_transition", 5)
+    wpseq = eval_cfg.get("n_windows_per_seq_transition", 2)
+
+    result = evaluate_transition_rollout(
+        model, data_dir, config, device, n_seqs=n_seqs, windows_per_seq=wpseq)
+    if result is None:
+        return
+    s = result['summary']
+
+    # CSV 摘要（每 epoch 一行，固定列序）
+    csv_path = os.path.join(exp_dir, "eval_metrics.csv")
+    fieldnames = ['epoch', 'phase', 'n_windows', 'K', 'n_seqs',
+                  'rollout_mse_mean', 'onestep_mse_mean', 'copy_mse_mean',
+                  'mean_drift', 'mid_drift', 'final_drift', 'divergence_step',
+                  'z_norm_start', 'z_norm_mid', 'z_norm_end', 'model_vs_copy',
+                  'mean_node_mm', 'endpoint_mm', 'max_node_mm', 'chamfer_mm',
+                  'mean_pct_arm', 'per_node_base_mm', 'per_node_mid_mm', 'per_node_tip_mm']
+    write_header = not os.path.exists(csv_path)
+    row = {'epoch': epoch, 'phase': phase_name}
+    for k in fieldnames[2:]:
+        row[k] = s.get(k)
+    with open(csv_path, 'a', newline='', encoding='utf-8') as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        if write_header:
+            w.writeheader()
+        w.writerow(row)
+
+    # JSON 完整 per-k 曲线 + 历史
+    json_path = os.path.join(exp_dir, "transition_metrics.json")
+    history = {"model": type(model).__name__, "data": data_dir, "evaluations": []}
+    if os.path.exists(json_path):
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                history = json.load(f)
+        except Exception:
+            pass
+    history["evaluations"].append(
+        {"epoch": epoch, "phase": phase_name, "summary": s, "by_k": result['by_k']})
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(history, f, indent=2, ensure_ascii=False)
+
+    print(f"  [Transition] Epoch {epoch} | {format_summary_line(s)}")

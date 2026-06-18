@@ -31,6 +31,9 @@ from src.evaluation.render import (
     render_density_html, render_sdf_html, render_pointcloud_html, render_skeleton_html,
     render_animation, render_png, render_gif,
 )
+from src.evaluation.transition_metrics import (
+    rollout_one_window, evaluate_transition_rollout, format_summary_line,
+)
 
 
 # ──────────────────────────── 交互工具 ────────────────────────────
@@ -231,6 +234,26 @@ def main():
     print(f"  模型: {model_type}, skeleton_mode={skeleton_mode}")
     print(f"  use_gt_skeleton={use_gt_skeleton}")
 
+    # ── state_transition 族：rollout（开环自回归）vs warm-start（GT[t-1]）模式 ──
+    # OpenLoopTransitionModel → 默认 rollout（方向 15 部署语义：seed 一次→滚 K 步）
+    # 其他 state_transition（gt_transition / base）→ 菜单选择
+    rollout_mode = False
+    is_state_transition = (model_type == 'state_transition')
+    is_open_loop = bool(getattr(model, 'open_loop_mode', torch.tensor(False)).item()) \
+        if hasattr(model, 'open_loop_mode') else False
+    if is_state_transition:
+        if is_open_loop:
+            print("  OpenLoopTransitionModel → 默认 rollout 模式（seed 一次→滚 K 步，开环）")
+            ans = input("  切换到 warm-start（每帧喂 GT[t-1]）? [y/N]: ").strip().lower()
+            rollout_mode = (ans != 'y')
+        else:
+            print("\n  state_transition 模型 — 选择推理模式:")
+            print("    [1] rollout（开环自回归：seed 一次→滚 K 步，方向 15 部署语义）")
+            print("    [2] warm-start（每帧喂 GT[t-1]，单步转移）")
+            mc = input("  > [1]: ").strip()
+            rollout_mode = (mc != '2')
+        print(f"  → 模式: {'rollout（开环）' if rollout_mode else 'warm-start（GT[t-1]）'}")
+
     # ── Step 2: 选数据 ──
     data_dirs = scan_data_dirs()
     data_dir = select_from_list(data_dirs, "[2] 选择数据目录", allow_custom=True)
@@ -309,7 +332,35 @@ def main():
     all_gt = []
     all_pred = []
 
+    # 开环 rollout 模式：预计算整段轨迹（seed=GT[start-1]，滚 n_vis 步喂自身预测）
+    rollout_world = None
+    if is_skeleton and rollout_mode:
+        if start_frame < 1:
+            start_frame = 1
+        n_roll = min(n_vis, n_frames - start_frame)
+        _d = np.load(npz_path)
+        _actions_norm = _d['actions'].astype(np.float32) / norm_factor
+        _positions = _d['positions'].astype(np.float32)
+        _pc_c = model.pc_center.view(3).cpu().numpy()
+        _pc_s = model.pc_scale.view(3).cpu().numpy()
+        _r = rollout_one_window(model, _actions_norm, _positions, start_frame, n_roll,
+                                 window_size, _pc_c, _pc_s, device)
+        rollout_world = _r['roll'].cpu().numpy() * _pc_s + _pc_c  # (n_roll,N,3) world
+        frame_indices = list(range(start_frame, start_frame + n_roll))
+        n_vis = n_roll
+        print(f"  rollout: seed=GT[{start_frame - 1}], 滚 {n_roll} 步（开环，喂自身预测）")
+
     for vis_i, fidx in enumerate(frame_indices):
+        # 开环 rollout：从预计算轨迹取第 vis_i 步，跳过逐帧 warm-start 查询
+        if rollout_world is not None:
+            pts = rollout_world[vis_i]  # (N,3) world
+            result = {'points': pts, 'skeleton': pts[None]}
+            gt_skeleton = get_gt_skeleton(npz_path, fidx)
+            all_results.append(result)
+            all_gt.append(gt_skeleton)
+            all_pred.append(None)
+            print(f"  [{vis_i + 1}/{n_vis}] frame {fidx} (rollout step)", end='\r')
+            continue
         action_window = get_action_window(npz_path, fidx, window_size, norm_factor).to(device)
         gt_skeleton = get_gt_skeleton(npz_path, fidx)
         gt_skel_tensor = None
@@ -368,10 +419,32 @@ def main():
     # ── Step 8: 输出 ──
     print(f"\n生成可视化...")
 
-    # 动画 HTML
+    # 动画 HTML（state_transition 族：算量化指标并嵌入标题 + 存 metrics.txt）
     html_path = os.path.join(output_dir, f"{base_name}.html")
-    render_animation(all_results, model_type, threshold, all_gt, all_pred,
-                     frame_indices, sdf_mode=sdf_mode, output_path=html_path)
+    metrics_summary = None
+    if is_state_transition:
+        try:
+            _res = evaluate_transition_rollout(
+                model, data_dir, load_config("training"), device,
+                n_seqs=5, windows_per_seq=2)
+            if _res is not None:
+                metrics_summary = _res['summary']
+        except Exception as e:
+            print(f"  (量化指标计算跳过: {e})")
+    fig = render_animation(all_results, model_type, threshold, all_gt, all_pred,
+                           frame_indices, sdf_mode=sdf_mode, output_path=None)
+    if metrics_summary is not None:
+        _extra = f"<br><sup><sub>{format_summary_line(metrics_summary)}</sub></sup>"
+        fig.update_layout(
+            title=f"{model_type.upper()} — Animation ({n_vis} frames){_extra}")
+        with open(os.path.join(output_dir, f"{base_name}_metrics.txt"), 'w',
+                  encoding='utf-8') as fm:
+            fm.write(format_summary_line(metrics_summary) + "\n\n")
+            for _k, _v in metrics_summary.items():
+                fm.write(f"{_k}: {_v}\n")
+        print(f"  指标: {format_summary_line(metrics_summary)}")
+    fig.write_html(html_path)
+    print(f"  HTML: {os.path.relpath(html_path)}")
 
     # 单帧 PNG
     mid = n_vis // 2

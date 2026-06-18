@@ -26,7 +26,7 @@ from src.training.phase_strategy import PhaseStrategy
 from src.rendering.view_strategy import ViewStrategy
 from src.training.dataset_factory import create_dataset, get_collate_fn
 from src.utils.experiment import create_experiment
-from src.evaluation.shape_evaluation import evaluate_shape_during_training, evaluate_skeleton_during_training
+from src.evaluation.shape_evaluation import evaluate_shape_during_training, evaluate_skeleton_during_training, evaluate_transition_during_training
 from config.params import load_config
 from src.evaluation.surface_sampling import sample_gt_surface, model_output_to_pointcloud
 from src.evaluation.shape_metrics import chamfer_distance, f_score, hausdorff_distance
@@ -511,6 +511,9 @@ class UnifiedTrainer:
                         self.model, self.model_tag, self.config,
                         self.device, phase_spec.name, data_dir, epoch, exp_dir)
                     evaluate_skeleton_during_training(
+                        self.model, self.model_tag, self.config,
+                        self.device, phase_spec.name, data_dir, epoch, exp_dir)
+                    evaluate_transition_during_training(
                         self.model, self.model_tag, self.config,
                         self.device, phase_spec.name, data_dir, epoch, exp_dir)
 
