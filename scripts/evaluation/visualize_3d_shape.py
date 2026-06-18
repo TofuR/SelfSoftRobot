@@ -332,23 +332,30 @@ def main():
     all_gt = []
     all_pred = []
 
-    # 开环 rollout 模式：预计算整段轨迹（seed=GT[start-1]，滚 n_vis 步喂自身预测）
+    # 开环 rollout 模式：窗口化——每 K 步用 GT 重新播种（部署语义：
+    # "观测一次→预测 K 步→重观测"），而非从单一种子连续滚到底（会累积漂移到崩）。
     rollout_world = None
     if is_skeleton and rollout_mode:
         if start_frame < 1:
             start_frame = 1
         n_roll = min(n_vis, n_frames - start_frame)
+        K = int(getattr(model, 'episode_len', None) or window_size)   # 每窗 rollout 步数
         _d = np.load(npz_path)
         _actions_norm = _d['actions'].astype(np.float32) / norm_factor
         _positions = _d['positions'].astype(np.float32)
         _pc_c = model.pc_center.view(3).cpu().numpy()
         _pc_s = model.pc_scale.view(3).cpu().numpy()
-        _r = rollout_one_window(model, _actions_norm, _positions, start_frame, n_roll,
-                                 window_size, _pc_c, _pc_s, device)
-        rollout_world = _r['roll'].cpu().numpy() * _pc_s + _pc_c  # (n_roll,N,3) world
+        chunks, ws = [], start_frame
+        while ws < start_frame + n_roll:
+            k = min(K, start_frame + n_roll - ws)                     # 末窗不足 K 截短
+            _r = rollout_one_window(model, _actions_norm, _positions, ws, k,
+                                     window_size, _pc_c, _pc_s, device)
+            chunks.append(_r['roll'].cpu().numpy() * _pc_s + _pc_c)   # (k,N,3) world
+            ws += k
+        rollout_world = np.concatenate(chunks, axis=0)                # (n_roll,N,3)
         frame_indices = list(range(start_frame, start_frame + n_roll))
         n_vis = n_roll
-        print(f"  rollout: seed=GT[{start_frame - 1}], 滚 {n_roll} 步（开环，喂自身预测）")
+        print(f"  rollout: 窗口化（每 {K} 步用 GT 重播种），{len(chunks)} 窗 ≈ {n_roll} 步")
 
     for vis_i, fidx in enumerate(frame_indices):
         # 开环 rollout：从预计算轨迹取第 vis_i 步，跳过逐帧 warm-start 查询
