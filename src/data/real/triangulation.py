@@ -9,7 +9,8 @@
 
 import numpy as np
 
-from src.calibration.camera_params_format import projection_matrix
+from src.calibration.camera_params_format import (
+    projection_matrix, camera_params_to_K_Rt)
 
 
 def _projection_matrices(camera_params, H, W):
@@ -73,4 +74,55 @@ def triangulate_skeletons(skeletons_2d, camera_params, H, W):
                 pPs.append(Ps[v])
             if len(pts) >= 2:
                 out[n, j] = triangulate_point(pts, pPs)
+    return out
+
+
+def planar_lift_skeletons(skeletons_2d, camera_params, plane_point, plane_normal,
+                          H, W):
+    """单相机 2D 骨架 → 3D（射线-平面相交，平面弯曲假设）。
+
+    适用于 1-DOF 平面弯曲 + 相机正对弯曲平面：中心线落在一个已知平面 P 上，
+    对每个 2D 点反投影出射线，与 P 求交即得唯一 3D 点。等价于"深度恒定"假设
+    （P 平行像面时），但更通用（P 可任意朝向）。
+
+    Args:
+        skeletons_2d: (1,N,J,2) 或 (N,J,2) [col,row]。全 0 视为无效。
+        camera_params: (1,10)（仅单相机）。
+        plane_point: (3,) 平面上一点（世界系，米，如臂基座）。
+        plane_normal: (3,) 平面法向（世界系；正对安装时=相机 view_dir）。
+        H, W: 图像尺寸。
+
+    Returns:
+        (N, J, 3) 世界系骨架；无效点（无前景/射线平行平面/交在相机后方）为 nan。
+    """
+    cp = np.asarray(camera_params, float).reshape(-1, 10)
+    if cp.shape[0] != 1:
+        raise ValueError("planar_lift 仅支持单相机（camera_params 应为 (1,10)）")
+    K, R, t = camera_params_to_K_Rt(cp[0], H, W)
+    eye = -R.T @ t                                  # 相机世界系位置
+    Kinv = np.linalg.inv(K)
+    p0 = np.asarray(plane_point, float).reshape(3)
+    n = np.asarray(plane_normal, float).reshape(3)
+    n = n / (np.linalg.norm(n) + 1e-12)
+
+    sk = np.asarray(skeletons_2d, float)
+    if sk.ndim == 4:                                # (1,N,J,2) → (N,J,2)
+        sk = sk[0]
+    N, J, _ = sk.shape
+
+    out = np.full((N, J, 3), np.nan, float)
+    for ni in range(N):
+        for j in range(J):
+            col, row = sk[ni, j]
+            if not np.isfinite(col) or (col == 0.0 and row == 0.0):
+                continue
+            d_cam = Kinv @ np.array([col, row, 1.0])     # 相机系射线方向
+            d_world = R.T @ d_cam                         # 世界系
+            denom = float(d_world @ n)
+            if abs(denom) < 1e-9:
+                continue                                  # 射线平行平面
+            lam = float((p0 - eye) @ n) / denom
+            if lam <= 0:
+                continue                                  # 交点在相机后方
+            out[ni, j] = eye + lam * d_world
     return out

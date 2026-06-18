@@ -20,7 +20,8 @@ from src.calibration.camera_params_format import (  # noqa: E402
     extrinsics_to_camera_params, camera_params_to_K_Rt,
     build_camera_params_array, projection_matrix,
 )
-from src.data.real.triangulation import triangulate_skeletons  # noqa: E402
+from src.data.real.triangulation import (  # noqa: E402
+    triangulate_skeletons, planar_lift_skeletons)
 
 
 def random_rotation(rng):
@@ -87,6 +88,28 @@ def main():
         print("   OK")
     except ImportError:
         print("   (torch 不可用，跳过)")
+
+    print("== 4) 单相机平面升维（planar_lift）往返 ==")
+    _u = lambda v: v / (np.linalg.norm(v) + 1e-12)
+    cam = cam_defs[0]
+    cp1 = build_camera_params_array([cam], H, W)               # (1,10)
+    view_dir = _u(np.array(cam["center"]) - np.array(cam["eye"]))
+    ref = np.array([0., 0., 1.]) if abs(view_dir[2]) < 0.9 else np.array([1., 0., 0.])
+    uu = _u(np.cross(view_dir, ref))                           # 平面内基 1
+    vv = np.cross(view_dir, uu)                                # 平面内基 2
+    rng2 = np.random.default_rng(1)
+    cf = rng2.uniform(-0.05, 0.05, size=(31, 2))
+    pts_plane = cf[:, 0:1] * uu + cf[:, 1:2] * vv              # (31,3) 全在平面上
+    P1 = projection_matrix(cp1[0], H, W)
+    x = np.hstack([pts_plane, np.ones((31, 1))])
+    proj = (P1 @ x.T).T
+    sk2d1 = (proj[:, :2] / proj[:, 2:3])[None, None, :, :]     # (1,1,31,2)
+    lifted = planar_lift_skeletons(sk2d1, cp1, [0, 0, 0], view_dir, H, W)
+    err = float(np.max(np.abs(lifted[0] - pts_plane)))
+    onp = float(np.max(np.abs(lifted[0] @ view_dir)))
+    print(f"   max|lift - gt| = {err:.2e} m, max|pt·n| = {onp:.2e}")
+    assert err < 1e-6 and onp < 1e-6, "平面升维往返失败"
+    print("   OK")
 
     print("\nALL SMOKE CHECKS PASSED")
 
