@@ -17,6 +17,7 @@ import os
 import sys
 import glob
 import argparse
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -29,6 +30,9 @@ from src.evaluation.query import query_density_field, query_sdf_field, query_ske
 from src.evaluation.render import (
     render_density_html, render_sdf_html, render_pointcloud_html, render_skeleton_html,
     render_animation, render_png, render_gif,
+)
+from src.evaluation.transition_metrics import (
+    rollout_one_window, evaluate_transition_rollout, format_summary_line,
 )
 
 
@@ -44,7 +48,13 @@ def select_from_list(items, prompt, allow_custom=False):
 
     print(f"\n{prompt}:")
     for i, item in enumerate(items):
-        print(f"  [{i}] {os.path.relpath(item, PROJECT_ROOT) if item.startswith('/') else item}")
+        rel_path = os.path.relpath(item, PROJECT_ROOT) if item.startswith('/') else item
+        # 对于 checkpoint，额外显示 (exp_id, phase) 以便识别
+        if 'train_log' in rel_path and rel_path.endswith('.pt'):
+            model_tag, exp_name, phase = parse_checkpoint_path(item)
+            print(f"  [{i}] {exp_name} | {phase} → {rel_path}")
+        else:
+            print(f"  [{i}] {rel_path}")
     if allow_custom:
         print(f"  [c] 自定义路径")
 
@@ -84,6 +94,30 @@ def scan_checkpoints():
     for pat in patterns:
         ckpts.extend(glob.glob(pat, recursive=True))
     return sorted(set(ckpts))
+
+
+def parse_checkpoint_path(ckpt_path):
+    """从 checkpoint 路径提取 (model_tag, exp_name, phase_name)。
+
+    例如: train_log/gt_transition/exp_20260616_3/phase_gt_transition/model/best_model.pt
+    返回: ('gt_transition', 'exp_20260616_3', 'gt_transition')
+
+    Args:
+        ckpt_path: checkpoint 文件路径
+
+    Returns:
+        (model_tag, exp_name, phase_name) 元组
+    """
+    parts = Path(ckpt_path).parts
+    try:
+        train_log_idx = parts.index('train_log')
+        model_tag = parts[train_log_idx + 1] if train_log_idx + 1 < len(parts) else 'unknown'
+        exp_name = parts[train_log_idx + 2] if train_log_idx + 2 < len(parts) else 'unknown'
+        phase_name = parts[train_log_idx + 3] if train_log_idx + 3 < len(parts) else ''
+        phase_name = phase_name.replace('phase_', '') if phase_name.startswith('phase_') else phase_name
+        return model_tag, exp_name, phase_name
+    except (ValueError, IndexError):
+        return 'unknown', 'unknown', ''
 
 
 def scan_data_dirs():
@@ -143,6 +177,21 @@ def prepare_gt_skeleton_tensor(gt_skeleton, device):
     return torch.from_numpy(gt_skeleton.T.astype(np.float32)).unsqueeze(0).to(device)
 
 
+def prepare_prev_skeleton_tensor(model, gt_skeleton, device):
+    """(3, N) raw GT → (1, N, 3) 归一化空间（用模型自身的 pc_center/pc_scale）。
+
+    state_transition（GT-observed 单步转移）的 warm-start 需要归一化空间的前一步骨架。
+    必须用模型 buffer 归一化，与训练时数据集的归一化一致（否则 prev 与模型内部空间错位）。
+    """
+    if gt_skeleton is None:
+        return None
+    skel = gt_skeleton.T.astype(np.float32)  # (N, 3)
+    center = model.pc_center.detach().cpu().numpy().reshape(3)  # (3,)
+    scale = model.pc_scale.detach().cpu().numpy().reshape(3)    # (3,)
+    skel_norm = (skel - center) / scale
+    return torch.from_numpy(skel_norm).unsqueeze(0).to(device)
+
+
 # ──────────────────────────── 主流程 ────────────────────────────
 
 def main():
@@ -184,6 +233,26 @@ def main():
 
     print(f"  模型: {model_type}, skeleton_mode={skeleton_mode}")
     print(f"  use_gt_skeleton={use_gt_skeleton}")
+
+    # ── state_transition 族：rollout（开环自回归）vs warm-start（GT[t-1]）模式 ──
+    # OpenLoopTransitionModel → 默认 rollout（方向 15 部署语义：seed 一次→滚 K 步）
+    # 其他 state_transition（gt_transition / base）→ 菜单选择
+    rollout_mode = False
+    is_state_transition = (model_type == 'state_transition')
+    is_open_loop = bool(getattr(model, 'open_loop_mode', torch.tensor(False)).item()) \
+        if hasattr(model, 'open_loop_mode') else False
+    if is_state_transition:
+        if is_open_loop:
+            print("  OpenLoopTransitionModel → 默认 rollout 模式（seed 一次→滚 K 步，开环）")
+            ans = input("  切换到 warm-start（每帧喂 GT[t-1]）? [y/N]: ").strip().lower()
+            rollout_mode = (ans != 'y')
+        else:
+            print("\n  state_transition 模型 — 选择推理模式:")
+            print("    [1] rollout（开环自回归：seed 一次→滚 K 步，方向 15 部署语义）")
+            print("    [2] warm-start（每帧喂 GT[t-1]，单步转移）")
+            mc = input("  > [1]: ").strip()
+            rollout_mode = (mc != '2')
+        print(f"  → 模式: {'rollout（开环）' if rollout_mode else 'warm-start（GT[t-1]）'}")
 
     # ── Step 2: 选数据 ──
     data_dirs = scan_data_dirs()
@@ -228,7 +297,7 @@ def main():
     grid_res = input_int("[5] 网格分辨率", default_grid_res)
     is_sdf = model_type in ('sdf', 'skeleton_sdf')
     is_pc = model_type == 'flowmatch'
-    is_skeleton = model_type in ('spatial_sequence', 'pc_spatial')
+    is_skeleton = model_type in ('spatial_sequence', 'pc_spatial', 'state_transition')
     threshold = default_threshold
     sdf_mode = 'mesh'
 
@@ -254,15 +323,44 @@ def main():
           f"[{bounds[2]:.3f},{bounds[3]:.3f}] x [{bounds[4]:.3f},{bounds[5]:.3f}]")
 
     # ── Step 7: 逐帧查询 ──
-    exp_name = os.path.basename(os.path.dirname(os.path.dirname(ckpt_path)))
-    base_name = f"{model_type}_{exp_name}_frames{start_frame}-{end_frame}"
+    model_tag, exp_name, phase_name = parse_checkpoint_path(ckpt_path)
+    # 输出文件名格式: {model_type}_{exp_name}_{phase}_frames{start}-{end}
+    base_name = f"{model_type}_{exp_name}_{phase_name}_frames{start_frame}-{end_frame}"
 
     print(f"\n查询模型 ({model_type}), {n_vis} 帧...")
     all_results = []
     all_gt = []
     all_pred = []
 
+    # 开环 rollout 模式：预计算整段轨迹（seed=GT[start-1]，滚 n_vis 步喂自身预测）
+    rollout_world = None
+    if is_skeleton and rollout_mode:
+        if start_frame < 1:
+            start_frame = 1
+        n_roll = min(n_vis, n_frames - start_frame)
+        _d = np.load(npz_path)
+        _actions_norm = _d['actions'].astype(np.float32) / norm_factor
+        _positions = _d['positions'].astype(np.float32)
+        _pc_c = model.pc_center.view(3).cpu().numpy()
+        _pc_s = model.pc_scale.view(3).cpu().numpy()
+        _r = rollout_one_window(model, _actions_norm, _positions, start_frame, n_roll,
+                                 window_size, _pc_c, _pc_s, device)
+        rollout_world = _r['roll'].cpu().numpy() * _pc_s + _pc_c  # (n_roll,N,3) world
+        frame_indices = list(range(start_frame, start_frame + n_roll))
+        n_vis = n_roll
+        print(f"  rollout: seed=GT[{start_frame - 1}], 滚 {n_roll} 步（开环，喂自身预测）")
+
     for vis_i, fidx in enumerate(frame_indices):
+        # 开环 rollout：从预计算轨迹取第 vis_i 步，跳过逐帧 warm-start 查询
+        if rollout_world is not None:
+            pts = rollout_world[vis_i]  # (N,3) world
+            result = {'points': pts, 'skeleton': pts[None]}
+            gt_skeleton = get_gt_skeleton(npz_path, fidx)
+            all_results.append(result)
+            all_gt.append(gt_skeleton)
+            all_pred.append(None)
+            print(f"  [{vis_i + 1}/{n_vis}] frame {fidx} (rollout step)", end='\r')
+            continue
         action_window = get_action_window(npz_path, fidx, window_size, norm_factor).to(device)
         gt_skeleton = get_gt_skeleton(npz_path, fidx)
         gt_skel_tensor = None
@@ -274,7 +372,15 @@ def main():
 
         # 查询
         if is_skeleton:
-            result = query_skeleton_direct(model, action_window)
+            if model_type == 'state_transition':
+                # GT-observed 单步转移：用真实 GT[t-1] 作 warm-start（冷启动只会输出
+                # 一个 ≈0 的 Δ，退化成蓝点）。pred=ŝ_t，overlay 的 GT=GT[t]（目标）。
+                prev_raw = get_gt_skeleton(npz_path, max(0, fidx - 1))
+                prev_tensor = prepare_prev_skeleton_tensor(model, prev_raw, device)
+                result = query_skeleton_direct(model, action_window,
+                                                prev_skeleton=prev_tensor)
+            else:
+                result = query_skeleton_direct(model, action_window)
         elif is_sdf:
             result = query_sdf_field(model, action_window, bounds, grid_res, device,
                                       gt_skeleton=gt_skel_tensor)
@@ -313,10 +419,32 @@ def main():
     # ── Step 8: 输出 ──
     print(f"\n生成可视化...")
 
-    # 动画 HTML
+    # 动画 HTML（state_transition 族：算量化指标并嵌入标题 + 存 metrics.txt）
     html_path = os.path.join(output_dir, f"{base_name}.html")
-    render_animation(all_results, model_type, threshold, all_gt, all_pred,
-                     frame_indices, sdf_mode=sdf_mode, output_path=html_path)
+    metrics_summary = None
+    if is_state_transition:
+        try:
+            _res = evaluate_transition_rollout(
+                model, data_dir, load_config("training"), device,
+                n_seqs=5, windows_per_seq=2)
+            if _res is not None:
+                metrics_summary = _res['summary']
+        except Exception as e:
+            print(f"  (量化指标计算跳过: {e})")
+    fig = render_animation(all_results, model_type, threshold, all_gt, all_pred,
+                           frame_indices, sdf_mode=sdf_mode, output_path=None)
+    if metrics_summary is not None:
+        _extra = f"<br><sup><sub>{format_summary_line(metrics_summary)}</sub></sup>"
+        fig.update_layout(
+            title=f"{model_type.upper()} — Animation ({n_vis} frames){_extra}")
+        with open(os.path.join(output_dir, f"{base_name}_metrics.txt"), 'w',
+                  encoding='utf-8') as fm:
+            fm.write(format_summary_line(metrics_summary) + "\n\n")
+            for _k, _v in metrics_summary.items():
+                fm.write(f"{_k}: {_v}\n")
+        print(f"  指标: {format_summary_line(metrics_summary)}")
+    fig.write_html(html_path)
+    print(f"  HTML: {os.path.relpath(html_path)}")
 
     # 单帧 PNG
     mid = n_vis // 2

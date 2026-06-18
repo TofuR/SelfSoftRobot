@@ -2,7 +2,7 @@
 
 > 基于文献调研和深度讨论，从"出发点（真问题）"推导出的研究方向体系
 > 核心出发点：软体机器人自建模 = 带迟滞的 3D 全身状态估计
-> 最后更新：2026-06-09
+> 最后更新：2026-06-17
 
 ---
 
@@ -14,6 +14,20 @@
 1. **时序依赖（迟滞）**：同一个 action 在不同历史下产生不同形状
 2. **3D 全身状态**：不只是末端坐标，也不只是 2D 图像上的曲线
 3. **低成本感知**：只用相机，不用运动捕捉
+
+---
+
+## 状态转移主线（当前工作焦点）
+
+> **当前主线 = 方向 14（全 GT 驱动单步转移）**。状态转移模型族按"前一状态 s_{t-1} 从哪来"分为三姊妹方向，构成 s_{t-1}-来源轴：
+
+| 方向 | 模型 | s_{t-1} 来源 | 状态 |
+|------|------|------------|------|
+| [13 闭环状态转移](13_closed_loop_state_transition.md) | `StateTransitionSpatialModel` | 预测（**无界** rollout） | Stage0 实现；未来扩展=多步前瞻 |
+| [**14 全 GT 驱动**（主线）](14_gt_observed_transition.md) | `GTObservedTransitionModel` | **每步真实观测** | ✅ 已实现+验证（per-frame MSE~1e-8，56× 优于 copy） |
+| [15 窗口开环](15_open_loop_windowed_transition.md) | `OpenLoopTransitionModel` | 预测，**每 K 步重观测** | ✅ 已实现+冒烟（完整训练待跑） |
+
+三者共享可学习迟滞潜变量 z（无 GT，端到端学）与 Δ 预测 + 收缩约束设计（理论基础见 [13 §一](13_closed_loop_state_transition.md)）。**工作模型族**：`SpatialSequenceModel`（前馈基线）、`StateTransitionSpatialModel`、`GTObservedTransitionModel`（=主线）、`OpenLoopTransitionModel`、`FlowMatchPointCloudModel`。
 
 ---
 
@@ -39,7 +53,7 @@
     ├─────── 核心技术层（解决超前预测）──────┐
     │                                       │
     │  ┌────────────────┐                   │
-    │  │自回归状态动力学 │ ← 待实现           │
+    │  │自回归状态动力学 │ ← 已实现(13/14/15) │
     │  └────────────────┘                   │
     │  ┌────────────────┐                   │
     │  │Action偏置分析   │ ← 待消融验证       │
@@ -108,7 +122,7 @@
 
 | 方向 | 文档 | 解决的子问题 | 核心思想 | 状态 |
 |------|------|------------|---------|------|
-| **自回归状态动力学** | [01_autoregressive_state_dynamics.md](01_autoregressive_state_dynamics.md) | "当前在哪" | 前一步物理状态作为输入 | 待实现 |
+| **自回归状态动力学** | [01（已归档）](../archived/directions/01_autoregressive_state_dynamics.md) | "当前在哪" | 前一步物理状态作为输入 | 已实现(见13/14/15) |
 | **迟滞信息容量分析** | [02_hysteresis_information_capacity.md](02_hysteresis_information_capacity.md) | "能学多少" | 编码器容量 vs 迟滞复杂度 | 待理论验证 |
 | **Action 窗口降采样** | [03_action_window_downsampling.md](03_action_window_downsampling.md) | "输入冗余" | 10x 重复 action 用 stride 消除 | 待实现 |
 | **Action 偏置分析** | [04_temporal_encoding_bias_analysis.md](04_temporal_encoding_bias_analysis.md) | "短路问题" | current_action 拼接绕过迟滞 | 待消融 |
@@ -193,6 +207,7 @@
 | **预测-修正框架** | [predictive_corrective_state_estimation.md](../archived/directions/predictive_corrective_state_estimation.md) | `src/models/model_pc_spatial.py` |
 | **Gamma/Laguerre 延迟编码** | [gamma_laguerre_temporal_encoding.md](../archived/directions/gamma_laguerre_temporal_encoding.md) | `src/encoders/gamma_laguerre.py` |
 | **顺序敏感编码器 (GRU/Transformer/TCN)** | — (直接实现) | `src/encoders/temporal_gru.py`, `temporal_transformer.py`, `temporal_tcn.py` |
+| **自回归状态动力学** | [01_autoregressive_state_dynamics.md](../archived/directions/01_autoregressive_state_dynamics.md) | `src/models/model_state_transition.py` + `model_gt_transition.py` + `model_open_loop_transition.py`（方向 13/14/15） |
 
 ---
 

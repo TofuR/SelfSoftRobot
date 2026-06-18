@@ -13,7 +13,7 @@
 - 沿长度方向半径变化（固定端 vs 自由端）
 - 随驱动状态动态变化（弯曲时内侧压缩、外侧拉伸）
 
-**但目前的 `sdf_utils.py` 和 `_sample_surface()` 都假设常数半径 + 圆形截面**。
+**注（2026-06-17 勘误）**：常数半径 + 圆形截面的限制**只在模型侧**——`evaluation/surface_sampling.sample_gt_surface` 与 `data/dataset_skeleton_sdf._sample_surface` 已接受 per-node `radii` 数组（GT/采样侧可变半径已就绪）；缺的是**模型侧**：`SpatialSequenceModel.predict_pointcloud`、`StateTransitionSpatialModel.predict_pointcloud`、`PCSpatialSequenceModel.predict_pointcloud` 仍硬编码 `avg_radius=0.015`、不预测 r_i。故方案 A 的剩余工作是"预测 r_i 并接入已存在的 per-node 半径采样路径"，而非"给采样加可变半径"。
 
 ---
 
@@ -45,7 +45,7 @@
 优点：能表示非圆形截面
 缺点：训练难度增大，需要足够的截面变化数据
 
-### C. 骨架条件隐式场（SkeletonSDF 已部分实现）
+### C. 骨架条件隐式场（SkeletonSDF 已实现，效果待提升）
 
 `model_skeleton_sdf.py` 的思路：骨架 + tubular SDF prior + SIREN residual
 - Tubular prior 提供粗略几何（固定半径圆管）

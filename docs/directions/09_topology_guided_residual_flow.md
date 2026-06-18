@@ -2,6 +2,7 @@
 
 > 来源：PROJECT_HELP.md 中的结构归纳偏置思考
 > 核心思想：先用物理先验做粗变形，再用 Flow Matching 学习残差细节
+> 📝 **2026-06-17 更新**：本文"与空间序列生成组合"中的"空间序列生成"已归档为 `src/models/model_spatial_sequence.py`（见 [已归档/spatial_sequence_generation](../archived/directions/spatial_sequence_generation.md)）；当前形状表达兄弟见 [05 骨架→形状](05_skeleton_to_shape_conversion.md) 与 `model_skeleton_sdf.py`。本方向（物理粗变形 + FM 残差）与状态转移主线 [13](13_closed_loop_state_transition.md)/[14](14_gt_observed_transition.md)/[15](15_open_loop_windowed_transition.md) **正交可组合**：状态转移预测骨架/种子，残差 FM 填表面几何。
 
 ---
 

@@ -16,6 +16,7 @@ Loss 分两层:
 
 import csv
 import os
+import random
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -25,7 +26,7 @@ from src.training.phase_strategy import PhaseStrategy
 from src.rendering.view_strategy import ViewStrategy
 from src.training.dataset_factory import create_dataset, get_collate_fn
 from src.utils.experiment import create_experiment
-from src.evaluation.shape_evaluation import evaluate_shape_during_training, evaluate_skeleton_during_training
+from src.evaluation.shape_evaluation import evaluate_shape_during_training, evaluate_skeleton_during_training, evaluate_transition_during_training
 from config.params import load_config
 from src.evaluation.surface_sampling import sample_gt_surface, model_output_to_pointcloud
 from src.evaluation.shape_metrics import chamfer_distance, f_score, hausdorff_distance
@@ -52,6 +53,30 @@ class UnifiedTrainer:
         """从 config 中获取 loss 权重。"""
         lw = self.config.get("loss_weights", {})
         return lw.get(loss_name, lw.get(f"w_{loss_name}", default))
+
+    def _effective_tf_ratio(self, phase_spec):
+        """计算当前 epoch 的有效 teacher forcing 比例（支持 epoch 退火）。
+
+        - tf_anneal_epochs <= 0：不退火，返回 nominal teacher_forcing_ratio（当前行为）。
+        - tf_schedule='staircase'：前半段保持 nominal、后半段切到 tf_min。
+          二值切换，避免中段 0<tf<1 下速度输入 GT/预测帧混入（推荐用于退火）。
+        - tf_schedule='linear'：nominal → tf_min 线性下降（每步独立 scheduled sampling；
+          中段速度输入会混入 GT/预测，仅当单步误差较大、需渐进过渡时才用）。
+
+        依赖 self._current_epoch（在 train() 主循环每 epoch 设置，trainer_unified.py:377）。
+        """
+        nominal = getattr(phase_spec, "teacher_forcing_ratio", 0.5)
+        anneal = getattr(phase_spec, "tf_anneal_epochs", 0)
+        if anneal <= 0:
+            return nominal
+        tf_min = getattr(phase_spec, "tf_min", 0.0)
+        schedule = getattr(phase_spec, "tf_schedule", "linear")
+        epoch = getattr(self, "_current_epoch", 1)
+        if schedule == "staircase":
+            return nominal if epoch <= anneal / 2 else tf_min
+        # linear：nominal → tf_min
+        frac = min(1.0, max(0.0, (epoch - 1) / max(anneal - 1, 1)))
+        return nominal + (tf_min - nominal) * frac
 
     def _compute_losses(self, forward_fn, batch, phase_spec):
         """根据 phase_spec 计算 loss。
@@ -92,6 +117,88 @@ class UnifiedTrainer:
         for name, val in model_losses.items():
             w = self._get_loss_weight(name, 1.0)
             losses[name] = val * w
+
+        losses["total"] = sum(v for k, v in losses.items() if not k.endswith("_monitor"))
+        return losses
+
+    def _compute_sequence_losses(self, batch, phase_spec):
+        """序列级损失：episode 内逐步单步转移 + scheduled sampling + z 跨帧演化。
+
+        与逐帧 _compute_losses 的区别：
+          - z 在序列内逐步演化（逐步调用 model.forward，BPTT 梯度穿过 T 步），
+            真正成为迟滞潜变量
+          - scheduled sampling：按 teacher_forcing_ratio 决定下一步的 prev_skeleton
+            取 GT（teacher forcing）还是模型上一步预测（闭环），弥合 train/inference gap
+
+        batch（episode 模式）:
+          action_windows: (B, T, seq_len, D)
+          gt_skeletons:   (B, T, N, 3)
+          init_skeleton:  (B, N, 3)
+        """
+        device = self.device
+        action_windows = batch["action_windows"].to(device)   # (B, T, K, D)
+        gt_skeletons = batch["gt_skeletons"].to(device)        # (B, T, N, 3)
+        init_skeleton = batch["init_skeleton"].to(device)      # (B, N, 3)
+
+        T = action_windows.shape[1]
+        # 有效 tf：支持 epoch 退火（tf_anneal_epochs>0 时按 schedule 从 nominal→tf_min）。
+        # 默认 tf_anneal_epochs=0 → 等于 nominal teacher_forcing_ratio（旧行为）。
+        tf_ratio = self._effective_tf_ratio(phase_spec)
+
+        # 逐步单步转移：z 跨帧演化，s_prev 按 scheduled sampling 取 GT 或自身预测。
+        # tf_ratio=1.0（GTObserved 主线）→ 纯 teacher forcing，prev 恒为 GT；
+        # tf_ratio=0.0（开环主线）→ 纯闭环（喂自身预测，仅 step-0 的 init_skeleton 是 GT 种子）；
+        # 中间值 → 每步独立 scheduled sampling（注意：此时速度输入 v=prev-prev_prev 会混入
+        #   GT/预测帧，是标准 scheduled sampling 性质；开环变体默认 tf=0 或 staircase 退火规避）。
+        losses = {}
+        z_t = self.model.init_z_from_action(action_windows[:, 0])
+        s_prev = init_skeleton
+        s_prev_prev = init_skeleton
+        preds = []
+        z_norms = []  # 监测潜变量 z 漂移（z 无 GT，跨帧演化，漂移先于 skeleton loss 失稳）
+
+        for t in range(T):
+            out = self.model.forward(
+                action_windows[:, t], s_prev, s_prev_prev, z_t)
+            s_pred = out["skeleton"]
+            z_t = out["latent_z"]
+            preds.append(s_pred)
+            z_norms.append(z_t.norm())
+
+            # scheduled sampling：决定下一步的 prev_skeleton
+            s_prev_prev = s_prev
+            if tf_ratio >= 1.0:
+                s_prev = gt_skeletons[:, t]          # 纯 teacher forcing
+            elif tf_ratio <= 0.0:
+                s_prev = s_pred                       # 纯闭环
+            else:
+                s_prev = gt_skeletons[:, t] if random.random() < tf_ratio else s_pred
+
+        pred_seq = torch.stack(preds, dim=1)  # (B, T, N, 3)
+
+        # 逐步 MSE（skeleton）+ 空间平滑（用 torch 原生，与本文件不含 F 的风格一致）
+        # dense supervision：T 步每步都算 loss，给无 GT 的 z 每步直接梯度（关键）。
+        # 可选递增权重（dense_step_weight="linear"）：窗口早期 z 浅、信息量低，
+        # 权重随步数递增，让最后几步（接近部署目标）贡献更大。默认等权。
+        if "skeleton" in phase_spec.active_losses:
+            per_step_mse = ((pred_seq - gt_skeletons) ** 2).mean(dim=(2, 3))  # (B, T)
+            weight_mode = getattr(phase_spec, "dense_step_weight", "uniform")
+            if weight_mode == "linear":
+                w = torch.arange(1, T + 1, device=device, dtype=per_step_mse.dtype) / T  # 1/T..1
+                skel = (per_step_mse * w).mean()
+            else:
+                skel = per_step_mse.mean()
+            losses["skeleton"] = skel * self._get_loss_weight("skeleton", 1.0)
+        if "spatial_smooth" in phase_spec.active_losses:
+            pd = pred_seq[:, :, 1:, :] - pred_seq[:, :, :-1, :]
+            gd = gt_skeletons[:, :, 1:, :] - gt_skeletons[:, :, :-1, :]
+            spatial = ((pd - gd) ** 2).mean()
+            losses["spatial_smooth"] = spatial * self._get_loss_weight("spatial_smooth", 1.0)
+
+        # 监控量（不进 total，但写 loss_log.csv）：z 范数轨迹（漂移预警）+ 有效 tf_ratio。
+        # 均存为 tensor——主循环 set_postfix 对每个非 total 值调 .item()，float 会崩。
+        losses["z_norm_monitor"] = torch.stack(z_norms).mean()
+        losses["tf_ratio_monitor"] = torch.tensor(float(tf_ratio))
 
         losses["total"] = sum(v for k, v in losses.items() if not k.endswith("_monitor"))
         return losses
@@ -313,8 +420,12 @@ class UnifiedTrainer:
 
                 pbar = tqdm(loader, desc=f"[{phase_spec.name}] Epoch {epoch}/{n_epochs}")
                 for batch in pbar:
-                    forward_fn = self.phase.get_forward_fn()
-                    losses = self._compute_losses(forward_fn, batch, phase_spec)
+                    # Stage 1 episode 模式走序列级损失（z 跨帧演化 + scheduled sampling）
+                    if getattr(phase_spec, 'use_episode_mode', False):
+                        losses = self._compute_sequence_losses(batch, phase_spec)
+                    else:
+                        forward_fn = self.phase.get_forward_fn()
+                        losses = self._compute_losses(forward_fn, batch, phase_spec)
 
                     # warmup 缩放跨视角 loss
                     if self._warmup_factor < 1.0:
@@ -400,6 +511,9 @@ class UnifiedTrainer:
                         self.model, self.model_tag, self.config,
                         self.device, phase_spec.name, data_dir, epoch, exp_dir)
                     evaluate_skeleton_during_training(
+                        self.model, self.model_tag, self.config,
+                        self.device, phase_spec.name, data_dir, epoch, exp_dir)
+                    evaluate_transition_during_training(
                         self.model, self.model_tag, self.config,
                         self.device, phase_spec.name, data_dir, epoch, exp_dir)
 

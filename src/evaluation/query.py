@@ -172,22 +172,36 @@ def query_pointcloud(model, action_window, n_points=1000, n_steps=None):
 
 
 @torch.no_grad()
-def query_skeleton_direct(model, action_window):
-    """直接预测骨架坐标（SpatialSequence/PCSpatial 用）。
+def query_skeleton_direct(model, action_window, prev_skeleton=None):
+    """直接预测骨架坐标（SpatialSequence/PCSpatial/StateTransition 用）。
 
     Args:
-        model: SpatialSequenceModel 或 PCSpatialSequenceModel。
+        model: SpatialSequenceModel, PCSpatialSequenceModel, StateTransitionSpatialModel,
+               或 GTObservedTransitionModel。后两者 forward 返回 dict {'skeleton': ..., 'latent_z': ...}。
         action_window: (1, K, D) 动作窗口。
+        prev_skeleton: (1, N, 3) 归一化空间的前一步骨架。StateTransition/GTObservedTransition
+                      是"GT-observed 单步转移"模型，推理必须喂真实前一步状态（warm-start），
+                      否则冷启动只输出一个 Δ（≈0，退化成一个点）。None → 冷启动，适用于
+                      SpatialSequence/PCSpatial（前馈预测绝对骨架，无需 prev）。
+                      传入时必须已用模型自身的 pc_center/pc_scale 归一化。
 
     Returns:
         dict: {skeleton: (1, N, 3) numpy, points: (N, 3) numpy}
               坐标为反归一化后的世界坐标。
     """
-    # SpatialSequence 有 forward(tensor)，PCSpatial 只有 forward_predictive(batch)
+    # SpatialSequence 有 forward(tensor)，PCSpatial 只有 forward_predictive(batch)，
+    # StateTransition/GTObservedTransition 的 forward 返回 dict {'skeleton': ..., 'latent_z': ...}
     if hasattr(model, 'forward_predictive'):
         pred = model.forward_predictive({"action_window": action_window})
+    elif prev_skeleton is not None and hasattr(model, 'z_cell'):
+        # StateTransition/GTObserved: warm-start 单步预测 ŝ_t = F(真实 s_{t-1}, z, a_t)
+        out = model(action_window, prev_skeleton=prev_skeleton)
+        pred = out['skeleton']
     else:
-        pred = model(action_window)  # (1, N, 3) 归一化空间
+        pred = model(action_window)  # 可能是 tensor (SpatialSequence) 或 dict (StateTransition 冷启动)
+    # 兼容 dict 返回值（StateTransition/GTObservedTransition）
+    if isinstance(pred, dict):
+        pred = pred['skeleton']  # (1, N, 3) 归一化空间
     pred_np = pred.cpu().numpy()
     # 反归一化到世界坐标
     center = model.pc_center.cpu().numpy()   # (1, 1, 3)

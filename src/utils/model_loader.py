@@ -119,6 +119,15 @@ def _detect_model_type(state_dict):
     if has_skel and has_sdf_net and not has_density:
         return 'skeleton_sdf', 0
 
+    # StateTransition: 可学习迟滞潜变量模型（z_cell + state_encoder + delta_head）
+    # 检测放在 spatial_sequence 之前：本模型有 gru 但无 slice_head（用 delta_head），
+    # 不会误命中 spatial_sequence 分支，但显式检测更清晰。
+    has_z_cell = any('z_cell' in k for k in keys)
+    has_state_encoder = any('state_encoder' in k for k in keys)
+    has_delta_head = any('delta_head' in k for k in keys)
+    if has_z_cell and (has_state_encoder or has_delta_head):
+        return 'state_transition', 0
+
     # SpatialSequence: gru + slice_head（无 correction）
     has_gru = any('gru' in k for k in keys)
     has_slice = any('slice_head' in k for k in keys)
@@ -141,6 +150,42 @@ def _detect_model_type(state_dict):
         return 'cmstnf', 2
 
     return 'mstnf', 0
+
+
+def _migrate_gru_keys(state_dict):
+    """透明迁移 GRUCell → nn.GRU 的 state_dict 键（向后兼容旧 checkpoint）。
+
+    背景：S1 优化把 model_state_transition 的逐节点 GRUCell 改为单次 nn.GRU，
+    state_dict 键由 gru.weight_ih/hh/bias_ih/bias_hh 变为 *_l0。
+    旧（GRUCell）checkpoint 加载到新（nn.GRU）模型时，strict=False 会静默忽略
+    这些键 → GRU 层保持随机初始化 → 输出全是噪声（蓝点）。本函数在加载前补上后缀。
+
+    权重 shape 完全一致（GRUCell 与单层 nn.GRU 的 ih/hh 矩阵同形），仅键名不同。
+
+    Args:
+        state_dict: 原始 state_dict（可能为 GRUCell 或 nn.GRU 格式）。
+
+    Returns:
+        迁移后的 state_dict（已是新格式则原样返回）。
+    """
+    renames = {
+        'gru.weight_ih': 'gru.weight_ih_l0',
+        'gru.weight_hh': 'gru.weight_hh_l0',
+        'gru.bias_ih': 'gru.bias_ih_l0',
+        'gru.bias_hh': 'gru.bias_hh_l0',
+    }
+    # 已是新格式（含 _l0 键）→ 无需迁移
+    if any(new in state_dict for new in renames.values()):
+        return state_dict
+    new_sd = dict(state_dict)
+    migrated = []
+    for old, new in renames.items():
+        if old in new_sd:
+            new_sd[new] = new_sd.pop(old)
+            migrated.append(old)
+    if migrated:
+        print(f"  [migrate] GRUCell → nn.GRU keys: {migrated}")
+    return new_sd
 
 
 def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
@@ -323,6 +368,78 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
 
         model.load_state_dict(state_dict, strict=False)
         # norm_factor 从 checkpoint buffer 恢复
+        if 'action_norm_factor' in state_dict:
+            norm_factor = state_dict['action_norm_factor'].item()
+
+    elif model_type == 'state_transition':
+        # StateTransitionSpatialModel — 闭环状态转移 + 可学习潜变量 z
+        n_nodes = saved_cfg.get('n_nodes', 31) if saved_cfg else 31
+        z_dim = saved_cfg.get('z_dim', 16) if saved_cfg else 16
+        if saved_cfg and 'n_scales' in saved_cfg:
+            n_orders = saved_cfg['n_scales']
+        else:
+            n_orders = train_cfg['temporal'].get('n_scales', 4)
+            for k, v in state_dict.items():
+                if k == 'temporal.raw_alphas':
+                    n_orders = v.shape[0]
+                    break
+                if k == 'temporal.order_weights':
+                    n_orders = v.shape[0]
+                    break
+        # encoder_type 推断（与 spatial_sequence 分支一致）
+        if any('raw_alphas' in k for k in state_dict):
+            encoder_type = 'fractional'
+        elif any('temporal.k_offsets' in k or 'temporal.logit_lambdas' in k for k in state_dict):
+            encoder_type = 'gamma'
+        elif any('temporal.cls_token' in k for k in state_dict):
+            encoder_type = 'transformer'
+        elif any('temporal.tcn_layers' in k for k in state_dict):
+            encoder_type = 'tcn'
+        elif any('temporal.gru.weight' in k for k in state_dict):
+            encoder_type = 'gru'
+        elif any('raw_decays' in k for k in state_dict):
+            encoder_type = 'ema'
+        else:
+            encoder_type = saved_cfg.get('encoder_type', 'ema') if saved_cfg else 'ema'
+        hidden_dim = saved_cfg.get('hidden_dim', train_cfg['temporal']['hidden_dim']) if saved_cfg else train_cfg['temporal']['hidden_dim']
+        episode_len = saved_cfg.get('episode_len', 20) if saved_cfg else 20
+
+        # 按 config.json 的 model 字段区分子类（三类继承同一基类 → state_dict key 完全
+        # 相同，无法靠 key 检测区分；子类在 config 里记录了类名）：
+        #   GTObservedTransitionModel（方向 14，每步真实 s）
+        #   OpenLoopTransitionModel（方向 15，窗口开环：1 帧 GT 种子 + K 步自回归）
+        #   StateTransitionSpatialModel（方向 13 基类，默认）
+        saved_model_name = (saved_cfg or {}).get('model')
+        is_gt_observed = saved_model_name == 'GTObservedTransitionModel'
+        is_open_loop = saved_model_name == 'OpenLoopTransitionModel'
+        if is_gt_observed:
+            from src.models.model_gt_transition import GTObservedTransitionModel
+            model = GTObservedTransitionModel(
+                action_dim=action_dim, window_size=window_size,
+                n_orders=n_orders, hidden_dim=hidden_dim,
+                n_nodes=n_nodes, encoder_type=encoder_type, z_dim=z_dim,
+                episode_len=episode_len,
+            ).to(device)
+        elif is_open_loop:
+            from src.models.model_open_loop_transition import OpenLoopTransitionModel
+            model = OpenLoopTransitionModel(
+                action_dim=action_dim, window_size=window_size,
+                n_orders=n_orders, hidden_dim=hidden_dim,
+                n_nodes=n_nodes, encoder_type=encoder_type, z_dim=z_dim,
+                episode_len=episode_len,
+            ).to(device)
+        else:
+            from src.models.model_state_transition import StateTransitionSpatialModel
+            model = StateTransitionSpatialModel(
+                action_dim=action_dim, window_size=window_size,
+                n_orders=n_orders, hidden_dim=hidden_dim,
+                n_nodes=n_nodes, encoder_type=encoder_type, z_dim=z_dim,
+            ).to(device)
+        # 透明迁移 GRUCell → nn.GRU 键（旧 checkpoint 兼容），再加载。
+        # 注意：仅本模型（state_transition）用 nn.GRU；spatial_sequence 仍用 GRUCell，
+        # 故迁移只在 state_transition 分支调用，避免误改其它模型。
+        state_dict = _migrate_gru_keys(state_dict)
+        model.load_state_dict(state_dict, strict=False)
         if 'action_norm_factor' in state_dict:
             norm_factor = state_dict['action_norm_factor'].item()
 

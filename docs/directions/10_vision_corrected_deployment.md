@@ -2,7 +2,8 @@
 
 > 状态：待探索
 > 优先级：中高（如果目标是真实机器人部署）
-> 关联：PC-Spatial 修正分支、Tang 2026 在线适应
+> 关联：PC-Spatial 修正分支、Tang 2026 在线适应、**[13](13_closed_loop_state_transition.md)/[14](14_gt_observed_transition.md)/[15](15_open_loop_windowed_transition.md) 状态转移族**
+> 📝 **2026-06-17 更新**：本方向的"预测-修正 / 最小化视觉使用"已被状态转移族**具体落地**，按 s_{t-1} 来源分三档：[14](14_gt_observed_transition.md)=每步视觉重观测（修正最密）、[15](15_open_loop_windowed_transition.md)=观测一次→开环预测 K 步（**正是本方向 Phase 2\"最小视觉修正层\"的精确实现**：每 K 步一次图像骨架化作种子）、[13](13_closed_loop_state_transition.md)=运行中不重观测的无界 rollout。下文 Phase 2 视觉修正层的主参考改为 [15](15_open_loop_windowed_transition.md)。
 
 ---
 

@@ -83,10 +83,10 @@ Li et al. (ICRA 2023) 的可微渲染方法：
 
 | 组件 | 现有 | 需新增 |
 |------|------|--------|
-| 2D 骨架提取 | `src/utils/skeleton_2d.py` | 多视角版本 |
+| 2D 骨架提取 | `src/utils/skeleton_2d.py`（已含 extract + project_3d_to_2d + compute_2d_skeleton_loss） | 多视角三角化前端 |
 | 多视角相机系统 | `src/utils/camera_system.py` | 正交视角配置 |
 | 可微渲染 | `src/utils/rendering.py` | 骨架参数→渲染路径 |
-| 修正分支 | `src/models/model_pc_spatial.py` | 强化 CNN 分支 |
+| 修正分支 | `src/models/model_pc_spatial.py`（已实现，效果有限） | 强化/严格两阶段训练 |
 | Visual Hull | 无 | 新模块 |
 
 ---

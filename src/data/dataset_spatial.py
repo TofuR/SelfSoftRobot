@@ -169,3 +169,110 @@ def spatial_collate_fn(batch):
         else:
             result[k] = torch.stack(vals, dim=0)
     return result
+
+
+class StateTransitionDataset(SpatialSequenceDataset):
+    """闭环状态转移数据集：在 SpatialSequenceDataset 基础上额外返回前一步骨架。
+
+    用于 StateTransitionSpatialModel，模型学习状态转移 s_t = F(s_{t-1}, a_t, z_{t-1})，
+    需要前一步的 GT 中心线作为输入（teacher forcing）。
+
+    两种模式:
+      - 单帧模式（episode_mode=False，默认）：每个样本是一个时间步，返回前一步骨架。
+        用于 Stage 0 逐帧 teacher forcing 训练。
+      - episode 模式（episode_mode=True）：每个样本是同一 episode 内连续 episode_len 步的
+        序列，返回沿时间堆叠的 (T, ...) 张量。用于 Stage 1 序列级训练（z 跨帧演化 +
+        scheduled sampling）。
+
+    额外返回（相对父类，单帧模式）:
+      prev_gt_skeleton:      (n_nodes, 3) 归一化后的 positions[t-1]（前一步中心线）
+      prev_prev_gt_skeleton: (n_nodes, 3) 归一化后的 positions[t-2]（用于速度 v = s_{t-1} - s_{t-2}）
+
+    episode 模式额外返回（沿时间维 T 堆叠）:
+      action_windows:  (T, seq_len, D)  每步的动作窗口
+      gt_skeletons:    (T, n_nodes, 3)  每步 GT 中心线（归一化）
+      init_skeleton:   (n_nodes, 3)     序列首步的前一步骨架（rollout 初始化用）
+
+    边界说明:
+      父类样本循环 t ∈ [seq_len-1, end]，其中 end = T-1（pairs=True）或 T。
+      因此 t-1 ≥ seq_len-2 ≥ 0，t-2 ≥ seq_len-3，positions[t-1]/[t-2] 恒为同一 episode
+      内的有效前驱帧，**无需 zero-pad**，也无跨 episode 污染。
+
+    归一化:
+      前一步骨架复用父类在同一数据集上计算的 pc_center / pc_scale（同一空间坐标系，
+      仅时间步更早），保证与 gt_skeleton 处于同一归一化空间。
+    """
+
+    def __init__(self, data_dir, seq_len=20, pairs=True, episode_mode=False,
+                 episode_len=20):
+        self.episode_mode = episode_mode
+        self.episode_len = episode_len
+        # 父类先按单帧模式构建 self.samples（episode 模式随后重建）
+        super().__init__(data_dir, seq_len=seq_len, pairs=pairs)
+        if self.episode_mode:
+            self._build_episode_samples()
+            print(f"StateTransitionDataset (episode mode): {len(self.samples)} "
+                  f"episodes, episode_len={self.episode_len}")
+
+    def _build_episode_samples(self):
+        """episode 模式：构建 (seq_id, start_t) 索引，窗口 [start_t, start_t+episode_len) 有效。
+
+        约束：start_t ≥ seq_len-1（保证首步 action_window 有足够历史），
+              start_t + episode_len ≤ T（不越界）。
+        """
+        self.samples = []
+        for seq_id, item in enumerate(self.data_cache):
+            T = item['length']
+            # start_t 从 seq_len-1 起，到 T-episode_len 止
+            for start_t in range(self.seq_len - 1, T - self.episode_len + 1):
+                self.samples.append((seq_id, start_t))
+
+    def _normalize_skel(self, pos_3N):
+        """(3, N) → (N, 3) 归一化，复用父类 pc_center/pc_scale。"""
+        skel = pos_3N.astype(np.float32).T
+        return (skel - self.pc_center) / self.pc_scale
+
+    def __getitem__(self, idx):
+        if self.episode_mode:
+            return self._get_episode(idx)
+        return self._get_single(idx)
+
+    def _get_single(self, idx):
+        """单帧模式：返回前一步骨架（Stage 0 用）。"""
+        # 复用父类：返回 action_window, gt_skeleton(t), gt_radii, action_window_next
+        result = super().__getitem__(idx)
+
+        seq_id, t = self.samples[idx]
+        data = self.data_cache[seq_id]
+
+        result["prev_gt_skeleton"] = torch.from_numpy(
+            self._normalize_skel(data['positions'][t - 1])).float()
+        result["prev_prev_gt_skeleton"] = torch.from_numpy(
+            self._normalize_skel(data['positions'][t - 2])).float()
+        return result
+
+    def _get_episode(self, idx):
+        """episode 模式：返回连续 episode_len 步的序列（Stage 1 用）。
+
+        每步 t = start_t + i，收集该步的 action_window（以 t 结尾）和 gt_skeleton(t)。
+        init_skeleton 用 start_t-1 的 GT（rollout 首步的前驱）。
+        """
+        seq_id, start_t = self.samples[idx]
+        data = self.data_cache[seq_id]
+
+        action_windows = []
+        gt_skeletons = []
+        for i in range(self.episode_len):
+            t = start_t + i
+            aw = self._get_action_window(data, t)  # (seq_len, D)
+            action_windows.append(aw)
+            gt_skeletons.append(self._normalize_skel(data['positions'][t]))  # (N, 3)
+
+        # init_skeleton: 首步 start_t 的前一步骨架（rollout 初始化）
+        init_skeleton = self._normalize_skel(data['positions'][start_t - 1])
+
+        return {
+            "action_windows": torch.from_numpy(np.stack(action_windows)).float(),  # (T, seq_len, D)
+            "gt_skeletons": torch.from_numpy(np.stack(gt_skeletons)).float(),      # (T, N, 3)
+            "init_skeleton": torch.from_numpy(init_skeleton).float(),              # (N, 3)
+        }

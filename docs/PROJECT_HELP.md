@@ -12,7 +12,7 @@ PyElastica 物理仿真 → PyVista 渲染图像 → 数据采集 (.npz) → 模
 
 项目目标：**仅用驱动参数（扭矩）预测软体机器人的完整 3D 形态**。
 
-当前有八套模型管线，全部通过 Spec 声明式训练架构统一管理：
+当前有十套模型管线，全部通过 Spec 声明式训练架构统一管理：
 
 | 管线 | 模型 | 核心创新 | 监督模式 | 数据需求 | 输出 |
 |------|------|---------|---------|---------|------|
@@ -24,6 +24,8 @@ PyElastica 物理仿真 → PyVista 渲染图像 → 数据采集 (.npz) → 模
 | **分数阶记忆** | FractionalMemory | 幂律记忆核替代指数衰减 EMA | —（编码器，非独立模型） | 同宿主模型 | 物理状态向量 |
 | **空间序列** | SpatialSequence | GRU 沿 Z 轴空间传播 + 分数阶记忆 | spatial_sequence | 3D 节点坐标 + 动作 | 3D 中心线 (31 节点) |
 | **预测-修正** | PCSpatial | 预测(驱动历史) + 修正(视觉观测) 两阶段 | spatial_sequence | 3D 节点坐标 + 动作 + 图像（Phase 2） | 3D 中心线 (31 节点) |
+| **闭环状态转移** | StateTransition | 前一步状态 + 可学习迟滞潜变量 z，学转移不学状态（自回归 rollout） | spatial_sequence (单帧) | 3D 节点坐标 + 动作 | 3D 中心线 (31 节点) |
+| **全 GT 驱动转移（主线）** | GTObservedTransition | 前一状态恒真实 + z 窗口演化 + dense supervision | spatial_sequence (窗口) | 3D 节点坐标 + 动作 | 3D 中心线 (31 节点) |
 
 ---
 
@@ -65,7 +67,9 @@ SelfSoftRobot/
 │   │   ├── model_skeleton_sdf.py    #   SkeletonSDF（参数化骨架 + 管状 SDF）
 │   │   ├── model_sdf.py             #   TemporalSDF（SIREN + EMA 时序 SDF）
 │   │   ├── model_spatial_sequence.py #  SpatialSequence（GRU 空间序列中心线）
-│   │   └── model_pc_spatial.py      #   PCSpatial（预测-修正空间序列）
+│   │   ├── model_pc_spatial.py      #   PCSpatial（预测-修正空间序列）
+│   │   ├── model_state_transition.py #  StateTransition（闭环状态转移 + 可学习潜变量 z）
+│   │   └── model_gt_transition.py   #   GTObservedTransition（全 GT 驱动窗口，当前主线）
 │   ├── data/
 │   │   ├── dataset.py               #   SoftSequenceDataset（支持 2D/3D/深度）
 │   │   ├── dataset_sdf.py           #   SDFDataset（3D SDF 监督采样）
@@ -113,11 +117,16 @@ SelfSoftRobot/
 │   │   ├── train_multiview_consistency.py  # 多视角一致性薄包装
 │   │   ├── train_flowmatch.py       #   FlowMatch 点云薄包装
 │   │   ├── train_spatial_sequence.py #  SpatialSequence 薄包装
-│   │   └── train_pc_spatial.py      #   PCSpatial 薄包装
+│   │   ├── train_pc_spatial.py      #   PCSpatial 薄包装
+│   │   ├── train_open_loop_transition.py # OpenLoopTransition 窗口开环（热启动 gt_transition + tf 退火）
+│   │   └── train_gt_transition.py   #   GTObservedTransition 薄包装（主线）
+│   │       # (train_state_transition.py / _s1.py 已归档至 docs/archived/trainers/，被 train_gt/open_loop_transition 取代)
 │   ├── evaluation/
 │   │   ├── evaluate_3d.py           #   3D 几何评估脚本
 │   │   ├── visualize_3d_shape.py    #   3D SDF/mesh 可视化
-│   │   └── visualize_predictions.py #   预测对比/动画可视化
+│   │   ├── visualize_predictions.py #   预测对比/动画可视化
+│   │   ├── eval_rollout.py          #   StateTransition 闭环 rollout 评估（自回归，未来扩展）
+│   │   └── eval_gt_transition.py    #   GTObservedTransition 观测驱动评估（主线）
 │   ├── testing/
 │   │   └── verify_unified_trainer.py #  统一训练器验证（5 模型 forward+backward）
 │   ├── experiments/                 # 实验脚本
@@ -705,6 +714,113 @@ L_smooth:        时序平滑（TemporalMixin）
 
 ---
 
+#### `model_state_transition.py` — StateTransition（闭环状态转移 + 可学习迟滞潜变量 z）
+
+**名字来源**：**State Transition** — 学习一步状态转移 s_t = F(s_{t-1}, a_t, z_{t-1})，而非前馈状态推断。
+
+**动机**：SpatialSequence 隐含**稳态假设**——"给定动作历史，机器人已到达该历史决定的稳态形态"。但软体材料的迟滞效应使"同一动作、不同历史 → 不同形态"，稳态假设失效（详见 [direction 13](directions/13_closed_loop_state_transition.md) §〇）。StateTransition 把前一步真实状态作为显式输入，**学转移不学状态**。
+
+**核心思想**：
+- **闭环**：前一步骨架 s_{t-1} + 当前动作 → 当前骨架 s_t
+- **可学习迟滞潜变量 z（无 GT）**：z 自演化 `z_t = Φ_z(z_{t-1}, a_t, s_{t-1})`（GRUCell），编码位置+动作之外的深度历史（如内部应力方向、充/放气方向）
+- **Δ 预测**：`s_t = s_{t-1} + delta_scale·tanh(Δ_raw)`，输出增量、天然连续，delta_scale·tanh 提供收缩约束（控制 rollout 误差累积）
+
+**信息流（forward）**：
+```
+action_window (B, K, D) → TemporalEncoder → cond (B, hidden)   # 动作编码，每步重算、无记忆
+                                                          │
+s_{t-1} (B,N,3) ─┐  v = s_{t-1} - s_{t-2}                  │
+                 └→ StateEncoder([s_{t-1}, v]) → state_seed  # warm-start 的 GRU 种子
+                                                          │
+z_{t-1} (B, z_dim) → z_cell(GRUCell,[cond,s_{t-1}]) → z_t → z_proj
+                                                          ↓
+   沿 Z 轴逐节点: cond + z_pos_embed + z_proj → GRU(z₀→z_K) → 每节点 Δ_raw
+                                                          │
+   s_t = s_{t-1} + delta_scale·tanh(Δ_raw)   （冷启动首帧 s_t = Δ）
+```
+
+**关键模块**（相对 SpatialSequence 的增量）：
+| 模块 | 作用 |
+|------|------|
+| `z_init` | 冷启动 z_0 = z_init(cond) |
+| `z_cell` (GRUCell) | 演化 z_t = Φ_z(z_{t-1}, [cond, s_{t-1}])，门控利于迟滞建模 |
+| `z_proj` | 将 z_t 投影到 hidden，加性注入 per-node GRU |
+| `state_encoder` | [s_{t-1}, v] → GRU 种子（替代 init_hidden） |
+| `delta_head` + `delta_scale` | 增量预测 + 可学习收缩标量（防 NaN、控累积） |
+
+**关键约定（z 与 cond 的职责分离）**：cond 是"当前动作编码"（每步重算、无记忆）；z 是"演化中的迟滞潜状态"（带历史记忆）。z 无物理真值（实物上无 z 传感器），端到端从 skeleton loss 学。
+
+**向后兼容**：forward 的 `prev_skeleton/prev_z` 默认 None → 冷启动回退 `init_hidden(cond) + z_init(cond)`，退化为带 z 初始化的前馈预测，旧单参调用（只传 action_window）完全兼容。不修改 SpatialSequenceModel / PCSpatial。
+
+**训练（Stage 0，单帧 per-frame）**：teacher forcing，`prev_skeleton = positions[t-1]`（GT，已在 .npz 无需重采）。此模式下 z 每步从 z_init 重置（无跨帧记忆，退化为 cond 的函数）——z 成长为真正迟滞潜变量需窗口训练（见 GTObservedTransition）。
+
+**定位**：**自回归闭环**——推理时把模型自身预测喂回（rollout），适用于无法每步观测真实状态、需一路推下去的场景。**当前已退为未来扩展**（方向 13），主线是 GTObservedTransition。
+
+**Loss**：skeleton（MSE）+ spatial_smooth（相邻节点位移连续）+ smooth（时序平滑，TemporalMixin）。z 无 GT，不加 loss。
+
+**评估**：`eval_rollout.py` 闭环 rollout（s 和 z 都喂模型预测），报告 rollout/onestep 漂移比 + ‖z‖ 范数轨迹 + 发散步检测。
+
+---
+
+#### `model_gt_transition.py` — GTObservedTransition（全 GT 驱动窗口框架，当前主线）
+
+**名字来源**：**GT**-Observed **Transition** — 前一状态永远来自真实观测（仿真 GT / 实物图像骨架化）的状态转移。
+
+**动机**：实际部署中每步都能采集图像 → 骨架化得到真实 s_{t-1}，**不必一路自回归推下去**（那会导致 s 误差累积，漂移比可达 1000×）。GTObservedTransition 固化"前一状态恒真实"的设定，是当前主线。
+
+**与 StateTransition 的关系**：继承 `StateTransitionSpatialModel`，**复用全部 forward / z_module**，仅固化 `training_spec`（`use_episode_mode=True` + `teacher_forcing_ratio=1.0` + `episode_len=40`）。
+
+**核心思想（窗口模式）**：
+- 每步：`ŝ_t = F(真实 s_{t-1}, z_{t-1}, a_t)`，s_{t-1} 恒真实
+- z 在状态窗口 `[s_{t-K}...s_{t-1}]` 内 K 步演化（每步喂真实 s），**z 不跨样本携带**
+- K = episode_len（默认 40，对齐 action_window），可调（`--episode_len`）
+- 样本自包含 → **样本间可打乱**（shuffle，解决"必须按顺序"的顾虑）
+
+**关键设计**（详见 [direction 14](directions/14_gt_observed_transition.md) §4–6）：
+1. **z 窗口演化可打乱**：z 只在样本内 K 步演化，不跨样本叠加
+2. **z_0 = cond-only 初始化**：K=40 演化下 z_0 留存 ≈ 0.9^40 ≈ 2%，初始化方式影响小；先简后消融（zero-init baseline 对比）
+3. **dense supervision**：窗口内每步预测 ŝ_j 都算 loss，给无 GT 的 z 每步直接梯度（关键）；可选递增权重 `--dense_step_weight linear`（最后几步权重大）
+4. **部署/评估只看最后一步 ŝ_t**：dense 是训练手段（帮 z 学），部署无 GT 不算 loss
+
+**信息流（窗口训练，trainer._compute_sequence_losses）**：
+```
+样本: action_windows (B, K, seq_len, D) + gt_skeletons (B, K, N, 3) + init_skeleton (B, N, 3)
+z_0 = init_z_from_action(action_windows[:, 0])       # cond-only
+for t in range(K):
+    out = model.forward(action_windows[:, t], s_prev=gt_skeletons[:, t-1], ..., z_t)  # s 恒 GT
+    ŝ_t = out["skeleton"]; z_t = out["latent_z"]      # z 跨步演化，s_prev 永远真实
+loss = Σ_t w_t · MSE(ŝ_t, gt_skeletons[:, t])         # dense（w_t 等权或递增）
+```
+
+**无数据泄漏**：预测 `ŝ_{j+1}=F(s_j, z_j, a_{j+1})` 的 GT 是 s_{j+1}，而 s_{j+1} 从未出现在预测路径（z_j 只依赖 ≤s_j 的历史）。状态窗口双重使用（既作输入又作 GT label）是标准 teacher forcing，合法。
+
+**训练**：单阶段 episode 窗口，TF=1.0，dense supervision。
+
+**验证（eval_gt_transition.py）**：观测驱动 rollout（s 每步真实 + z 跨帧演化），报告：
+- **部署指标**：最后一步 ŝ_t 的 MSE（无 loss 时的预测精度）
+- per-step MSE（诊断，dense supervision 的逐步精度）
+- ‖z‖ 范数轨迹 + z drift ratio（z 漂移监测）
+
+**部署流程**：
+```
+循环每步 t:
+  1. 采集图像 → 骨架化 → 真实 s_{t-1}
+  2. model.forward(action_window_t, s_{t-1}, z_{t-1}) → ŝ_t, z_t
+  3. z_t 内部维护（跨步演化），下一步喂回
+  （无需 GT，不计算 loss，直接用 ŝ_t 作为当前形态预测）
+```
+
+**冒烟验证**（cuda3，episode_len=12，3 epoch）：z drift ratio=2.06x（z 从 0.58 温和演化到 1.19，收敛有界），对比纯自回归 rollout 漂移比 1170× → **s 不漂移（每步重置真实），仅 z 是风险源**，确认全 GT 窗口框架是当前部署的合理选择。
+
+**与 StateTransition / SpatialSequence 的定位对比**：
+| 模型 | 前一状态来源 | z | s 误差累积 | 定位 |
+|------|------------|---|-----------|------|
+| SpatialSequence | 无（纯前馈稳态） | 无 | — | 基线（稳态假设） |
+| StateTransition | 自身预测（rollout） | 跨步演化 | 严重（漂移 1000×） | 未来扩展（无法每步观测） |
+| **GTObservedTransition** | **真实观测** | **窗口内演化** | **无（s 每步真实）** | **当前主线** |
+
+---
+
 #### Depth-CMSTNF（无独立模型文件）
 
 **名字来源**：**Depth**-supervised **C**anonical **M**STNF。用深度图增强监督的 C-MSTNF。
@@ -831,6 +947,8 @@ L_smooth:        时序平滑（TemporalMixin）
 | SkeletonSDF | 2 phase: skeleton → joint | direct_3d → direct_3d | [skeleton] → [skeleton, sdf, normal, eikonal] |
 | SpatialSequence | 1 phase: spatial | spatial_sequence | skeleton, spatial_smooth, smooth |
 | PCSpatial | 2 phase: predictive → corrective | spatial_sequence → spatial_sequence | [skeleton, spatial_smooth, smooth] → [skeleton, spatial_smooth, smooth] |
+| StateTransition | 1 phase: state_transition (单帧) | spatial_sequence | skeleton, spatial_smooth, smooth |
+| GTObservedTransition | 1 phase: gt_transition (窗口, TF=1.0) | spatial_sequence (窗口) | skeleton(dense), spatial_smooth, smooth |
 
 **核心文件**：
 
@@ -1257,6 +1375,58 @@ python scripts/evaluation/visualize_3d_shape.py --device cuda:0
 | SpatialSequence | FractionalMemory | 44 | 0.001184 | 0.001416 |
 | PCSpatial (pred) | FractionalMemory | 48 | 0.001114 | 0.001154 |
 
+### 5.3.3 状态转移模型（GTObservedTransition 主线 / StateTransition 未来扩展）
+
+**核心思路**：从 SpatialSequence 的前馈稳态推断，升级为闭环状态转移 `s_t = F(s_{t-1}, a_t, z_{t-1})`——前一步真实状态 + 可学习迟滞潜变量 z 作为显式输入。**主线是 GTObservedTransition**（前一状态恒真实），StateTransition 的自回归 rollout 退为未来扩展。
+
+**第一步：采集带 3D 标注的数据**
+
+```bash
+# 与空间序列模型相同的 3D 数据（positions 逐帧连续，prev_skeleton 无需重采）
+python scripts/data_collection/collect.py --3d
+# 当前默认数据目录 data/seq_rz_c2_sk
+```
+
+**第二步：训练 GTObservedTransition（主线）**
+
+```bash
+# 默认（cuda1，episode_len=40 对齐 action_window，dense supervision）
+CUDA_VISIBLE_DEVICES=1 python scripts/training/train_gt_transition.py
+
+# 短 epoch 冒烟测试（验证管线，如 cuda3）
+CUDA_VISIBLE_DEVICES=3 python scripts/training/train_gt_transition.py --n_epochs 5 --episode_len 12
+
+# 递增权重 dense supervision（窗口最后几步权重大）+ 调 z 维度
+CUDA_VISIBLE_DEVICES=3 python scripts/training/train_gt_transition.py \
+    --dense_step_weight linear --z_dim 32 --episode_len 40
+```
+
+**第三步：观测驱动评估（主线）**
+
+```bash
+CUDA_VISIBLE_DEVICES=3 python scripts/evaluation/eval_gt_transition.py \
+    --checkpoint train_log/gt_transition/<exp>/phase_gt_transition/model/best_model.pt \
+    --data_dir data/seq_rz_c2_sk --seq_idx 0 --max_steps 40
+```
+输出：最后一步部署 MSE（ŝ_t 精度）+ per-step 诊断 MSE + ‖z‖ 范数轨迹 + z drift ratio。理想情况 z drift ratio ≈ 1（z 稳定有界，无累积漂移）。
+
+**（可选）训练 StateTransition 自回归版（未来扩展）**
+
+```bash
+# 状态转移：开环训练（热启动 gt_transition + 纯闭环；Stage0/Stage1 脚本已归档）
+CUDA_VISIBLE_DEVICES=3 python scripts/training/train_open_loop_transition.py --n_epochs 5
+
+# 评估纯自回归 rollout（s 和 z 都喂预测，监测漂移）
+CUDA_VISIBLE_DEVICES=3 python scripts/evaluation/eval_rollout.py \
+    --checkpoint train_log/state_transition/<exp>/phase_state_transition/model/best_model.pt \
+    --data_dir data/seq_rz_c2_sk --seq_idx 0 --max_steps 60
+```
+
+**部署说明**（GTObservedTransition）：
+- 每步采集图像 → 骨架化得真实 s_{t-1} → 喂模型得 ŝ_t（z 由模型内部跨步演化维护）
+- 无需 GT、不算 loss，直接用 ŝ_t 作为当前形态预测
+- Stage 2（未来）：接入图像骨架化感知前端，从 2D 图像获取真实 s_{t-1}（当前 Stage 0/1 用仿真 GT）
+
 ### 5.4 深度增强模型（Depth-CMSTNF / RGB-D Neural Field）
 
 **第一步：采集含深度图的数据**
@@ -1415,3 +1585,7 @@ python scripts/evaluation/visualize_3d_shape.py \
 - **空间序列模型**：SpatialSequence 和 PCSpatial 直接预测中心线节点坐标（31 × 3D），不走体渲染或 SDF 管线。GRU 沿 Z 轴空间传播保证拓扑连通。使用 `dataset_spatial.py` 的 `SpatialSequenceDataset`。
 - **预测-修正架构**：PCSpatial 的 Phase 1 纯预测（等价 SpatialSequence），Phase 2 加入 CNN 图像修正分支（残差学习），设计目标为 sim-to-real 迁移。Phase 2 需要 `--encoder fractional` 以外的图像数据。
 - **可视化支持**：`visualize_3d_shape.py` 支持所有 8 种模型类型（density/SDF/pointcloud/skeleton），骨架模型使用固定坐标轴 + 等比例显示。
+- **闭环状态转移模型**：StateTransition（`model_state_transition.py`）把前一步真实状态 + 可学习迟滞潜变量 z 作为输入，学转移 `s_t=F(s_{t-1},a_t,z_{t-1})` 不学状态。Δ 预测 + delta_scale·tanh 收缩。z 无 GT，端到端从 skeleton loss 学。forward 的 prev_* 默认 None → 冷启动回退前馈，旧单参调用兼容。
+- **全 GT 驱动窗口框架（当前主线）**：GTObservedTransition（`model_gt_transition.py`）继承 StateTransition，固化"前一状态恒真实"（TF=1.0）+ z 在状态窗口 K 步演化（K=episode_len=40）+ dense supervision（每步预测都算 loss，给无 GT 的 z 直接梯度）。样本自包含可打乱（z 不跨样本）。这是当前部署主线；StateTransition 的纯自回归 rollout 退为未来扩展（无法每步观测时）。
+- **dense supervision 无泄漏**：状态窗口的 s 既作输入又作 GT label 是标准 teacher forcing——预测 ŝ_{j+1} 只用 ≤s_j 的历史，GT s_{j+1} 不在预测路径。部署时无 GT 不算 loss，直接用最后一步预测 ŝ_t。
+- **GPU 选择约定**：测试/冒烟实验用 cuda1 或 cuda3（如 `CUDA_VISIBLE_DEVICES=3`），避免占用 cuda0。
