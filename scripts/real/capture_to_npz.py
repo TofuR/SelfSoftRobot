@@ -153,7 +153,7 @@ def main():
 
     # 帧时刻：用于把高频气压对齐到相机帧（同一时钟原点）
     if args.frame_times:
-        frame_times = np.loadtxt(args.frame_times)
+        frame_times = np.atleast_1d(np.loadtxt(args.frame_times))   # 至少 1 维：单帧文件 loadtxt 返回 0-d 标量会让下游 len() 崩
     elif args.fps:
         frame_times = np.arange(N) / float(args.fps)
     else:
