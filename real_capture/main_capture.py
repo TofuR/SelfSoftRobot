@@ -1,0 +1,588 @@
+# main_capture.py
+"""六通道气压阀 + NDI 末端 + 相机 同步采集 GUI（动作门控）。
+
+功能：
+  - 连接 Modbus（2 组 × 3 通道 = 6 路电流型比例阀，0–500kPa）；
+  - 6 通道目标/min/max 控制（**单通道模式**：把其余 5 路 min=max=0 即只动 1 路，向后兼容）；
+  - 连接 NDI Aurora 电磁导航，实时末端 x/y/z + 轨迹；
+  - 相机实时预览（RealSense，可 mock）；
+  - 动作门控采集：动作每 `action_interval`（默认 0.2s）下发一次，等 `settle`（默认 0.19s）
+    软臂稳定后抓一帧 + NDI 末端，三者同索引落盘；
+  - 后处理：生成 tip.npz + 调 capture_to_npz 出训练用 .npz / 导出汇总 CSV；
+  - 设置持久化（real_capture_config.ini，跨机器不踩绝对路径坑）；
+  - **mock 任意组合**：--mock-cam / --mock-valve / --mock-ndi 单选或混选；--mock = 三个全开。
+
+运行示例（在本文件所在目录执行）：
+    # 1) 全 mock（无任何硬件，先验证 GUI 与整条链路）
+    python main_capture.py --mock
+
+    # 2) 真机全用（两组 Modbus 串口 + NDI 串口 + RealSense）
+    python main_capture.py --group1 COM3 --group2 COM46 --ndi COM9
+
+    # 3) 只调单通道（其余 5 路 min=max=0），假 NDI
+    python main_capture.py --mock-ndi --group1 COM3 --group2 COM46
+
+    # 任意组合皆可；--mock 等价于 --mock-cam --mock-valve --mock-ndi
+
+依赖：PyQt5, pyqtgraph, numpy,（真机还需 pyrealsense2/pyserial/scipy/scikit-surgerynditracker）。
+"""
+from __future__ import annotations
+
+import configparser
+import os
+import subprocess
+import sys
+import threading
+from datetime import datetime
+
+import numpy as np
+import pyqtgraph as pg
+from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QImage, QPixmap
+from PyQt5.QtWidgets import (
+    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
+    QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPlainTextEdit,
+    QPushButton, QSizePolicy, QSplitter, QVBoxLayout, QWidget)
+
+from recorder import ValveRecorder, build_ndi_tip_npz, export_summary_csv
+from realsense_cam import RealSenseCam
+from valve_control import N_CHAN, P_MAX, P_MIN
+
+# 现代白底风格（对齐旧 main_capture.py）
+pg.setConfigOptions(antialias=True)
+pg.setConfigOption("background", "#FFFFFF")
+pg.setConfigOption("foreground", "#334E68")
+
+PLOT_LEN = 300
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))   # py 文件所在目录；保存路径默认基于此
+
+# 6 路曲线颜色
+_CH_COLORS = ["#2CB1BC", "#667EEA", "#EF4E4E", "#F6AD55", "#68D391", "#B388FF"]
+
+
+def _detect_project_root() -> str:
+    """向上查找包含 scripts/real/capture_to_npz.py 的目录（用于"生成 npz"）。"""
+    d = SCRIPT_DIR
+    for _ in range(6):
+        if os.path.isfile(os.path.join(d, "scripts", "real", "capture_to_npz.py")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return os.getcwd()
+
+
+class CaptureWindow(QMainWindow):
+    log_signal = pyqtSignal(str)          # 子进程(capture_to_npz)输出回 GUI 线程
+
+    def __init__(self, mock_cam=False, mock_valve=False, mock_ndi=False,
+                 group1="COM3", group2="COM46", ndi_port="COM9", baudrate=9600,
+                 slave_addr=1, fps=30):
+        super().__init__()
+        self.mock_cam = bool(mock_cam)
+        self.mock_valve = bool(mock_valve)
+        self.mock_ndi = bool(mock_ndi)
+        self.fps = int(fps)
+        self.project_root = _detect_project_root()
+        self._cfg_path = os.path.join(SCRIPT_DIR, "real_capture_config.ini")
+        self._npz_proc = None
+
+        self.setWindowTitle("六通道阀 · NDI · 相机  同步采集  ·  "
+                            + ("MOCK" if (mock_cam or mock_valve or mock_ndi) else "HARDWARE"))
+        self.resize(1380, 880)
+
+        # ---- 硬件/核心（每个组件按需 mock，可任意组合）----
+        self.cam = RealSenseCam(mock=mock_cam, fps=fps)
+
+        if mock_ndi:
+            from hardware_threads import MockNdiThread
+            self.ndi = MockNdiThread()
+        else:
+            from hardware_threads import NdiThread
+            self.ndi = NdiThread(port=ndi_port)
+
+        if mock_valve:
+            from valve_control import MockValveController
+            self.controller = MockValveController()
+        else:
+            from valve_control import ValveController
+            self.controller = ValveController({1: group1, 2: group2}, baudrate, slave_addr)
+
+        self.core = ValveRecorder(self.cam, self.ndi, self.controller)
+
+        # ---- 数据缓存（曲线）----
+        self._p_buf = np.zeros((N_CHAN, PLOT_LEN))
+        self._xy_trail = np.zeros((2, 0))        # NDI XY 轨迹（动态增长，截断到 PLOT_LEN）
+
+        # 6 通道控件
+        self._target_sb = []
+        self._min_sb = []
+        self._max_sb = []
+
+        self._build_ui()
+        self._connect_core()
+        self.log_signal.connect(self._log)
+        self._load_config()
+
+        # CLI 覆盖（仅端口类参数）
+        self.le_g1.setText(group1); self.le_g2.setText(group2)
+        self.le_ndi.setText(ndi_port)
+        self.sb_baud.setValue(int(baudrate)); self.sb_slave.setValue(int(slave_addr))
+
+        # 相机立即开（预览）；mock 阀/mock NDI 立即连上
+        self.cam.start()
+        if mock_valve:
+            self.controller.connect()
+        if mock_ndi:
+            self.ndi.start()
+
+        mocked = [n for n, m in (("相机", mock_cam), ("阀/Modbus", mock_valve), ("NDI", mock_ndi)) if m]
+        if mocked:
+            self._log(f"就绪。MOCK 组件：{' + '.join(mocked)}（这些用假数据，其余用真硬件）")
+        else:
+            self._log("就绪。（全部真硬件，需先连接 Modbus / NDI）")
+        self._log("单通道用法：把不用的 5 路 min=max=0，只给目标通道设范围。")
+
+    # ===================== UI 构建 =====================
+    def _build_ui(self):
+        central = QWidget()
+        root = QVBoxLayout(central)
+        split = QSplitter(Qt.Horizontal)
+
+        # ---------- 左：控制面板 ----------
+        left = QWidget()
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(6, 6, 6, 6)
+
+        # ---- Modbus 连接 ----
+        gb = QGroupBox("Modbus 连接（2 组 × 3 通道 = 6 路，4–20mA）")
+        g = QGridLayout(gb)
+        g.addWidget(QLabel("组1串口"), 0, 0); self.le_g1 = QLineEdit("COM3"); g.addWidget(self.le_g1, 0, 1)
+        g.addWidget(QLabel("组2串口"), 0, 2); self.le_g2 = QLineEdit("COM46"); g.addWidget(self.le_g2, 0, 3)
+        g.addWidget(QLabel("波特"), 1, 0); self.sb_baud = QDoubleSpinBox(); self.sb_baud.setRange(1200, 115200); self.sb_baud.setValue(9600); self.sb_baud.setDecimals(0); g.addWidget(self.sb_baud, 1, 1)
+        g.addWidget(QLabel("从站"), 1, 2); self.sb_slave = QDoubleSpinBox(); self.sb_slave.setRange(1, 247); self.sb_slave.setValue(1); self.sb_slave.setDecimals(0); g.addWidget(self.sb_slave, 1, 3)
+        row = QHBoxLayout(); self.btn_connect = QPushButton("连接 Modbus"); self.btn_connect.clicked.connect(self._on_connect)
+        self.lbl_conn = QLabel("未连接"); self.lbl_conn.setStyleSheet("color:#888")
+        row.addWidget(self.btn_connect); row.addWidget(self.lbl_conn, 1)
+        g.addLayout(row, 2, 0, 1, 4)
+        ll.addWidget(gb)
+
+        # ---- 6 通道阀控制 ----
+        gb = QGroupBox("阀控制（目标/min/max，kPa；范围 0–500）")
+        g = QGridLayout(gb)
+        g.addWidget(QLabel("通道"), 0, 0); g.addWidget(QLabel("目标"), 0, 1)
+        g.addWidget(QLabel("min"), 0, 2); g.addWidget(QLabel("max"), 0, 3)
+        for i in range(N_CHAN):
+            g.addWidget(QLabel(f"ch{i}"), i + 1, 0)
+            t = QDoubleSpinBox(); t.setRange(P_MIN, P_MAX); t.setDecimals(1); t.setSingleStep(5.0); t.setValue(0.0)
+            t.valueChanged.connect(self._on_target_changed)
+            mn = QDoubleSpinBox(); mn.setRange(P_MIN, P_MAX); mn.setDecimals(1); mn.setSingleStep(5.0)
+            mx = QDoubleSpinBox(); mx.setRange(P_MIN, P_MAX); mx.setDecimals(1); mx.setSingleStep(5.0)
+            if i == 0:                                   # 默认 ch0 有范围，其余钉 0（单通道）
+                mn.setValue(0.0); mx.setValue(200.0); t.setValue(0.0)
+            else:
+                mn.setValue(0.0); mx.setValue(0.0)
+            g.addWidget(t, i + 1, 1); g.addWidget(mn, i + 1, 2); g.addWidget(mx, i + 1, 3)
+            self._target_sb.append(t); self._min_sb.append(mn); self._max_sb.append(mx)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("主通道(legacy pressure.csv)")); self.cb_active = QComboBox()
+        self.cb_active.addItems([f"ch{i}" for i in range(N_CHAN)])
+        row.addWidget(self.cb_active)
+        self.btn_send = QPushButton("立即下发目标"); self.btn_send.clicked.connect(self._on_send)
+        self.btn_zero = QPushButton("全部归零"); self.btn_zero.clicked.connect(self._on_zero)
+        row.addWidget(self.btn_send); row.addWidget(self.btn_zero)
+        g.addLayout(row, N_CHAN + 1, 0, 1, 4)
+        ll.addWidget(gb)
+
+        # ---- NDI ----
+        gb = QGroupBox("NDI 末端（Aurora 电磁导航）")
+        g = QGridLayout(gb)
+        g.addWidget(QLabel("串口"), 0, 0); self.le_ndi = QLineEdit("COM9"); g.addWidget(self.le_ndi, 0, 1)
+        self.btn_ndi = QPushButton("连接 NDI"); self.btn_ndi.clicked.connect(self._on_connect_ndi); g.addWidget(self.btn_ndi, 0, 2)
+        self.lbl_ndi = QLabel("末端: x=--  y=--  z=--  (失锁时 NaN)"); self.lbl_ndi.setStyleSheet("color:#334E68")
+        g.addWidget(self.lbl_ndi, 1, 0, 1, 3)
+        ll.addWidget(gb)
+
+        # ---- 采集 ----
+        gb = QGroupBox("数据采集（动作门控）")
+        g = QGridLayout(gb)
+        g.addWidget(QLabel("保存目录"), 0, 0); self.le_seq = QLineEdit("data/raw"); g.addWidget(self.le_seq, 0, 1, 1, 2)
+        self.btn_browse = QPushButton("…"); self.btn_browse.setFixedWidth(34); self.btn_browse.clicked.connect(self._on_browse); g.addWidget(self.btn_browse, 0, 3)
+        g.addWidget(QLabel("模式"), 1, 0); self.cb_mode = QComboBox()
+        self.cb_mode.addItems(["手动录制 (Manual)", "自动随机游走 (Random)", "自动往返扫描 (Sweep)"])
+        g.addWidget(self.cb_mode, 1, 1, 1, 2)
+        self.cb_ts = QCheckBox("自动时间戳命名"); self.cb_ts.setChecked(True); g.addWidget(self.cb_ts, 1, 3)
+        g.addWidget(QLabel("动作间隔(s)"), 2, 0); self.sb_interval = QDoubleSpinBox(); self.sb_interval.setRange(0.05, 5.0); self.sb_interval.setSingleStep(0.05); self.sb_interval.setValue(0.20); g.addWidget(self.sb_interval, 2, 1)
+        g.addWidget(QLabel("稳定等待(s)"), 2, 2); self.sb_settle = QDoubleSpinBox(); self.sb_settle.setRange(0.0, 4.0); self.sb_settle.setSingleStep(0.01); self.sb_settle.setValue(0.19); g.addWidget(self.sb_settle, 2, 3)
+        g.addWidget(QLabel("备注"), 3, 0); self.le_note = QLineEdit(""); g.addWidget(self.le_note, 3, 1, 1, 3)
+        row = QHBoxLayout()
+        self.btn_start = QPushButton("▶ 开始采集"); self.btn_start.setStyleSheet("background:#2CB1BC;color:white"); self.btn_start.clicked.connect(self._on_start)
+        self.btn_stop = QPushButton("■ 停止采集"); self.btn_stop.setStyleSheet("background:#667EEA;color:white"); self.btn_stop.setEnabled(False); self.btn_stop.clicked.connect(self._on_stop)
+        row.addWidget(self.btn_start); row.addWidget(self.btn_stop)
+        g.addLayout(row, 4, 0, 1, 4)
+        self.lbl_rec = QLabel("未录制"); self.lbl_rec.setStyleSheet("color:#888"); g.addWidget(self.lbl_rec, 5, 0, 1, 4)
+        ll.addWidget(gb)
+
+        # ---- 后处理 ----
+        gb = QGroupBox("后处理")
+        g = QGridLayout(gb)
+        g.addWidget(QLabel("camera_params(npz)"), 0, 0); self.le_camparam = QLineEdit("config/real_camera_params.npz"); g.addWidget(self.le_camparam, 0, 1, 1, 2)
+        g.addWidget(QLabel("灰度阈值"), 1, 0); self.sb_thresh = QDoubleSpinBox(); self.sb_thresh.setRange(0, 255); self.sb_thresh.setDecimals(0); self.sb_thresh.setValue(60); g.addWidget(self.sb_thresh, 1, 1)
+        self.cb_planar = QCheckBox("单相机--planar-lift"); self.cb_planar.setChecked(True); g.addWidget(self.cb_planar, 1, 2)
+        self.btn_npz = QPushButton("⚡ 生成 npz（tip.npz + capture_to_npz）"); self.btn_npz.clicked.connect(self._on_gen_npz); g.addWidget(self.btn_npz, 2, 0, 1, 3)
+        self.btn_summary = QPushButton("📋 导出汇总 CSV（按帧对齐 6路气压+NDI）"); self.btn_summary.clicked.connect(self._on_summary); g.addWidget(self.btn_summary, 3, 0, 1, 3)
+        ll.addWidget(gb)
+        ll.addStretch(1)
+
+        # ---------- 右：可视化 ----------
+        right = QWidget()
+        rl = QVBoxLayout(right)
+        self.preview = QLabel("相机预览"); self.preview.setAlignment(Qt.AlignCenter)
+        self.preview.setMinimumHeight(220); self.preview.setStyleSheet("background:#222;color:#aaa")
+        self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        rl.addWidget(self.preview, 3)
+        self.p_plot = pg.PlotWidget(title="6 路气压 (kPa)"); self.p_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.p_plot.addLegend(offset=(-10, 10))
+        self.p_curves = [self.p_plot.plot(pen=pg.mkPen(color=c, width=2), name=f"ch{i}")
+                         for i, c in enumerate(_CH_COLORS)]
+        rl.addWidget(self.p_plot, 2)
+        self.ndi_plot = pg.PlotWidget(title="NDI 末端 XY 轨迹"); self.ndi_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.ndi_plot.setLabel("bottom", "x (mm)"); self.ndi_plot.setLabel("left", "y (mm)")
+        self.ndi_curve = self.ndi_plot.plot(pen=None, symbol="o", symbolSize=3, symbolPen=None, symbolBrush="#EF4E4E")
+        rl.addWidget(self.ndi_plot, 2)
+
+        split.addWidget(left); split.addWidget(right)
+        split.setStretchFactor(0, 0); split.setStretchFactor(1, 1); split.setSizes([470, 910])
+        root.addWidget(split, 1)
+
+        self.log_box = QPlainTextEdit(); self.log_box.setReadOnly(True); self.log_box.setMaximumHeight(140)
+        root.addWidget(self.log_box)
+        self.setCentralWidget(central)
+
+    # ===================== 信号接线 =====================
+    def _connect_core(self):
+        self.core.log.connect(self._log)
+        self.core.preview_frame.connect(self._on_preview)
+        self.core.pressure_status.connect(self._on_pressure)
+        self.core.ndi_status.connect(self._on_ndi)
+        self.core.connection_changed.connect(self._on_conn)
+        self.core.recording_started.connect(self._on_rec_started)
+        self.core.recording_status.connect(self._on_rec_status)
+        self.core.recording_stopped.connect(self._on_rec_stopped)
+
+    # ===================== 配置持久化（跨机器安全）=====================
+    def _load_config(self):
+        try:
+            cp = configparser.ConfigParser()
+            if not cp.read(self._cfg_path, encoding="utf-8") or not cp.has_section("capture"):
+                return
+            c = cp["capture"]
+            self.le_g1.setText(c.get("group1", self.le_g1.text()))
+            self.le_g2.setText(c.get("group2", self.le_g2.text()))
+            self.le_ndi.setText(c.get("ndi_port", self.le_ndi.text()))
+            self.sb_baud.setValue(float(c.get("baudrate", self.sb_baud.value())))
+            self.sb_slave.setValue(float(c.get("slave_addr", self.sb_slave.value())))
+            saved = c.get("seq_dir", None)
+            if saved:
+                # 相对路径总恢复；绝对路径仅当其父目录在本机存在才恢复（否则视为别机失效路径）
+                if not os.path.isabs(saved) or os.path.isdir(os.path.dirname(saved) or "."):
+                    self.le_seq.setText(saved)
+            self.cb_mode.setCurrentIndex(int(c.get("mode", self.cb_mode.currentIndex())))
+            self.sb_interval.setValue(float(c.get("action_interval", self.sb_interval.value())))
+            self.sb_settle.setValue(float(c.get("settle", self.sb_settle.value())))
+            self.cb_active.setCurrentIndex(int(c.get("active_channel", self.cb_active.currentIndex())))
+            for i in range(N_CHAN):
+                self._min_sb[i].setValue(float(c.get(f"lo{i}", self._min_sb[i].value())))
+                self._max_sb[i].setValue(float(c.get(f"hi{i}", self._max_sb[i].value())))
+            self.le_camparam.setText(c.get("cam_param", self.le_camparam.text()))
+            self.sb_thresh.setValue(float(c.get("threshold", self.sb_thresh.value())))
+            self.cb_ts.setChecked(c.get("auto_timestamp", "1") == "1")
+            self.cb_planar.setChecked(c.get("planar_lift", "1") == "1")
+        except Exception as e:
+            print(f"[cfg] load: {e}")
+
+    def _save_config(self):
+        try:
+            cp = configparser.ConfigParser()
+            cp["capture"] = {
+                "group1": self.le_g1.text(), "group2": self.le_g2.text(),
+                "ndi_port": self.le_ndi.text(),
+                "baudrate": str(int(self.sb_baud.value())), "slave_addr": str(int(self.sb_slave.value())),
+                "seq_dir": self.le_seq.text(), "mode": str(self.cb_mode.currentIndex()),
+                "action_interval": str(self.sb_interval.value()), "settle": str(self.sb_settle.value()),
+                "active_channel": str(self.cb_active.currentIndex()),
+                "cam_param": self.le_camparam.text(), "threshold": str(int(self.sb_thresh.value())),
+                "auto_timestamp": "1" if self.cb_ts.isChecked() else "0",
+                "planar_lift": "1" if self.cb_planar.isChecked() else "0",
+            }
+            for i in range(N_CHAN):
+                cp["capture"][f"lo{i}"] = str(self._min_sb[i].value())
+                cp["capture"][f"hi{i}"] = str(self._max_sb[i].value())
+            with open(self._cfg_path, "w", encoding="utf-8") as f:
+                cp.write(f)
+        except Exception as e:
+            print(f"[cfg] save: {e}")
+
+    # ===================== 槽 =====================
+    def _log(self, text: str):
+        self.log_box.appendPlainText(text)
+
+    def _on_preview(self, img: np.ndarray):
+        if not self.preview.isVisible():
+            return
+        rgb = np.ascontiguousarray(img[:, :, ::-1])   # BGR -> RGB
+        h, w = rgb.shape[:2]
+        qimg = QImage(rgb.data, w, h, w * 3, QImage.Format_RGB888).copy()
+        pix = QPixmap.fromImage(qimg).scaled(self.preview.width() - 4, self.preview.height() - 4,
+                                             Qt.KeepAspectRatio, Qt.FastTransformation)
+        self.preview.setPixmap(pix)
+
+    def _on_pressure(self, p6: list):
+        p6 = list(p6)[:N_CHAN] + [0.0] * (N_CHAN - len(p6))
+        self._p_buf[:, :-1] = self._p_buf[:, 1:]
+        self._p_buf[:, -1] = p6
+        for i, curve in enumerate(self.p_curves):
+            curve.setData(self._p_buf[i])
+
+    def _on_ndi(self, pose: list):
+        x, y, z = (pose[0], pose[1], pose[2]) if len(pose) >= 3 else (float("nan"),) * 3
+        q = pose[10] if len(pose) > 10 else float("nan")
+        self.lbl_ndi.setText(f"末端: x={x:.1f}  y={y:.1f}  z={z:.1f}  quality={q:.2f}")
+        if np.isfinite(x) and np.isfinite(y):
+            pt = np.array([[float(x)], [float(y)]])
+            self._xy_trail = np.hstack([self._xy_trail, pt])[:, -PLOT_LEN:]
+            self.ndi_curve.setData(self._xy_trail[0], self._xy_trail[1])
+
+    def _on_conn(self, ok: bool, msg: str):
+        self._log(msg)
+        self.btn_connect.setEnabled(True)
+        self.lbl_conn.setText("已连接" if ok else "未连接")
+        self.lbl_conn.setStyleSheet("color:#2CB1BC" if ok else "color:#EF4E4E")
+
+    def _on_rec_started(self, seq_dir: str):
+        self.btn_start.setEnabled(False); self.btn_stop.setEnabled(True)
+        self._log(f"录制中 -> {seq_dir}")
+
+    def _on_rec_status(self, frames, elapsed, action6, x, y, z):
+        p_str = " ".join(f"{v:.0f}" for v in action6)
+        self.lbl_rec.setText(f"录制中：{frames} 帧 | {elapsed:.1f}s | [{p_str}] | tip({x:.0f},{y:.0f},{z:.0f})")
+        self.lbl_rec.setStyleSheet("color:#2CB1BC")
+
+    def _on_rec_stopped(self, seq_dir, frames):
+        self.btn_start.setEnabled(True); self.btn_stop.setEnabled(False)
+        self.lbl_rec.setText(f"已停止：{frames} 帧 -> {seq_dir}"); self.lbl_rec.setStyleSheet("color:#888")
+
+    # ===================== 按钮回调 =====================
+    def _current_targets(self):
+        return [sb.value() for sb in self._target_sb]
+
+    def _current_lo(self):
+        return [sb.value() for sb in self._min_sb]
+
+    def _current_hi(self):
+        return [sb.value() for sb in self._max_sb]
+
+    def _on_target_changed(self):
+        # manual 模式每拍重发最新目标；即时下发也用最新值
+        self.core.set_manual_target(self._current_targets())
+
+    def _on_connect(self):
+        if self.controller.connected:
+            self._log("Modbus 已连接。"); return
+        self.btn_connect.setEnabled(False)
+        self.lbl_conn.setText("连接中…"); self.lbl_conn.setStyleSheet("color:#888")
+        # 真机在后台线程连（串口 open 可能阻塞）；mock 的 connect 瞬时
+        g1, g2 = self.le_g1.text().strip(), self.le_g2.text().strip()
+        from valve_control import ValveController
+        if not self.mock_valve and isinstance(self.controller, ValveController):
+            self.controller.group_ports = {1: g1, 2: g2}
+            self.controller.baudrate = int(self.sb_baud.value())
+            self.controller.slave_addr = int(self.sb_slave.value())
+
+        def worker():
+            self.controller.connect()
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_connect_ndi(self):
+        if self.ndi.isRunning():
+            self._log("NDI 已在运行。"); return
+        old = self.ndi
+        if not self.mock_ndi:
+            from hardware_threads import NdiThread
+            # 重建以取最新端口（NdiThread 在 run 里 ndi_load）
+            self.ndi = NdiThread(port=self.le_ndi.text().strip())
+            self.ndi.ndi_data.connect(self.core._on_ndi)   # 重新接线
+            # ⚠ 必须同步更新 recorder 的引用，否则 shutdown() 会停到 __init__ 里那个
+            #    未启动的旧线程 → 真机正在跑的 NdiThread + Aurora _tracker 永不关闭（句柄/串口泄漏 + 退出崩溃）
+            self.core.ndi = self.ndi
+        self.ndi.start()
+        # 停掉旧线程：若它在跑→关其 Aurora _tracker；若是未启动的→stop() 是无害 no-op
+        if old is not self.ndi:
+            try:
+                old.ndi_data.disconnect(self.core._on_ndi)   # 去掉旧死连接（防重连后双发）
+            except (TypeError, RuntimeError):
+                pass
+            try:
+                old.stop()
+            except Exception:
+                pass
+        self._log(f"NDI 启动（端口 {self.le_ndi.text().strip()}）。")
+
+    def _on_send(self):
+        if not self.controller.connected:
+            self._log("⚠ 先连接 Modbus。"); return
+        self.controller.set_pressures(self._current_targets())
+
+    def _on_zero(self):
+        if not self.controller.connected:
+            self._log("⚠ 先连接 Modbus。"); return
+        for sb in self._target_sb:
+            sb.setValue(0.0)
+        self.controller.zero_all()
+
+    def _on_browse(self):
+        d = QFileDialog.getExistingDirectory(self, "选择保存目录", ".")
+        if d:
+            self.le_seq.setText(d)
+
+    def _on_start(self):
+        mode = ["manual", "random", "sweep"][self.cb_mode.currentIndex()]
+        # 真阀：手动/自动都要求先连 Modbus。未连接时 set_pressures 会跳过下发却把目标值
+        # 记进 actions6.csv → 阀不动但数据像在动 = 静默污染训练数据。mock 阀恒 connected 不受影响。
+        if not self.mock_valve and not self.controller.connected:
+            self._log("⚠ 录制前请先【连接 Modbus】（手动/自动均需）。未连接时气压不会下发，但会被记进 actions6.csv。"); return
+        if mode in ("random", "sweep") and not self.controller.connected:
+            self._log("自动驱动需要先连接 Modbus。"); return
+        base = self.le_seq.text().strip()
+        if not base:
+            self._log("请填写保存目录。"); return
+        if not os.path.isabs(base):
+            base = os.path.join(SCRIPT_DIR, base)         # 相对路径按 py 文件目录解析
+        seq = base
+        if self.cb_ts.isChecked():
+            seq = os.path.join(base, "seq_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
+        self.core.set_manual_target(self._current_targets())
+        self.core.start_recording(seq, mode, self._current_lo(), self._current_hi(),
+                                  self.sb_interval.value(), self.sb_settle.value(),
+                                  self.cb_active.currentIndex(), self.le_note.text().strip())
+
+    def _on_stop(self):
+        self.core.stop_recording()
+
+    def _seq_abspath(self) -> str:
+        """当前保存目录解析成绝对（优先用最近一次实际录制目录）。"""
+        seq = self.core.seq_dir if self.core.seq_dir else self.le_seq.text().strip()
+        if not os.path.isabs(seq):
+            seq = os.path.join(SCRIPT_DIR, seq)
+        return os.path.abspath(seq)
+
+    def _on_summary(self):
+        seq = self._seq_abspath()
+        if not (os.path.isdir(os.path.join(seq, "cam0")) or os.path.isfile(os.path.join(seq, "actions6.csv"))):
+            self._log(f"找不到序列目录 {seq}（要有 actions6.csv/）。"); return
+        try:
+            out = export_summary_csv(seq)
+            self._log(f"汇总已导出 -> {out}")
+        except Exception as e:
+            self._log(f"导出汇总失败: {e}")
+
+    def _on_gen_npz(self):
+        seq = self._seq_abspath()
+        cam0 = os.path.join(seq, "cam0")
+        act = os.path.join(seq, "actions6.csv")
+        ft = os.path.join(seq, "frame_times.txt")
+        if not os.path.isdir(cam0):
+            self._log(f"找不到帧目录 {cam0}，先采集或改保存目录。"); return
+        for need, path in (("actions6.csv", act), ("frame_times.txt", ft)):
+            if not os.path.isfile(path):
+                self._log(f"找不到 {need}（{path}）。"); return
+        # 1) tip.npz
+        tip = None
+        try:
+            tip = build_ndi_tip_npz(seq)
+            self._log(f"已生成 NDI 末端锚点 -> {tip}")
+        except Exception as e:
+            self._log(f"⚠ tip.npz 生成失败（{e}）；将不传 --ndi-tip。")
+        # 2) capture_to_npz
+        script = os.path.join(self.project_root, "scripts", "real", "capture_to_npz.py")
+        if not os.path.isfile(script):
+            self._log(f"未找到 {script}（project_root/scripts/real/）。"); return
+        cam_param = self.le_camparam.text().strip()
+        if not os.path.isabs(cam_param):
+            cam_param = os.path.join(self.project_root, cam_param)
+        out_npz = os.path.join(os.path.dirname(seq), os.path.basename(seq) + ".npz")
+        cmd = [sys.executable, script, "--view-dirs", cam0, "--camera-params", cam_param,
+               "--method", "backlight", "--gray-thresh", str(int(self.sb_thresh.value())),
+               "--dt", f"{1.0 / self.fps:.4f}",
+               "--actions", act, "--actions-has-timestamps", "--frame-times", ft,
+               "--clean-nan", "--out", out_npz]
+        if self.cb_planar.isChecked():
+            cmd.append("--planar-lift")
+        if tip:
+            cmd += ["--ndi-tip", tip]
+        self._log("生成 npz：" + " ".join(cmd))
+
+        def worker():
+            try:
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        text=True, cwd=self.project_root)
+                self._npz_proc = proc
+                for line in proc.stdout:
+                    self.log_signal.emit(line.rstrip())
+                proc.wait()
+                self.log_signal.emit(f"[npz] 退出码 {proc.returncode} -> {out_npz}")
+            except Exception as e:
+                self.log_signal.emit(f"[npz] 失败: {e}")
+            finally:
+                self._npz_proc = None
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    # ===================== 退出 =====================
+    def closeEvent(self, event):
+        self._save_config()
+        if self._npz_proc is not None and self._npz_proc.poll() is None:
+            try:
+                self._npz_proc.terminate()
+            except Exception:
+                pass
+        try:
+            self.core.shutdown()
+        except Exception as e:
+            print(f"shutdown error: {e}")
+        event.accept()
+
+
+def main():
+    import argparse
+    p = argparse.ArgumentParser(
+        description="六通道阀 · NDI · 相机 同步采集 GUI（动作门控）",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="运行示例见文件顶部 docstring。mock 任意组合：--mock-cam/--mock-valve/--mock-ndi；--mock=全开。")
+    p.add_argument("--mock", action="store_true", help="全 mock（= --mock-cam --mock-valve --mock-ndi）")
+    p.add_argument("--mock-cam", action="store_true", help="假相机")
+    p.add_argument("--mock-valve", action="store_true", help="假阀/Modbus")
+    p.add_argument("--mock-ndi", action="store_true", help="假 NDI 末端")
+    p.add_argument("--group1", default="COM3", help="Modbus 组1 串口")
+    p.add_argument("--group2", default="COM46", help="Modbus 组2 串口")
+    p.add_argument("--ndi", default="COM9", dest="ndi_port", help="NDI 串口")
+    p.add_argument("--baudrate", type=int, default=9600)
+    p.add_argument("--slave", type=int, default=1, dest="slave_addr")
+    p.add_argument("--fps", type=int, default=30)
+    args = p.parse_args()
+
+    mock_cam = args.mock or args.mock_cam
+    mock_valve = args.mock or args.mock_valve
+    mock_ndi = args.mock or args.mock_ndi
+
+    app = QApplication(sys.argv)
+    win = CaptureWindow(mock_cam=mock_cam, mock_valve=mock_valve, mock_ndi=mock_ndi,
+                        group1=args.group1, group2=args.group2, ndi_port=args.ndi_port,
+                        baudrate=args.baudrate, slave_addr=args.slave_addr, fps=args.fps)
+    win.show()
+    sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    main()

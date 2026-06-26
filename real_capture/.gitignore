@@ -1,0 +1,5 @@
+# 运行时生成，不提交（gitignore 不支持行内注释，注释必须独占一行）
+real_capture_config.ini
+data/
+__pycache__/
+*.pyc

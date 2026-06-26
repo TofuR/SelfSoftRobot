@@ -1,0 +1,13 @@
+# real_capture — 六通道气压阀 + NDI + 相机 同步采集
+# Python 3.8+；真机才需要下面大部分包，mock 模式只需 PyQt5/pyqtgraph/numpy/opencv
+
+PyQt5>=5.15
+pyqtgraph>=0.13
+numpy>=1.20
+opencv-python>=4.5          # 存 PNG（无则图像链路安全跳过，仅气压/NDI 记录）
+
+# ---- 真机硬件依赖（按需）----
+pyserial>=3.5               # Modbus RTU（modbus_manager）+ Arduino（若用实测气压）
+pyrealsense2>=2.50          # Intel RealSense 相机
+scipy>=1.7                  # NDI 四元数→欧拉角
+scikit-surgerynditracker>=1.0  # NDI Aurora 电磁导航（pip install scikit-surgerynditracker）
