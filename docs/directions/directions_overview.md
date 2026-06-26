@@ -2,7 +2,7 @@
 
 > 基于文献调研和深度讨论，从"出发点（真问题）"推导出的研究方向体系
 > 核心出发点：软体机器人自建模 = 带迟滞的 3D 全身状态估计
-> 最后更新：2026-06-17
+> 最后更新：2026-06-24
 
 ---
 
@@ -28,6 +28,12 @@
 | [15 窗口开环](15_open_loop_windowed_transition.md) | `OpenLoopTransitionModel` | 预测，**每 K 步重观测** | ✅ 已实现+冒烟（完整训练待跑） |
 
 三者共享可学习迟滞潜变量 z（无 GT，端到端学）与 Δ 预测 + 收缩约束设计（理论基础见 [13 §一](13_closed_loop_state_transition.md)）。**工作模型族**：`SpatialSequenceModel`（前馈基线）、`StateTransitionSpatialModel`、`GTObservedTransitionModel`（=主线）、`OpenLoopTransitionModel`、`FlowMatchPointCloudModel`。
+
+> **下一阶段（形态 / 控制接入主线）**：当前主线（[14](14_gt_observed_transition.md)/[15](15_open_loop_windowed_transition.md)）只输出**骨架**。后续两步构成完整闭环：
+> - **全身形态**：[05](05_skeleton_to_shape_conversion.md) 把骨架升级为全身形态（Phase 0 接口 → 1 半径场 → 2 theta 截面 → 3 时序一致）；
+> - **约束导向控制**：[16](16_constraint_oriented_control.md) 用前向模型作可微黑箱，给定避障点/任务约束反求动作序列（**迟滞感知**，区别于 hu2025 静态关节求逆）。
+>
+> 即「**骨架预测 → 全身形态 → 约束导向控制**」。实物数据采集已打通（[11 §最小验证平台](11_sim_to_real_transfer.md) + 采集程序 `docs/ref/Main UI-plc/`）。
 
 ---
 
@@ -70,7 +76,7 @@
     ├─────── 形状表达层 ──────┐
     │                        │
     │  ┌──────────────────┐  │
-    │  │骨架→形状转换      │  │  固定半径→可变半径/学习截面
+    │  │骨架→形状转换      │  │  Phase 0-3 迁移（接口/半径/截面/时序）
     │  │(skeleton_to_shape)│  │
     │  └──────────────────┘  │
     │  ┌──────────────────┐  │
@@ -86,7 +92,7 @@
     ├─────── 感知与部署层 ────┐
     │                        │
     │  ┌──────────────────┐  │
-    │  │多视角 2D→3D 骨架  │  │  双视角三角化/可微渲染
+    │  │多视角 2D→3D 骨架  │  │  双视角三角化/可微渲染（实物已落地）
     │  │(multi_view_2d_    │  │
     │  │ to_3d_skeleton)   │  │
     │  └──────────────────┘  │
@@ -95,8 +101,12 @@
     │  │(vision_corrected) │  │
     │  └──────────────────┘  │
     │  ┌──────────────────┐  │
-    │  │Sim-to-Real 迁移   │  │  残差物理/域随机化
+    │  │Sim-to-Real 迁移   │  │  残差物理/域随机化（实物采集已打通）
     │  │(sim_to_real)      │  │
+    │  └──────────────────┘  │
+    │  ┌──────────────────┐  │
+    │  │约束导向控制       │  │  前向黑箱求逆（迟滞感知）
+    │  │(constraint_ctrl)  │  │
     │  └──────────────────┘  │
     └────────────────────────┘
     │
@@ -148,7 +158,7 @@
 
 | 方向 | 文档 | 核心思想 | 优先级 |
 |------|------|---------|--------|
-| **骨架→形状转换** | [05_skeleton_to_shape_conversion.md](05_skeleton_to_shape_conversion.md) | 可变半径 / 学习截面 / 3DGS | ★★★ |
+| **骨架→形状转换** | [05_skeleton_to_shape_conversion.md](05_skeleton_to_shape_conversion.md) | Phase 0-3 迁移主线（接口→半径场→theta 截面→时序一致） | ★★★ |
 | **拓扑引导残差流** | [09_topology_guided_residual_flow.md](09_topology_guided_residual_flow.md) | 物理粗变形 + FM 残差 | ★★☆ |
 | **从轮廓恢复形状** | [07_shape_from_silhouette.md](07_shape_from_silhouette.md) | 骨架条件 Visual Hull | ★★☆ |
 
@@ -160,9 +170,10 @@
 
 | 方向 | 文档 | 核心思想 | 优先级 |
 |------|------|---------|--------|
-| **多视角 2D→3D 骨架** | [06_multi_view_2d_to_3d_skeleton.md](06_multi_view_2d_to_3d_skeleton.md) | 双视角三角化 / 可微渲染 | ★★☆ |
+| **多视角 2D→3D 骨架** | [06_multi_view_2d_to_3d_skeleton.md](06_multi_view_2d_to_3d_skeleton.md) | 双视角三角化 / 可微渲染（实物管线已落地） | ★★☆ |
 | **视觉辅助部署** | [10_vision_corrected_deployment.md](10_vision_corrected_deployment.md) | 在线适应 + 残差修正 | ★★☆ |
-| **Sim-to-Real 迁移** | [11_sim_to_real_transfer.md](11_sim_to_real_transfer.md) | 残差物理 / 域随机化 | ★☆☆ |
+| **Sim-to-Real 迁移** | [11_sim_to_real_transfer.md](11_sim_to_real_transfer.md) | 残差物理 / 域随机化（实物硬件+采集管线已打通） | ★★☆ |
+| **约束导向控制** | [16_constraint_oriented_control.md](16_constraint_oriented_control.md) | 前向模型作可微黑箱，给定约束反求动作序列（迟滞感知） | ★★☆ |
 
 ---
 

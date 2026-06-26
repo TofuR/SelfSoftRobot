@@ -3,6 +3,9 @@
 > 状态：待探索
 > 优先级：中高
 > 关联：Yu 2026 (arXiv) 的 Bézier 双视角方法、导管双平面透视
+> 🔁 **2026-06-24 勘误**：
+> - §C「PC-Spatial CNN 修正分支」**已不再是主载体**——视觉修正主线被状态转移族（[13](13_closed_loop_state_transition.md)/[14](14_gt_observed_transition.md)/[15](15_open_loop_windowed_transition.md)）取代：训练期 action-only，部署期视觉修正见 [10](10_vision_corrected_deployment.md)/[15](15_open_loop_windowed_transition.md)。
+> - §A「双视角三角化」**已在实物管线落地**：`src/data/real/triangulation.py` + [11 §最小验证平台](11_sim_to_real_transfer.md) + `capture_to_npz.py --planar-lift`（单相机 1-DOF 平面升维）。实物 2D→3D GT 生成走这条路，不再是"待探索"。
 
 ---
 

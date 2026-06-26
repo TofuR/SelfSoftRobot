@@ -94,6 +94,246 @@ ETH Zurich (RA-L 2024) 的方法：
 
 ---
 
+## 最小验证平台（1-DOF · 单相机 · 硬件入门）
+
+> 本节目标是产出**第一份真实数据集**并跑通"采集→训练"。
+> 它是下文《实物数据采集平台》（完整 3D 多相机/NDI 方案）的**子集，不是替代**——3D 验证阶段仍用下面那套。
+> 软件链路的**可执行命令**（标定→核对→采数→训练）统一在 runbook：
+> [`docs/research/2026-06-19-real-data-pipeline-howto.md`](../research/2026-06-19-real-data-pipeline-howto.md)。
+>
+> **硬件前提（2026-06 确认，本节据此写）**：硅胶臂 + 单腔道驱动器（**能用**，= 单平面弯曲 = 1-DOF）；
+> Intel RealSense D400（**当 RGB 用**，深度作 GT 地板）；驱动 = **TwinCAT PLC 控电机推注射器**（电机位置=控制量），**Arduino 只读气压**。
+>
+> 🔁 **2026-06-24 勘误（真实硬件已确认）**：本节初稿按"Arduino 控电磁阀+气泵"写的驱动链是**错的**。真实驱动是 **TwinCAT PLC（pyads，`192.168.50.56.1.1:851`）控一台电机推注射器**加压——**电机位置(mm) 才是控制量**（手动算好零位/最大弯曲对应的电机位置，电机在此范围移动即可）；**Arduino 只读气压**（I2C 传感器，COM4@9600，输出 `P:..T:..`），不控制任何阀。
+> - 故 §1「阀/泵（电磁阀+MOSFET+气泵）」「机械泄压阀」、§2 第5步「气泵→减压阀→电磁阀→…」气路图、§3 末「Arduino 直驱电磁阀/MOSFET」**均作废**——不需买电磁阀/气泵/泄压阀（打光/背景/标定靶/夹具/气压传感器仍需要）。
+> - §3「仓库没有采集脚本…建议落成 `scripts/real/record_capture.py`」**已过时**：采集程序**已实现**于 [`docs/ref/Main UI-plc/`](../ref/Main%20UI-plc/)（`main_capture.py` GUI / `dataset_recorder.py` headless / `realsense_cam.py`），时间同步 相机+气压+电机位置，直接产出本节 raw → 下文 `capture_to_npz`。**实际采集用这套，不用 §3 的内嵌参考脚本**。
+
+### 0. 这一节在做什么 + 为什么先做这个
+
+**几何事实**：单腔道驱动 → 臂只在一个平面内弯 → 中心线（= 模型预测的骨架）落在一个平面内。
+此时一台**正对该平面**的相机 + `--planar-lift`（射线-平面相交）就能从 2D 骨架恢复 3D 骨架，
+**产出与多视角三角化同 schema 的 .npz**，直接喂 [`14`](14_gt_observed_transition.md) / [`15`](15_open_loop_windowed_transition.md) 训练，命令一字不改。
+
+**为什么先做这个**：硬件门槛最低（1 相机 + 1 腔道）、链路最短、风险最小。先把"真实图像 → 模型能学形状"这条最小闭环跑通，再扩展到多相机/三腔道。
+
+|  | 入门轨（本节） | 终态平台（下文） |
+|---|---|---|
+| 相机 | 1 台 RealSense（RGB） | 2–3 台 + NDI |
+| 弯曲 | 单平面 1-DOF | 2-DOF 任意方向 |
+| 3D 来源 | `--planar-lift`（几何捷径） | 多视角三角化 |
+| 部署 | 单相机推理 | 单相机推理（同） |
+
+**术语速查**（算法背景的人常卡在这里）：
+
+| 术语 | 一句话 |
+|---|---|
+| **剪影 silhouette** | 物体在均匀亮背景前的黑色二值轮廓（背光让臂成黑块）→ pipeline 的 `masks` |
+| **2D 骨架** | 剪影的中轴线，31 个等距点（像素坐标）→ `extract_skeleton_2d` |
+| **内参 K** | 相机自己的焦距/主点/畸变，**和世界无关**，棋盘格标一次终身用 |
+| **外参 R,t → eye/center/up** | 相机在世界里的位置朝向，**和世界靶绑定**，靶一动就变 |
+| **畸变 dist** | 镜头让直线变弯，先 `undistort` 校正 |
+| **三角化** | 同一 3D 点在 2 个相机里的 2 条射线求交 = 3D 坐标。**1 个相机深不确定** → 要 `planar-lift` |
+| **planar-lift** | 单相机下假设弯曲在一个平面内，射线与已知平面求交 = 退化三角化。**前提：弯曲是平面的** |
+| **世界系 = robot-base 系** | 贴在基座的棋盘格靶自己定义的坐标系 |
+
+### 1. 硬件清单（已有 + 还需买，最小）
+
+**你已有**：硅胶臂 + 单腔道驱动器（能用）、RealSense D400、Arduino 控制电磁阀 + 记气压。
+
+**还需准备**（淘宝几十~几百元，已注明的除外）：
+
+| 类别 | 东西 | 用途/备注 |
+|---|---|---|
+| 打光 | **LED 平板灯/拷贝台**（A4，30–80 元）+ **描图纸** 1–2 层 | 背光：臂后方均匀面光源，描图纸打散亮斑 |
+| 背景 | 纯色背景布（与臂色互补） | 衬在背光后/侧 |
+| 标定靶 | **棋盘格 A4 打印贴硬板**（见 §5） | 一次性，定义世界系 |
+| 相机固定 | **铝型材/桌面夹 + 1/4" 螺柱 + L 支架** | RealSense 有 1/4 螺纹口；**不要用三脚架放桌面**（会漂） |
+| 基座固定 | **台虎钳 / 光学面包板 / 3D 打印夹具** | 把臂基座刚性夹死（见 §2） |
+| 气路（若未备齐） | 快插接头 + 硅胶管（4/6mm） | 连腔道 |
+| 气压传感（若没有） | **MPX5700AP** 或更大量程 | 见下"量程注意" |
+| 阀/泵（若没有） | 常闭二通电磁阀（12V）+ MOSFET 模块 + 微型隔膜泵（12V） | Arduino 控制充放气 |
+| 安全 | **机械泄压阀/手动阀** | 软件失控时手动放气，防爆（必装） |
+
+**气压传感器量程注意**：MPX5700AP 是**绝压 15–115 kPa**（= 表压 0–14 kPa）。软臂工作表压若 **>14 kPa 会饱和** → 换更大量程（MPX5700 系列 0–700 kPa 的其它后缀，或工业表压传感器）。**先确认你的软臂最大工作表压**再选型。BMP280 是大气压/海拔传感器，**不适合**软臂动态气压。
+
+### 2. 物理搭建（一步步）
+
+**总原则**：相机、臂基座、世界靶三者**刚性绑定在同一块板/桌面上**，采集中途一个螺丝都不能松——任何相对位移 = 外参漂移 = GT 全错。
+
+1. **固定基座**：臂基座用台虎钳/夹具夹在面包板/铝板上（**普通桌面不行**——碰一下桌子数据全废）。
+2. **定弯曲平面**：单腔道决定弯曲平面；让该平面**平行于背景墙/背光板**。
+3. **架相机**：RealSense 在弯曲平面**正前方 30–50 cm**（10 cm 臂要充满画面，像素/mm 才够），光轴**垂直于弯曲平面**（正对）→ `--planar-lift` 默认平面法向 = 相机朝向，直接用默认即可。用 1/4 螺柱固定到铝型材/桌面夹。
+4. **打背光成黑剪影**：LED 平板灯 + 描图纸在臂**后方**，相机在臂**前方**，臂挡光成纯黑剪影；**关掉环境光**；RealSense 设短曝光 + 低 gain（见 §3 脚本）。新手最常错：把灯打在臂**正面** → 臂反光变亮 → 分割失败。
+5. **接气路**：`气泵 → 减压阀(调压) → 电磁阀(Arduino 控制) → 气压传感器(靠近臂) → 软臂腔道`，旁路装机械泄压阀。传感器**靠近臂**才测的是臂实际受压。
+
+```
+俯视图（背光剪影法）：
+
+   [相机 RealSense]    ┌─────────────┐
+        ▶▶▶▶▶          │  背光 LED 板  │   ← 整张均匀发光
+        (正对)          │  + 描图纸     │
+            │           └─────────────┘
+            │   ┌──软臂──┐   │   ← 臂夹在相机与背光之间，成黑剪影
+            │   │ 基座●  │   │
+            │   └──夹具──┘   │
+            └────────────────┘
+              （共一块面包板/铝板，刚性绑定）
+```
+
+**刚性自检**：标定完后人不动，重复拍世界靶 5 次，重跑 `calibrate_cameras`，若 `eye` 坐标漂移 **>1 mm** → 不够刚，加固重来。
+
+### 3. Day 1–2：采集脚本（★ 最关键的缺失环节）
+
+> **诚实说**：仓库里**没有**"RealSense 录 RGB + Arduino 记气压 + 同步"的脚本——`capture_to_npz` 假设你**已经有**按文件名排序的图像目录 + 气压文件。这一步是新手 0→1 最难、也是**唯一不写就动不了**的环节。下面给参考实现（建议落成 `scripts/real/record_capture.py`）。
+
+**同步原理（推荐"单进程"档，第一周够用）**：**一个 Python 脚本同时**开相机 + 开 Arduino 串口，用 `time.monotonic()` 给两边打**同一个 t=0**。单一进程 = 单一时钟源，抖动是 OS 调度（~ms），对 τ≈1 s 的软臂影响 <5%。**别用 Arduino 的 millis 当全局时间**——它是 Arduino 自己的时钟，和电脑不同源。
+
+**输出契约**（`capture_to_npz` 要的）：
+- `raw/<seq>/cam0/00000.png …` —— **文件名零填充！**（`io_video` 按字符串排序配对，`1.png,10.png,2.png` 会错序）
+- `raw/<seq>/frame_times.txt` —— 每帧一行**真实墙钟秒**（喂 `--frame-times`，比 `--fps 30` 均匀假设稳）
+- `raw/<seq>/pressure.csv` —— `t_sec, p_kpa`，**无表头无注释**（`np.loadtxt` 遇非数字会崩），单位 **kPa 表压**
+
+**参考脚本**（单进程同步；只取 RGB，深度不进 `capture_to_npz`）：
+
+```python
+# scripts/real/record_capture.py （建议实现；下面是参考逻辑，API 以你的 pyrealsense2 版本为准）
+import time, csv, os, serial
+import numpy as np, cv2, pyrealsense2 as rs
+
+SEQ = "raw/seq1"; CAM = os.path.join(SEQ, "cam0"); os.makedirs(CAM, exist_ok=True)
+
+# ---- 相机：只取 RGB（深度不进 capture_to_npz，不要配深度流）----
+pipe, cfg = rs.pipeline(), rs.config()
+cfg.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+prof = pipe.start(cfg)
+sensor = prof.get_device().first_color_sensor()
+sensor.set_option(rs.option.enable_auto_exposure, 0)
+sensor.set_option(rs.option.exposure, 1000)   # µs，越小越黑（背光剪影，开机后调到最黑最锐）
+sensor.set_option(rs.option.gain, 0)
+
+# ---- Arduino：每行 "micros,p_kpa"，用主机收到时刻当绝对时间 ----
+ard = serial.Serial("/dev/ttyUSB0", 115200, timeout=1)   # 改成你的端口
+
+t0 = time.monotonic()                          # ★ 单一 t=0，相机和气压都用它
+flog = open(os.path.join(SEQ, "frame_times.txt"), "w")
+plog = csv.writer(open(os.path.join(SEQ, "pressure.csv"), "w", newline=""))
+
+def drain():
+    while ard.in_waiting:                      # 把串口里已有的气压行落盘
+        ln = ard.readline().decode().strip()
+        if "," in ln:
+            plog.writerow([round(time.monotonic() - t0, 6), float(ln.split(",")[1])])
+
+try:
+    i = 0
+    while True:
+        drain()
+        f = pipe.wait_for_frames().get_color_frame()
+        if not f:
+            continue
+        cv2.imwrite(f"{CAM}/{i:05d}.png", np.asanyarray(f.get_data()))  # 零填充！
+        flog.write(f"{time.monotonic() - t0:.6f}\n")
+        i += 1
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+finally:
+    pipe.stop(); flog.close()
+```
+
+**Arduino 侧**（参考）：读气压传感器 ADC → kPa（datasheet 公式，如 MPX5700：`Vout = Vs·(0.0125·P − 0.04)`）；**上电后气路常压读 N 次取均值当 offset，之后读数减 offset（清零，消大气压偏置）**；`Serial.println(String(micros()) + "," + String(p_kpa, 2))`。**Arduino GPIO 不能直驱电磁阀**（电流不够会烧），必须经 **MOSFET/继电器模块**。
+
+> 想严格对齐仿真 2 维动作空间：`pressure.csv` 每行写 `t, p, 0`（A=2，凑 `[p,0]`）；只写 `t, p`（A=1）也行，`train_gt_transition` 会自动探测 action_dim。
+
+**新手坑**：① 文件名不零填充 → glob 错序；② 用 Arduino millis 当全局时间 → 必须单进程 monotonic 桥接；③ pressure.csv 带表头/注释 → loadtxt 崩；④ 单位不是 kPa。
+
+### 4. Day 3：settle-time 表征（决定 dt / window_size）★
+
+> 采集真实数据**之前**必做的物理实验。仿真 `window_size=40≈0.2 s` 是按仿真 τ 设的，**真实 τ 不同，必须重测**。
+
+**单相机阶段怎么测**（还没有 3D GT）：用** 2D 骨架末端像素坐标**当形状反馈。施加一个阶跃气压（电磁阀突然开），逐帧记末端 (x,y)，画时间曲线，**到 95% 稳定的时间 = τ_settle**。
+
+**换算**：`dt = 1/fps`；`window_size(帧) = ceil(τ_settle × 2 / dt)`（覆盖 2 个时间常数含完整瞬态）。例：τ=2 s, fps=30 → `window_size=120` 帧。低/中/高三档气压各测一次（τ 随气压变），取最长。硅胶气动软臂文献 τ 典型 **0.5–2 s**（量级参考，以实测为准）。
+
+### 5. Day 3–4：标定 + 剪影 QA
+
+**标定**（命令见 runbook **Step 1**，单视角：`--intrinsic-dirs` 只给 1 个目录）：
+- `--pattern 9 6` 是**内角点** 列×行（= 10×7 格的棋盘），不是格子数；
+- `--square` 单位是**米**（2 cm 写 `0.020`），用**游标卡尺量 5 格总长 ÷ 5**；
+- 内参靶拍 **15–30 个不同姿态**（倾斜/旋转/远近，别只平拍一张）；世界靶**贴在基座**拍 1 张；
+- **重投影误差 <0.5 px** 才算过；>1 px 先查：棋盘格皱了 / 姿态太相似 / 太暗 / 量错边长。
+
+**剪影 QA**（命令见 runbook **Step 2**，`inspect_capture.py`，单视角只看分割 + 2D 骨架两列）：
+- **方向**：背光 = 光在臂**后**、相机在臂**前** → 臂成**黑**剪影（`segment_backlight` 是 `gray < thresh` 取暗）。背景要亮、臂要暗。
+- **通过判据**（3 条）：① 红色掩码**连续覆盖整条臂**、不碎成多块；② 青色 2D 骨架**落在臂中轴**、不贴边不悬空；③ 脚本打印的**有效节点 >90%**。
+- `--gray-thresh` 从 **30 扫到 120** 各跑一次 inspect，挑最干净的那张的阈值，**再**批量 `capture_to_npz`。
+
+### 6. Day 5–6：采集数据集
+
+- **动作 = 气压随机游走**（对应仿真 random）；**下一个动作在完全稳定前就施加**（抓瞬态 + 历史依赖 = 迟滞性数据）。
+- **连续录制整段**，不在稳定处分帧。
+- **多序列**：zero(canonical) / random(sequence) / hold(batch) / step(§4 settle)。
+- **样本量**：先 1–2 段 random（60–120 s × 30 fps ≈ 1800–3600 帧/段）证明链路通 + 模型能学；上方残差法需 100–1000 样本。
+
+### 7. Day 7：产出 .npz + 训练
+
+```bash
+# 单相机 planar-lift 升 3D（用 --frame-times 比 --fps 稳）
+python scripts/real/capture_to_npz.py \
+  --view-dirs raw/seq1/cam0 \
+  --camera-params config/real_camera_params.npz \
+  --method backlight --gray-thresh 60 \
+  --planar-lift --dt 0.0333 \
+  --actions raw/seq1/pressure.csv --actions-has-timestamps \
+  --frame-times raw/seq1/frame_times.txt \
+  --clean-nan --out data/real_seq1/seq1.npz
+
+# 训练（gt 模式，命令见 runbook Step 5；注意 GPU 默认 cuda1）
+CUDA_VISIBLE_DEVICES=1 python scripts/training/train_transition.py --mode gt --data_dir data/real_seq1
+```
+
+- `--planar-lift` 只支持单相机（多相机会 `sys.exit`）；**正对安装时不用给 `--plane-normal`**（默认 = 相机朝向）。
+- `--actions-has-timestamps` 必须配 `--frame-times`（或 `--fps`），否则报错。
+- **必加 `--clean-nan`**（分割失败产生 NaN，训练遇 NaN 崩）。
+- 看 `train_log/gt_transition/exp_*/eval_metrics.csv`（`mean_node_mm` = 部署精度）。
+
+### 8. 链路冒烟测试清单（"我没坏吧"）
+
+逐项 ✓，任一 fail 就停在那查：
+
+| ✓ | 测 | 通过 | fail 最可能原因 |
+|---|---|---|---|
+| 1 | `pyrealsense2` 读 1 帧 RGB 存 png 能打开 | 能打开 | 驱动/USB/端口 |
+| 2 | Arduino 串口看到 `micros,p_kpa` 行；吹气数值上升 | 上升 | 接线/波特率/换算 |
+| 3 | 堵出气口加压，数值稳定不降 | 稳定 | 气路漏（肥皂水查接头） |
+| 4 | `calibrate_cameras` reproj < 0.5px | <0.5px | 棋盘皱/姿态单一/边长错 |
+| 5 | `inspect_capture` 红膜盖住整条臂 | 连续覆盖 | 阈值/背光方向 |
+| 6 | planar-lift 出合理 3D 曲线 | 合理曲线 | 标定漂移/平面不正对 |
+| 7 | `capture_to_npz` 出 npz，`positions` 无 NaN | 无 NaN | 分割失败帧多 → 调阈值 |
+| 8 | `train_gt_transition` 跑 1 epoch 不报错 | 不报错 | 数据 schema/维度 |
+
+### 9. 实物专有的坑
+
+| 坑 | 对策 |
+|---|---|
+| 相机/基座没刚性固定 → 标定漂移 | 共面包板/铝板刚性绑定；不用三脚架放桌面；标后自检 eye 漂移 <1mm |
+| 硅胶半透光 → 分割碎 | 背光剪影法（光在臂后）；关环境光；短曝光 |
+| 气压没清零（offset） | 上电常压取均值当 offset，之后减掉 |
+| 气路漏气 → 压力不稳 | 快插接头 + 肥皂水查泡；机械泄压阀防爆 |
+| 相机/气压 t=0 没对齐 | 单进程 `time.monotonic()` 共享 t0（§3） |
+| 弯曲平面没正对相机 → planar-lift 偏 | 正对安装用默认法向；否则手填 `--plane-normal` |
+| 帧文件名不零填充 → 错序 | `{i:05d}.png` |
+| pressure.csv 带表头 → loadtxt 崩 | 纯数字，无表头无注释 |
+| 气压单位错 | kPa 表压 |
+| GPU 跑到错卡 | 训练默认 cuda1；`CUDA_VISIBLE_DEVICES` 指定 |
+
+### 10. 何时毕业到终态平台
+
+- **离面弯曲**（2-DOF / 三腔道）→ `--planar-lift` **失效**（离面分量被投影掉）→ 必须回到**多视角三角化**（[`06`](06_multi_view_2d_to_3d_skeleton.md) 方案 A / 下文《实物数据采集平台》）。
+- **衔接 14/15**：单相机经 `--planar-lift` 产出的 3D 骨架**与多视角同 schema**，直接喂 [`14`](14_gt_observed_transition.md) `train_gt_transition` / [`15`](15_open_loop_windowed_transition.md) `train_open_loop_transition`，命令不变——只是 GT 来源从"三角化"换成"planar-lift 升维"。
+- **2D 先行 ≠ 否定 3D 路线**：本节的 2D 骨架用于**离线造 3D GT 训练** 14/15；[`06`](06_multi_view_2d_to_3d_skeleton.md) 的 2D→3D 是**部署时在线感知修正**，是训练完成后的事，不同环节。
+
+---
+
 ## 实物数据采集平台（Physical Data-Collection Platform）
 
 > 本节是 sim-to-real 的"如何实际获取真实数据"操作层。上面的残差物理 / 渐进微调等方法都假设真实数据已存在——本节定义平台、采集协议、GT 获取方式与评估方法。
@@ -104,6 +344,8 @@ ETH Zurich (RA-L 2024) 的方法：
 > - 可用传感：手机/普通相机 + 1–3 台工业/USB 相机 + **NDI Aurora 电磁追踪**；无深度相机。
 > - **即时目标**：在单平面弯曲上把"采集→分割→2D 骨架→3D 三角化→评估"整链跑通。
 > - **终态目标**：相机→3D 骨架的感知模型，供**闭环控制部署**（部署时**只有相机**，NDI/多视角仅离线 GT/训练）。
+>
+> **注（2026-06 更新）**：现已补 Intel RealSense D400 深度相机——**当 RGB 用**（与普通相机同链路），其深度流仅作**离线 GT 地板/稳态验证**（角色同 NDI 静态扫描，非部署输入，不改变"部署只有相机"的终态）；气压由 **Arduino 自动记录带时间戳**（替代手工同步）。两项只降采集门槛，**3D 多相机/NDI 方案不变**。1-DOF 单相机入门轨见上文《最小验证平台》节。
 
 ### 平台核心决策（GT 策略）
 

@@ -3,6 +3,7 @@
 > 状态：概念探索
 > 关联：[02_hysteresis_information_capacity](02_hysteresis_information_capacity.md)、[13/14/15 状态转移族](13_closed_loop_state_transition.md)
 > 📝 **2026-06-17 更新**：状态转移族（[13](13_closed_loop_state_transition.md)/[14](14_gt_observed_transition.md)/[15](15_open_loop_windowed_transition.md)）的可学习迟滞潜变量 **z 正是本文\"粘弹性记忆信道\"（§四/§八）的经验实例化**——[14 §一.2](14_gt_observed_transition.md) 明确 z 编码\"位置+动作之外的深度历史\"；本文 T\*（临界记忆长度，§四 h≈τ_max/Δt）对应窗口长度 K（[15 §一.3](15_open_loop_windowed_transition.md)）。⚠️ 注意：该定量预测假设幂律弛豫，而当前 PyElastica 仿真为**线性阻尼**（迟滞弱，见 [15 §三](15_open_loop_windowed_transition.md)），故现测得的记忆视界是**下界**，强迟滞验证留实物数据。
+> 🔁 **2026-06-24 补充**：§四 T\*（临界记忆长度）也界定了**控制层**的可逆动作序列长度——[16 约束导向控制](16_constraint_oriented_control.md) 的前向黑箱求逆只需考虑最近 T\* 步动作（更早的已被材料"遗忘"）。强迟滞 T\*/h 的实测验证现已解锁（采集程序 `docs/ref/Main UI-plc/` + [11 §最小验证平台](11_sim_to_real_transfer.md)）。
 > 目标：找到真正的科学问题——发现关于物理世界的规律，而非工程上的模型替换
 
 ---

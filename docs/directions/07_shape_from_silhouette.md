@@ -3,6 +3,9 @@
 > 状态：待探索
 > 优先级：中
 > 关联：多视角渲染、骨架条件 Visual Hull、PC-Spatial 修正分支
+> 🔁 **2026-06-24 勘误**：
+> - 轮廓/剪影**现已是实物形状监督的真实输入**：[11 §最小验证平台](11_sim_to_real_transfer.md) 的背光剪影法 + 采集程序（`docs/ref/Main UI-plc/`）产出 `masks`；全身形状主线见 [05](05_skeleton_to_shape_conversion.md)（Phase 0-3 迁移）。
+> - §D「Flow Matching 点云」**已实现**（`FlowMatchPointCloudModel`，见 overview 工作模型族），不再是"待建"。
 
 ---
 
