@@ -59,6 +59,29 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))   # py 文件所在目�
 # 6 路曲线颜色
 _CH_COLORS = ["#2CB1BC", "#667EEA", "#EF4E4E", "#F6AD55", "#68D391", "#B388FF"]
 
+# 单通道模式下，选中通道的默认 max（保守值；inactive 通道 min=max=0）
+DEFAULT_MAX = 200.0
+
+
+class _CleanAxis(pg.AxisItem):
+    """刻度按间距取整 + 限 6 位，去掉浮点噪声（轴很小时出现 0.30000000000000004）。"""
+
+    def tickStrings(self, values, scale, spacing):
+        if getattr(self, "logMode", False):       # 与上游对齐：对数轴走 10^n 格式（未来若启用 setLogMode，review #5）
+            return self.logTickStrings(values, scale, spacing)
+        if spacing <= 0 or not values:
+            return [""] * len(values)
+        places = min(6, max(0, int(np.ceil(-np.log10(spacing * scale)))))
+        fmt = "{:.%df}" % places
+        out = []
+        for v in values:
+            vs = v * scale
+            if abs(vs) < 1e-4 or abs(vs) >= 1e5:
+                out.append("%g" % vs)
+            else:
+                out.append(fmt.format(round(vs, places)))
+        return out
+
 
 def _detect_project_root() -> str:
     """向上查找包含 scripts/real/capture_to_npz.py 的目录（用于"生成 npz"）。"""
@@ -119,11 +142,17 @@ class CaptureWindow(QMainWindow):
         self._target_sb = []
         self._min_sb = []
         self._max_sb = []
+        self._guard = False                     # 程序化 setValue 时抑制 valueChanged 回灌（防反馈循环）
+        # 持久化缓存：用户真正配置的 6 路 lo/hi（独立于单通道模式的显示归零），
+        # 避免切到单通道把 inactive 显示归零后 _save_config 把配置永久写成 0（review #2）。
+        self._cfg_lo = [P_MIN] * N_CHAN
+        self._cfg_hi = [DEFAULT_MAX] * N_CHAN
 
         self._build_ui()
         self._connect_core()
         self.log_signal.connect(self._log)
         self._load_config()
+        self._on_active_changed()                # 按 restored 主通道：缓存→显示→锁定→曲线显隐
 
         # CLI 覆盖（仅端口类参数）
         self.le_g1.setText(group1); self.le_g2.setText(group2)
@@ -175,19 +204,27 @@ class CaptureWindow(QMainWindow):
         g.addWidget(QLabel("min"), 0, 2); g.addWidget(QLabel("max"), 0, 3)
         for i in range(N_CHAN):
             g.addWidget(QLabel(f"ch{i}"), i + 1, 0)
-            t = QDoubleSpinBox(); t.setRange(P_MIN, P_MAX); t.setDecimals(1); t.setSingleStep(5.0); t.setValue(0.0)
-            t.valueChanged.connect(self._on_target_changed)
+            t = QDoubleSpinBox(); t.setRange(P_MIN, P_MAX); t.setDecimals(1); t.setSingleStep(5.0)
             mn = QDoubleSpinBox(); mn.setRange(P_MIN, P_MAX); mn.setDecimals(1); mn.setSingleStep(5.0)
             mx = QDoubleSpinBox(); mx.setRange(P_MIN, P_MAX); mx.setDecimals(1); mx.setSingleStep(5.0)
             if i == 0:                                   # 默认 ch0 有范围，其余钉 0（单通道）
-                mn.setValue(0.0); mx.setValue(200.0); t.setValue(0.0)
+                t.setValue(0.0); mn.setValue(0.0); mx.setValue(DEFAULT_MAX)
             else:
-                mn.setValue(0.0); mx.setValue(0.0)
+                t.setValue(0.0); mn.setValue(0.0); mx.setValue(0.0)
             g.addWidget(t, i + 1, 1); g.addWidget(mn, i + 1, 2); g.addWidget(mx, i + 1, 3)
+            # 先设值再接线：初始化 setValue 不触发 _on_range_changed（此时 cb_active 尚未创建）
+            t.valueChanged.connect(self._on_target_changed)
+            mn.valueChanged.connect(self._on_range_changed)   # min/max 改动实时同步驱动（录制中也生效）
+            mx.valueChanged.connect(self._on_range_changed)
             self._target_sb.append(t); self._min_sb.append(mn); self._max_sb.append(mx)
         row = QHBoxLayout()
-        row.addWidget(QLabel("主通道(legacy pressure.csv)")); self.cb_active = QComboBox()
-        self.cb_active.addItems([f"ch{i}" for i in range(N_CHAN)])
+        row.addWidget(QLabel("主通道")); self.cb_active = QComboBox()
+        self.cb_active.addItems([f"ch{i}" for i in range(N_CHAN)] + ["全部 (all)"])
+        self.cb_active.setToolTip(
+            "单通道 chN：其余 5 路 min/max/target 自动归零并锁定（防误改），气压图只画主通道 1 条线。\n"
+            "『全部(all)』：放开 6 路范围可改，气压图画 6 条线。\n"
+            "legacy pressure.csv：单通道记主通道；all 模式记 ch0（6 路全量始终在 actions6.csv）。")
+        self.cb_active.currentIndexChanged.connect(self._on_active_changed)
         row.addWidget(self.cb_active)
         self.btn_send = QPushButton("立即下发目标"); self.btn_send.clicked.connect(self._on_send)
         self.btn_zero = QPushButton("全部归零"); self.btn_zero.clicked.connect(self._on_zero)
@@ -242,12 +279,20 @@ class CaptureWindow(QMainWindow):
         self.preview.setMinimumHeight(220); self.preview.setStyleSheet("background:#222;color:#aaa")
         self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         rl.addWidget(self.preview, 3)
-        self.p_plot = pg.PlotWidget(title="6 路气压 (kPa)"); self.p_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.p_plot = pg.PlotWidget(
+            title="6 路气压 (kPa)",
+            axisItems={"left": _CleanAxis(orientation="left"),
+                       "bottom": _CleanAxis(orientation="bottom")})
+        self.p_plot.showGrid(x=True, y=True, alpha=0.3)
         self.p_plot.addLegend(offset=(-10, 10))
         self.p_curves = [self.p_plot.plot(pen=pg.mkPen(color=c, width=2), name=f"ch{i}")
                          for i, c in enumerate(_CH_COLORS)]
         rl.addWidget(self.p_plot, 2)
-        self.ndi_plot = pg.PlotWidget(title="NDI 末端 XY 轨迹"); self.ndi_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.ndi_plot = pg.PlotWidget(
+            title="NDI 末端 XY 轨迹",
+            axisItems={"left": _CleanAxis(orientation="left"),
+                       "bottom": _CleanAxis(orientation="bottom")})
+        self.ndi_plot.showGrid(x=True, y=True, alpha=0.3)
         self.ndi_plot.setLabel("bottom", "x (mm)"); self.ndi_plot.setLabel("left", "y (mm)")
         self.ndi_curve = self.ndi_plot.plot(pen=None, symbol="o", symbolSize=3, symbolPen=None, symbolBrush="#EF4E4E")
         rl.addWidget(self.ndi_plot, 2)
@@ -291,10 +336,14 @@ class CaptureWindow(QMainWindow):
             self.cb_mode.setCurrentIndex(int(c.get("mode", self.cb_mode.currentIndex())))
             self.sb_interval.setValue(float(c.get("action_interval", self.sb_interval.value())))
             self.sb_settle.setValue(float(c.get("settle", self.sb_settle.value())))
-            self.cb_active.setCurrentIndex(int(c.get("active_channel", self.cb_active.currentIndex())))
-            for i in range(N_CHAN):
-                self._min_sb[i].setValue(float(c.get(f"lo{i}", self._min_sb[i].value())))
-                self._max_sb[i].setValue(float(c.get(f"hi{i}", self._max_sb[i].value())))
+            self._guard = True                  # 恢复 active/cfg 期间禁止 _on_active_changed/_on_range_changed 回灌
+            try:
+                self.cb_active.setCurrentIndex(int(c.get("active_channel", self.cb_active.currentIndex())))
+                for i in range(N_CHAN):          # 只填持久化缓存；spinbox 显示由后续 _on_active_changed 按 mode 刷
+                    self._cfg_lo[i] = float(c.get(f"lo{i}", self._cfg_lo[i]))
+                    self._cfg_hi[i] = float(c.get(f"hi{i}", self._cfg_hi[i]))
+            finally:
+                self._guard = False
             self.le_camparam.setText(c.get("cam_param", self.le_camparam.text()))
             self.sb_thresh.setValue(float(c.get("threshold", self.sb_thresh.value())))
             self.cb_ts.setChecked(c.get("auto_timestamp", "1") == "1")
@@ -316,9 +365,9 @@ class CaptureWindow(QMainWindow):
                 "auto_timestamp": "1" if self.cb_ts.isChecked() else "0",
                 "planar_lift": "1" if self.cb_planar.isChecked() else "0",
             }
-            for i in range(N_CHAN):
-                cp["capture"][f"lo{i}"] = str(self._min_sb[i].value())
-                cp["capture"][f"hi{i}"] = str(self._max_sb[i].value())
+            for i in range(N_CHAN):              # 从持久化缓存写（不被单通道显示归零污染，review #2）
+                cp["capture"][f"lo{i}"] = str(self._cfg_lo[i])
+                cp["capture"][f"hi{i}"] = str(self._cfg_hi[i])
             with open(self._cfg_path, "w", encoding="utf-8") as f:
                 cp.write(f)
         except Exception as e:
@@ -374,18 +423,92 @@ class CaptureWindow(QMainWindow):
         self.lbl_rec.setText(f"已停止：{frames} 帧 -> {seq_dir}"); self.lbl_rec.setStyleSheet("color:#888")
 
     # ===================== 按钮回调 =====================
+    def _active_idx(self):
+        """cb_active 当前索引：0..5 = 单通道；6 = 全部(all)。"""
+        return self.cb_active.currentIndex()
+
     def _current_targets(self):
+        """manual 每拍重发的目标向量。单通道→仅主通道非 0，其余钉 0；all→全部。"""
+        idx = self._active_idx()
+        if idx < N_CHAN:
+            return [self._target_sb[i].value() if i == idx else 0.0 for i in range(N_CHAN)]
         return [sb.value() for sb in self._target_sb]
 
     def _current_lo(self):
+        idx = self._active_idx()
+        if idx < N_CHAN:
+            return [self._min_sb[i].value() if i == idx else 0.0 for i in range(N_CHAN)]
         return [sb.value() for sb in self._min_sb]
 
     def _current_hi(self):
+        idx = self._active_idx()
+        if idx < N_CHAN:
+            return [self._max_sb[i].value() if i == idx else 0.0 for i in range(N_CHAN)]
         return [sb.value() for sb in self._max_sb]
 
     def _on_target_changed(self):
+        if self._guard:
+            return
         # manual 模式每拍重发最新目标；即时下发也用最新值
         self.core.set_manual_target(self._current_targets())
+
+    def _on_range_changed(self):
+        """min/max 改动：实时同步驱动 + 仅把 enabled 通道的编辑记进持久化缓存。"""
+        if self._guard:
+            return
+        for i in range(N_CHAN):
+            if self._min_sb[i].isEnabled():
+                self._cfg_lo[i] = self._min_sb[i].value()
+            if self._max_sb[i].isEnabled():
+                self._cfg_hi[i] = self._max_sb[i].value()
+        self.core.update_ranges(self._current_lo(), self._current_hi())
+
+    def _on_active_changed(self, idx=None):
+        """主通道切换（一个功能两种实现）：
+        - 单通道 chN：chN 设默认范围(0..DEFAULT_MAX)、target=0 并同步其缓存；其余 5 路 min/max/target
+          **显示归零并锁定**，但各自的 _cfg_lo/hi 缓存保留 → 切回 all 可恢复、退出也不丢配置（review #2）；
+        - 全部(all)：从 _cfg_lo/hi 缓存恢复 6 路显示，放开可改；
+        同时刷新气压曲线显隐（单通道 1 条 / all 6 条）并把最新目标/范围同步给 recorder。"""
+        if self._guard:
+            return
+        if idx is None:
+            idx = self._active_idx()
+        self._guard = True
+        try:
+            if idx < N_CHAN:
+                self._cfg_lo[idx] = 0.0
+                self._cfg_hi[idx] = DEFAULT_MAX
+                for i in range(N_CHAN):
+                    if i == idx:
+                        self._min_sb[i].setValue(0.0)
+                        self._max_sb[i].setValue(DEFAULT_MAX)
+                    else:
+                        self._min_sb[i].setValue(0.0)     # 仅显示归零；_cfg_lo/hi[i] 保留
+                        self._max_sb[i].setValue(0.0)
+                    self._target_sb[i].setValue(0.0)
+            else:
+                for i in range(N_CHAN):                   # all：从缓存恢复 6 路显示
+                    self._min_sb[i].setValue(self._cfg_lo[i])
+                    self._max_sb[i].setValue(self._cfg_hi[i])
+                    self._target_sb[i].setValue(0.0)
+        finally:
+            self._guard = False
+        self._apply_channel_lock(idx)
+        self.core.set_manual_target(self._current_targets())
+        self.core.update_ranges(self._current_lo(), self._current_hi())
+        self._log(f"主通道 → {'all' if idx >= N_CHAN else f'ch{idx}'}（目标/范围已同步）。")
+
+    def _apply_channel_lock(self, idx=None):
+        """按主通道模式启停 spinbox + 气压曲线显隐（不改值，纯 UX 保护）。"""
+        if idx is None:
+            idx = self._active_idx()
+        single = idx < N_CHAN
+        for i in range(N_CHAN):
+            enabled = (i == idx) if single else True
+            for sb in (self._min_sb[i], self._max_sb[i], self._target_sb[i]):
+                sb.setEnabled(enabled)
+        for i, curve in enumerate(self.p_curves):
+            curve.setVisible((i == idx) if single else True)
 
     def _on_connect(self):
         if self.controller.connected:
@@ -462,10 +585,13 @@ class CaptureWindow(QMainWindow):
         seq = base
         if self.cb_ts.isChecked():
             seq = os.path.join(base, "seq_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
+        active_idx = self.cb_active.currentIndex()
+        # all 模式下 legacy pressure.csv 无单一主通道 → 记 ch0（6 路全量始终在 actions6.csv）
+        active_for_legacy = active_idx if active_idx < N_CHAN else 0
         self.core.set_manual_target(self._current_targets())
         self.core.start_recording(seq, mode, self._current_lo(), self._current_hi(),
                                   self.sb_interval.value(), self.sb_settle.value(),
-                                  self.cb_active.currentIndex(), self.le_note.text().strip())
+                                  active_for_legacy, self.le_note.text().strip())
 
     def _on_stop(self):
         self.core.stop_recording()

@@ -180,6 +180,19 @@ class ValveRecorder(QObject):
             v += [P_MIN] * (N_CHAN - len(v))
         self._manual_target = v
 
+    def update_ranges(self, lows6, highs6):
+        """录制中实时改范围（random/sweep 下一拍生效）。未在录制 / 手动模式 → 无害 no-op。
+        recorder 住 GUI 线程，`_on_tick` 也在该线程读 driver → 无竞争。"""
+        if self._driver is None:
+            return
+        lo = [float(x) for x in list(lows6)[:N_CHAN]]
+        hi = [float(x) for x in list(highs6)[:N_CHAN]]
+        if len(lo) < N_CHAN:
+            lo += [P_MIN] * (N_CHAN - len(lo))
+        if len(hi) < N_CHAN:
+            hi += [P_MIN] * (N_CHAN - len(hi))
+        self._driver.set_ranges(lo, hi)
+
     # ---------------- 录制 ----------------
     def start_recording(self, seq_dir: str, mode: str, lows6, highs6,
                         action_interval_s: float, settle_s: float,

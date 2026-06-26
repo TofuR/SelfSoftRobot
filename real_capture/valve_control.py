@@ -164,6 +164,14 @@ class ValveDriver(QObject):
         self._cur = list(self.lo)
         self._dir = [1.0] * N_CHAN
 
+    def set_ranges(self, lows, highs):
+        """运行中改每通道范围（钳到合法域），并把当前值拉进新 [lo,hi]（避免越界）。"""
+        lo = [float(x) for x in lows]
+        hi = [float(x) for x in highs]
+        self.lo = [max(P_MIN, min(a, b)) for a, b in zip(lo, hi)]
+        self.hi = [min(P_MAX, max(a, b)) for a, b in zip(lo, hi)]
+        self._cur = [max(self.lo[i], min(self.hi[i], self._cur[i])) for i in range(N_CHAN)]
+
     def next_action(self) -> List[float]:
         out = []
         for i in range(N_CHAN):

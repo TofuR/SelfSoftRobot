@@ -1,0 +1,160 @@
+# real_capture 部署到新机器 / 接入六通道阀系统
+
+> 一句话：`modbus_manager.py` 就是和阀硬件的完整契约。**不需要对方那套 UI/采集程序**——
+> 把 2 个 RS485 串口接到本程序即可，阀响应的是同一套 Modbus 指令，谁发都一样。
+
+---
+
+## 0. 这是什么
+
+`real_capture/` 是一套**自包含**的实物采集程序：
+
+- 用 `modbus_manager.py` 控制 **6 通道电流型气压阀**（2 组 Modbus RTU × 3 路，0–500 kPa，4–20 mA）；
+- 同步采集 **NDI Aurora 末端位姿** + **RealSense 图像**；
+- **动作门控**落盘：动作每 0.2 s 下发一次，等 0.19 s 软臂稳定后抓一帧 + NDI 末端，三者同索引；
+- 输出直接对接 `scripts/real/capture_to_npz.py`（→ 仿真 schema `.npz`，可训练）。
+
+---
+
+## 1. 带哪些文件
+
+纯采集**只需整个 `real_capture/` 文件夹**（自包含，不依赖仓库的 `src/`）：
+
+| 文件 | 作用 |
+|---|---|
+| `main_capture.py` | GUI 入口（**界面也在这里，纯代码构建，无 `.ui` 文件**） |
+| `modbus_manager.py` | 与阀硬件的契约（原样复用） |
+| `valve_control.py` | 6 通道控制封装 + 自动驱动（random/sweep） |
+| `recorder.py` | 动作门控同步采集核心 |
+| `hardware_threads.py` | NDI 线程（+ Mock） |
+| `nditracker.py` / `realsense_cam.py` | NDI / 相机封装（含 mock） |
+| `requirements.txt` | 依赖 |
+
+> 只有后面想点 GUI 里「生成 npz」按钮（转训练数据）时，才需要仓库根的
+> `scripts/real/capture_to_npz.py` + `src/data/real/`。**纯采集不需要。**
+
+---
+
+## 2. 装依赖
+
+```bash
+pip install -r real_capture/requirements.txt
+```
+
+- **全 mock**（无任何硬件，先验 GUI + 链路）：只需 `PyQt5 / pyqtgraph / numpy / opencv-python`。
+- **真机**额外需要：`pyserial`（阀）、`pyrealsense2`（相机）、`scikit-surgerynditracker`（NDI）。
+
+---
+
+## 3. 硬件接线（问对方确认）
+
+6 通道 = **2 组 Modbus RTU × 每组 3 个阀**：
+
+- 每组 1 个 **USB-RS485 转换器**（小 dongle）→ 串联 3 个阀。
+- 插上电脑后出现 **2 个新串口**。
+- 可选：NDI Aurora（没有就 `--mock-ndi`）、RealSense（没有就 `--mock-cam`）。
+
+---
+
+## 4. 找串口名
+
+| 系统 | 命令 / 位置 |
+|---|---|
+| Linux | `ls /dev/ttyUSB*` 或 `dmesg \| grep ttyUSB` |
+| Windows | 设备管理器 → 「端口 (COM 和 LPT)」，或直接看 GUI 串口下拉 |
+| macOS | `ls /dev/cu.usbserial*` |
+
+> Linux 下若报权限错：`sudo chmod 666 /dev/ttyUSB*`，或把用户加进 `dialout` 组（一劳永逸）。
+
+---
+
+## 5. ⭐ 波特率 / 从站地址 填在哪里
+
+**在 GUI 左上角「Modbus 连接」分组里**，点「连接 Modbus」**之前**填好：
+
+| GUI 控件 | 字段 | 默认 | 说明 |
+|---|---|---|---|
+| `波特` | baudrate | `9600` | 问对方或翻他们 `config.ini` |
+| `从站` | slave_addr | `1` | 同上 |
+| `组1串口` | group1 | `COM3` | 第 1 组 RS485 串口名 |
+| `组2串口` | group2 | `COM46` | 第 2 组 RS485 串口名 |
+
+也可 CLI 预填（等价）：
+
+```bash
+python main_capture.py --baudrate 9600 --slave 1 \
+                       --group1 /dev/ttyUSB0 --group2 /dev/ttyUSB1
+```
+
+> 这些值会存进 `real_capture_config.ini`（**机器相关，已 gitignore**），下次自动恢复。
+> 换机器后第一次需手填一次。
+
+---
+
+## 6. 启动
+
+```bash
+cd real_capture
+
+# 1) 全 mock（无硬件，先验证 GUI + 整条链路）
+python main_capture.py --mock
+
+# 2) 真阀 + 假 NDI（最常用的实物调试起点）
+python main_capture.py --mock-ndi --group1 /dev/ttyUSB0 --group2 /dev/ttyUSB1
+
+# 3) 真机全用（两组 Modbus + NDI + 相机）
+python main_capture.py --group1 /dev/ttyUSB0 --group2 /dev/ttyUSB1 --ndi /dev/ttyUSB2
+```
+
+`--mock` = `--mock-cam --mock-valve --mock-ndi`，三个可任意组合混选。
+
+---
+
+## 7. 单通道 vs 全部（「主通道」下拉）
+
+GUI「主通道」下拉有 `ch0..ch5` + `全部 (all)`——**这是同一个功能（配 min/max）的两种实现**：
+
+| 模式 | 行为 | 气压图 |
+|---|---|---|
+| **单通道 chN**（推荐起步） | 其余 5 路 `min/max/target` **自动归零并锁定**（灰显不可改，防误操作）；chN 设默认范围 `0–200 kPa`、target=0 | 只画 chN **1 条线** |
+| **全部 (all)** | 放开 6 路 `min/max` 全可改（保护解除） | 画 **6 条线** |
+
+- **min/max/target 录制中改也实时生效**（random/sweep 下一拍即用新范围）。
+- 单通道模式向后兼容旧 `pressure.csv`（记主通道）；`all` 模式下 `pressure.csv` 记 ch0
+  （若 all 模式下 ch0 设为 0..0，该文件会全程 0 —— **以 `actions6.csv` 为准**）。
+
+---
+
+## 8. 采集流程
+
+1. 「Modbus 连接」填好串口/波特/从站 → 点「连接 Modbus」→ 状态变绿。
+2. 「主通道」选 `ch0`（单通道起步）→ 确认 min/max（默认 `0–200`）。
+3. （可选）「连接 NDI」；相机自动预览。
+4. 填「保存目录」、选「模式」（手动 / 随机游走 / 往返扫描）、「动作间隔」`0.2` s、「稳定等待」`0.19` s。
+5. 「▶ 开始采集」→ 采够后「■ 停止采集」。
+6. 后处理：「⚡ 生成 npz」或「📋 导出汇总 CSV」。
+
+---
+
+## 9. 输出（每个序列目录，对齐 capture_to_npz schema）
+
+| 文件 | 内容 | 下游用途 |
+|---|---|---|
+| `cam0/00000.png ...` | 零填充帧 | `--view-dirs` |
+| `frame_times.txt` | 每帧一行 相对秒 | `--frame-times` |
+| `actions6.csv` | `t_sec, c0..c5` | `--actions --actions-has-timestamps` |
+| `ndi.csv` | `t_sec, x,y,z,Rx,Ry,Rz,qw,qx,qy,qz,quality`（失锁写 `nan`） | → `tip.npz` → `--ndi-tip` |
+| `pressure.csv` | `t_sec, p_active, 0` | 旧版兼容（3 列）；训练用 actions6.csv |
+| `meta.json` / `summary.csv` | 运行元信息 / 按帧对齐汇总 | 人眼核对 |
+
+---
+
+## 10. 常见问题
+
+| 现象 | 处理 |
+|---|---|
+| 串口连不上 | 确认对方波特率/从站地址；Linux 权限（见 §4） |
+| `group1`/`group2` 谁是谁 | 对方物理接线决定；连上一个、发小气压、看哪个阀动，标记一下 |
+| 换机器后配置丢了 | 正常，`real_capture_config.ini` 不跨机器；重填一次串口即可 |
+| 没有 NDI / 相机 | `--mock-ndi` / `--mock-cam`，其余照常用真阀 |
+| 坐标轴出现 `0.30000000000000004` | 已修（`_CleanAxis` 按间距取整）；若仍现，升级 `pyqtgraph` |
