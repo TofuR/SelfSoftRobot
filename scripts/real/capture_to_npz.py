@@ -46,8 +46,12 @@ def _load_actions(path, n_frames, has_ts=False, rate=None, frame_times=None):
     """
     if path is None:
         return np.zeros((n_frames, 2), np.float32)        # 单腔道占位 [0,0]
-    raw = (np.load(path)["actions"] if path.endswith(".npz")
-           else np.atleast_2d(np.loadtxt(path, delimiter=",")))
+    if path.endswith(".npz"):
+        raw = np.load(path)["actions"]
+    else:
+        raw = np.atleast_2d(np.genfromtxt(path, delimiter=",", dtype=float))
+        while raw.shape[0] and np.isnan(raw[0]).all():    # 跳过表头行（兼容新带表头/旧无表头）
+            raw = raw[1:]
     if has_ts or rate:
         if frame_times is None:
             sys.exit("时间戳对齐需要 --fps 或 --frame-times 来定义相机帧时刻")

@@ -120,6 +120,7 @@ class ValveRecorder(QObject):
     recording_status = pyqtSignal(int, float, list, float, float, float)  # frames, elapsed, action6, x, y, z
     recording_stopped = pyqtSignal(str, int)
     connection_changed = pyqtSignal(bool, str)
+    group_connection_changed = pyqtSignal(int, bool)     # (group_id, connected) 透传给 GUI
 
     def __init__(self, cam, ndi, controller, parent=None):
         super().__init__(parent)
@@ -169,6 +170,8 @@ class ValveRecorder(QObject):
             controller.action_logged.connect(self._on_action)
         if hasattr(controller, "connection_changed"):
             controller.connection_changed.connect(self.connection_changed)
+        if hasattr(controller, "group_connection_changed"):
+            controller.group_connection_changed.connect(self.group_connection_changed)
         if hasattr(controller, "log"):
             controller.log.connect(self.log)
 
@@ -225,9 +228,12 @@ class ValveRecorder(QObject):
         self._f_frame = open(os.path.join(seq_dir, "frame_times.txt"), "w")
         self._f_act6 = open(os.path.join(seq_dir, "actions6.csv"), "w", newline="")
         self._act6_writer = csv.writer(self._f_act6)
+        self._act6_writer.writerow(["t_sec", "c0", "c1", "c2", "c3", "c4", "c5"])   # 表头
         self._f_ndi = open(os.path.join(seq_dir, "ndi.csv"), "w", newline="")
+        self._f_ndi.write("t_sec,x,y,z,Rx,Ry,Rz,qw,qx,qy,qz,quality\n")             # 表头
         self._f_pres = open(os.path.join(seq_dir, "pressure.csv"), "w", newline="")
         self._pres_writer = csv.writer(self._f_pres)
+        self._pres_writer.writerow(["t_sec", "p_active", "reserved"])               # 表头
 
         self._meta = {
             "t0_monotonic": self.t0,
@@ -379,6 +385,17 @@ class ValveRecorder(QObject):
 
 
 # ============================================================================
+# 数值 CSV 读取（自动跳表头，兼容无表头旧文件）
+# ============================================================================
+def _load_num_csv(path, delimiter=","):
+    """读数值 CSV；首行全 NaN 视为表头跳过。兼容带表头(新)与无表头(旧)两种。"""
+    raw = np.atleast_2d(np.genfromtxt(path, delimiter=delimiter, dtype=float))
+    while raw.shape[0] and np.isnan(raw[0]).all():
+        raw = raw[1:]
+    return raw
+
+
+# ============================================================================
 # 后处理：ndi.csv → tip.npz（喂 capture_to_npz --ndi-tip）
 # ============================================================================
 def build_ndi_tip_npz(seq_dir: str, out_path: str | None = None) -> str:
@@ -393,7 +410,7 @@ def build_ndi_tip_npz(seq_dir: str, out_path: str | None = None) -> str:
     ft = np.loadtxt(ft_path)
     if ft.ndim == 0:
         ft = ft.reshape(1)
-    raw = np.atleast_2d(np.loadtxt(ndi_path, delimiter=","))
+    raw = _load_num_csv(ndi_path)
     if raw.shape[1] < 4:
         raise ValueError("ndi.csv 至少需 4 列 (t,x,y,z)")
     t = raw[:, 0]
@@ -418,8 +435,8 @@ def export_summary_csv(seq_dir: str, out_path: str | None = None) -> str:
     ft = np.loadtxt(os.path.join(seq_dir, "frame_times.txt"))
     if ft.ndim == 0:
         ft = ft.reshape(1)
-    act = np.atleast_2d(np.loadtxt(os.path.join(seq_dir, "actions6.csv"), delimiter=","))
-    ndi = np.atleast_2d(np.loadtxt(os.path.join(seq_dir, "ndi.csv"), delimiter=","))
+    act = _load_num_csv(os.path.join(seq_dir, "actions6.csv"))
+    ndi = _load_num_csv(os.path.join(seq_dir, "ndi.csv"))
     n = len(ft)
     if out_path is None:
         out_path = os.path.join(seq_dir, "summary.csv")

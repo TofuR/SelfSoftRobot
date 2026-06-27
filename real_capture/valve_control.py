@@ -46,7 +46,8 @@ class ValveController(QObject):
         log(str)
     """
     action_logged = pyqtSignal(list, float)
-    connection_changed = pyqtSignal(bool, str)
+    connection_changed = pyqtSignal(bool, str)            # 整体状态（任一组连上即 True）+ 摘要
+    group_connection_changed = pyqtSignal(int, bool)      # (group_id, connected) 每组独立
     log = pyqtSignal(str)
 
     def __init__(self, group_ports: dict, baudrate: int = 9600, slave_addr: int = 1, parent=None):
@@ -57,26 +58,57 @@ class ValveController(QObject):
         self.mgr = ModbusManager()
         self._last = [P_MIN] * N_CHAN
 
+    def connect_group(self, gid: int):
+        """连接单个控制组（串口 open 可能阻塞 → 建议在后台线程调用）。"""
+        port = self.group_ports.get(gid)
+        if not port:
+            msg = f"组{gid} 未配置串口"
+            self.connection_changed.emit(self.connected, msg)
+            self.log.emit("⚠ " + msg)
+            return False, msg
+        ok, err = self.mgr.connect_group(gid, port, self.baudrate, self.slave_addr)
+        connected = self.mgr.is_group_connected(gid)
+        self.group_connection_changed.emit(gid, connected)
+        msg = f"g{gid}@{port}:{'OK' if ok else (err or 'FAIL')}"
+        self.connection_changed.emit(self.connected, msg)
+        self.log.emit((f"Modbus 组{gid} 已连接 " if ok else f"⚠ Modbus 组{gid} 连接失败 ") + msg)
+        return ok, err
+
+    def disconnect_group(self, gid: int):
+        """断开单个控制组（释放该组串口 + 停通信线程）。"""
+        if self.mgr.is_group_connected(gid):
+            self.mgr.disconnect_group(gid)
+        self.group_connection_changed.emit(gid, False)
+        self.connection_changed.emit(self.connected, f"g{gid} 已断开")
+        self.log.emit(f"Modbus 组{gid} 已断开")
+
     def connect(self) -> bool:
-        ok_all, parts = True, []
-        for gid, port in self.group_ports.items():
-            ok, err = self.mgr.connect_group(gid, port, self.baudrate, self.slave_addr)
+        """连接所有已配置组（便捷封装；逐组连接请用 connect_group）。向后兼容。"""
+        ok_all = True
+        for gid in list(self.group_ports.keys()):
+            ok, _ = self.connect_group(gid)
             ok_all = ok_all and ok
-            parts.append(f"g{gid}@{port}:{'OK' if ok else (err or 'FAIL')}")
-        msg = " | ".join(parts)
-        self.connection_changed.emit(ok_all, msg)
-        self.log.emit(("Modbus 已连接 " if ok_all else "⚠ Modbus 连接失败 ") + msg)
         return ok_all
+
+    def is_group_connected(self, gid: int) -> bool:
+        return self.mgr.is_group_connected(gid)
+
+    @property
+    def connected_groups(self):
+        """已连接的组 id 集合（组1→ch0-2，组2→ch3-5）。"""
+        return {g for g in self.group_ports if self.mgr.is_group_connected(g)}
 
     @property
     def connected(self) -> bool:
-        return all(self.mgr.is_group_connected(g) for g in self.group_ports)
+        return bool(self.connected_groups)
 
     def set_pressures(self, pressures6):
-        """下发 6 维气压（kPa）。未连接时只更新本地缓存 + 发 action_logged（便于离线回放）。"""
+        """下发 6 维气压（kPa）。**只写给已连接的组**；未连接的组不发命令（避免无效串口写）。"""
         p6 = _clamp6(pressures6)
-        if self.connected:
+        conn = self.connected_groups
+        if 1 in conn:
             self.mgr.set_all_pressures(1, p6[0:3])
+        if 2 in conn:
             self.mgr.set_all_pressures(2, p6[3:6])
         self._last = p6
         self.action_logged.emit(p6, time.monotonic())
@@ -101,23 +133,47 @@ class ValveController(QObject):
 
 
 class MockValveController(QObject):
-    """`ValveController` 的软件替身：比例阀无反馈，mock 只回放命令值。"""
+    """`ValveController` 的软件替身：比例阀无反馈，mock 只回放命令值。
+    连接状态按组模拟（_mock_conn），与真机一样支持只连一组。"""
     action_logged = pyqtSignal(list, float)
     connection_changed = pyqtSignal(bool, str)
+    group_connection_changed = pyqtSignal(int, bool)
     log = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._last = [P_MIN] * N_CHAN
+        self._mock_conn = {1: False, 2: False}
+        self.group_ports = {1: "MOCK", 2: "MOCK"}
+
+    def connect_group(self, gid: int):
+        self._mock_conn[gid] = True
+        self.group_connection_changed.emit(gid, True)
+        self.connection_changed.emit(self.connected, f"MOCK 组{gid} 已连接")
+        self.log.emit(f"MOCK 组{gid} 已连接（假阀）。")
+        return True, ""
+
+    def disconnect_group(self, gid: int):
+        self._mock_conn[gid] = False
+        self.group_connection_changed.emit(gid, False)
+        self.connection_changed.emit(self.connected, f"MOCK 组{gid} 已断开")
+        self.log.emit(f"MOCK 组{gid} 已断开。")
 
     def connect(self) -> bool:
-        self.connection_changed.emit(True, "MOCK Modbus（假阀，无硬件）")
-        self.log.emit("MOCK Modbus 已连接（假阀）。")
+        for gid in list(self._mock_conn.keys()):
+            self.connect_group(gid)
         return True
+
+    def is_group_connected(self, gid: int) -> bool:
+        return self._mock_conn.get(gid, False)
+
+    @property
+    def connected_groups(self):
+        return {g for g, c in self._mock_conn.items() if c}
 
     @property
     def connected(self) -> bool:
-        return True
+        return bool(self.connected_groups)
 
     def set_pressures(self, pressures6):
         p6 = _clamp6(pressures6)
@@ -137,7 +193,8 @@ class MockValveController(QObject):
         self.set_pressures([P_MIN] * N_CHAN)
 
     def close(self):
-        pass
+        for gid in list(self._mock_conn.keys()):
+            self._mock_conn[gid] = False
 
 
 class ValveDriver(QObject):

@@ -117,8 +117,9 @@ GUI「主通道」下拉有 `ch0..ch5` + `全部 (all)`——**这是同一个�
 | 模式 | 行为 | 气压图 |
 |---|---|---|
 | **单通道 chN**（推荐起步） | 其余 5 路 `min/max/target` **自动归零并锁定**（灰显不可改，防误操作）；chN 设默认范围 `0–200 kPa`、target=0 | 只画 chN **1 条线** |
-| **全部 (all)** | 放开 6 路 `min/max` 全可改（保护解除） | 画 **6 条线** |
+| **全部 (all)** | 放开**已连接组**的通道 `min/max` 可改（没连的组那几路仍锁定） | 画**已连接组**的曲线 |
 
+- **Modbus↔ch 联动**：`ch0-2` 属组1、`ch3-5` 属组2。只连组1→只能用 ch0-2（ch3-5 灰锁且不驱动）；只连组2→只能用 ch3-5；两组都连→6 路全可用。**all 模式下没连的组那 3 路也保持 inactive**（不会被驱动）。
 - **min/max/target 录制中改也实时生效**（random/sweep 下一拍即用新范围）。
 - 单通道模式向后兼容旧 `pressure.csv`（记主通道）；`all` 模式下 `pressure.csv` 记 ch0
   （若 all 模式下 ch0 设为 0..0，该文件会全程 0 —— **以 `actions6.csv` 为准**）。
@@ -127,9 +128,9 @@ GUI「主通道」下拉有 `ch0..ch5` + `全部 (all)`——**这是同一个�
 
 ## 8. 采集流程
 
-1. 「Modbus 连接」填好串口/波特/从站 → 点「连接 Modbus」→ 状态变绿。
-2. 「主通道」选 `ch0`（单通道起步）→ 确认 min/max（默认 `0–200`）。
-3. （可选）「连接 NDI」；相机自动预览。
+1. 「Modbus 连接」填组1/组2 串口 + 波特/从站 → 点「**组1 连接**」（默认只连组1 即可控制 ch0-2）；需要 ch3-5 再点「**组2 连接**」。**再点一次同一按钮 = 断开该组**（安全释放串口，不必关程序）。
+2. 「主通道」选 `ch0`（单通道起步）→ 确认 min/max（默认 `0–200`）。未连的组对应的通道会自动灰锁。
+3. （可选）点「**连接 NDI**」（再点 = 断开，安全释放 Aurora）；相机自动预览。
 4. 填「保存目录」、选「模式」（手动 / 随机游走 / 往返扫描）、「动作间隔」`0.2` s、「稳定等待」`0.19` s。
 5. 「▶ 开始采集」→ 采够后「■ 停止采集」。
 6. 后处理：「⚡ 生成 npz」或「📋 导出汇总 CSV」。
@@ -142,9 +143,9 @@ GUI「主通道」下拉有 `ch0..ch5` + `全部 (all)`——**这是同一个�
 |---|---|---|
 | `cam0/00000.png ...` | 零填充帧 | `--view-dirs` |
 | `frame_times.txt` | 每帧一行 相对秒 | `--frame-times` |
-| `actions6.csv` | `t_sec, c0..c5` | `--actions --actions-has-timestamps` |
-| `ndi.csv` | `t_sec, x,y,z,Rx,Ry,Rz,qw,qx,qy,qz,quality`（失锁写 `nan`） | → `tip.npz` → `--ndi-tip` |
-| `pressure.csv` | `t_sec, p_active, 0` | 旧版兼容（3 列）；训练用 actions6.csv |
+| `actions6.csv` | `t_sec, c0..c5`（**首行表头**） | `--actions --actions-has-timestamps` |
+| `ndi.csv` | `t_sec, x,y,z,Rx,Ry,Rz,qw,qx,qy,qz,quality`（首行表头；失锁写 `nan`） | → `tip.npz` → `--ndi-tip` |
+| `pressure.csv` | `t_sec, p_active, reserved`（首行表头） | 旧版兼容（3 列）；训练用 actions6.csv |
 | `meta.json` / `summary.csv` | 运行元信息 / 按帧对齐汇总 | 人眼核对 |
 
 ---

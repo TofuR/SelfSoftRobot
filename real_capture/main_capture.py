@@ -159,12 +159,13 @@ class CaptureWindow(QMainWindow):
         self.le_ndi.setText(ndi_port)
         self.sb_baud.setValue(int(baudrate)); self.sb_slave.setValue(int(slave_addr))
 
-        # 相机立即开（预览）；mock 阀/mock NDI 立即连上
+        # 相机立即开（预览）；mock 阀默认连组1（默认使用 modbus1）；mock NDI 立即起
         self.cam.start()
         if mock_valve:
-            self.controller.connect()
+            self.controller.connect_group(1)
         if mock_ndi:
             self.ndi.start()
+            self._sync_ndi_button()
 
         mocked = [n for n, m in (("相机", mock_cam), ("阀/Modbus", mock_valve), ("NDI", mock_ndi)) if m]
         if mocked:
@@ -184,16 +185,20 @@ class CaptureWindow(QMainWindow):
         ll = QVBoxLayout(left)
         ll.setContentsMargins(6, 6, 6, 6)
 
-        # ---- Modbus 连接 ----
-        gb = QGroupBox("Modbus 连接（2 组 × 3 通道 = 6 路，4–20mA）")
+        # ---- Modbus 连接（组1/组2 独立 连接/断开）----
+        gb = QGroupBox("Modbus 连接（2 组 × 3 通道 = 6 路，4–20mA；组1=ch0-2，组2=ch3-5）")
         g = QGridLayout(gb)
         g.addWidget(QLabel("组1串口"), 0, 0); self.le_g1 = QLineEdit("COM3"); g.addWidget(self.le_g1, 0, 1)
         g.addWidget(QLabel("组2串口"), 0, 2); self.le_g2 = QLineEdit("COM46"); g.addWidget(self.le_g2, 0, 3)
         g.addWidget(QLabel("波特"), 1, 0); self.sb_baud = QDoubleSpinBox(); self.sb_baud.setRange(1200, 115200); self.sb_baud.setValue(9600); self.sb_baud.setDecimals(0); g.addWidget(self.sb_baud, 1, 1)
         g.addWidget(QLabel("从站"), 1, 2); self.sb_slave = QDoubleSpinBox(); self.sb_slave.setRange(1, 247); self.sb_slave.setValue(1); self.sb_slave.setDecimals(0); g.addWidget(self.sb_slave, 1, 3)
-        row = QHBoxLayout(); self.btn_connect = QPushButton("连接 Modbus"); self.btn_connect.clicked.connect(self._on_connect)
+        row = QHBoxLayout()
+        self.btn_g1 = QPushButton("组1 连接"); self.btn_g1.setStyleSheet("background:#2CB1BC;color:white")
+        self.btn_g1.clicked.connect(lambda: self._toggle_group(1))
+        self.btn_g2 = QPushButton("组2 连接"); self.btn_g2.setStyleSheet("background:#2CB1BC;color:white")
+        self.btn_g2.clicked.connect(lambda: self._toggle_group(2))
         self.lbl_conn = QLabel("未连接"); self.lbl_conn.setStyleSheet("color:#888")
-        row.addWidget(self.btn_connect); row.addWidget(self.lbl_conn, 1)
+        row.addWidget(self.btn_g1); row.addWidget(self.btn_g2); row.addWidget(self.lbl_conn, 1)
         g.addLayout(row, 2, 0, 1, 4)
         ll.addWidget(gb)
 
@@ -235,8 +240,9 @@ class CaptureWindow(QMainWindow):
         # ---- NDI ----
         gb = QGroupBox("NDI 末端（Aurora 电磁导航）")
         g = QGridLayout(gb)
-        g.addWidget(QLabel("串口"), 0, 0); self.le_ndi = QLineEdit("COM9"); g.addWidget(self.le_ndi, 0, 1)
-        self.btn_ndi = QPushButton("连接 NDI"); self.btn_ndi.clicked.connect(self._on_connect_ndi); g.addWidget(self.btn_ndi, 0, 2)
+        g.addWidget(QLabel("串口"), 0, 0); self.le_ndi = QLineEdit("COM1"); g.addWidget(self.le_ndi, 0, 1)
+        self.btn_ndi = QPushButton("连接 NDI"); self.btn_ndi.setStyleSheet("background:#2CB1BC;color:white")
+        self.btn_ndi.clicked.connect(self._toggle_ndi); g.addWidget(self.btn_ndi, 0, 2)
         self.lbl_ndi = QLabel("末端: x=--  y=--  z=--  (失锁时 NaN)"); self.lbl_ndi.setStyleSheet("color:#334E68")
         g.addWidget(self.lbl_ndi, 1, 0, 1, 3)
         ll.addWidget(gb)
@@ -312,6 +318,7 @@ class CaptureWindow(QMainWindow):
         self.core.pressure_status.connect(self._on_pressure)
         self.core.ndi_status.connect(self._on_ndi)
         self.core.connection_changed.connect(self._on_conn)
+        self.core.group_connection_changed.connect(self._on_grp_conn)
         self.core.recording_started.connect(self._on_rec_started)
         self.core.recording_status.connect(self._on_rec_status)
         self.core.recording_stopped.connect(self._on_rec_stopped)
@@ -405,9 +412,6 @@ class CaptureWindow(QMainWindow):
 
     def _on_conn(self, ok: bool, msg: str):
         self._log(msg)
-        self.btn_connect.setEnabled(True)
-        self.lbl_conn.setText("已连接" if ok else "未连接")
-        self.lbl_conn.setStyleSheet("color:#2CB1BC" if ok else "color:#EF4E4E")
 
     def _on_rec_started(self, seq_dir: str):
         self.btn_start.setEnabled(False); self.btn_stop.setEnabled(True)
@@ -428,23 +432,24 @@ class CaptureWindow(QMainWindow):
         return self.cb_active.currentIndex()
 
     def _current_targets(self):
-        """manual 每拍重发的目标向量。单通道→仅主通道非 0，其余钉 0；all→全部。"""
-        idx = self._active_idx()
+        """manual 每拍重发的目标向量。单通道→仅主通道非 0；all→仅已连接组的通道。
+        未连接组的通道恒 0（不会被驱动）。"""
+        idx = self._active_idx(); avail = self._available_channels()
         if idx < N_CHAN:
-            return [self._target_sb[i].value() if i == idx else 0.0 for i in range(N_CHAN)]
-        return [sb.value() for sb in self._target_sb]
+            return [self._target_sb[i].value() if (i == idx and i in avail) else 0.0 for i in range(N_CHAN)]
+        return [self._target_sb[i].value() if i in avail else 0.0 for i in range(N_CHAN)]
 
     def _current_lo(self):
-        idx = self._active_idx()
+        idx = self._active_idx(); avail = self._available_channels()
         if idx < N_CHAN:
-            return [self._min_sb[i].value() if i == idx else 0.0 for i in range(N_CHAN)]
-        return [sb.value() for sb in self._min_sb]
+            return [self._min_sb[i].value() if (i == idx and i in avail) else 0.0 for i in range(N_CHAN)]
+        return [self._min_sb[i].value() if i in avail else 0.0 for i in range(N_CHAN)]
 
     def _current_hi(self):
-        idx = self._active_idx()
+        idx = self._active_idx(); avail = self._available_channels()
         if idx < N_CHAN:
-            return [self._max_sb[i].value() if i == idx else 0.0 for i in range(N_CHAN)]
-        return [sb.value() for sb in self._max_sb]
+            return [self._max_sb[i].value() if (i == idx and i in avail) else 0.0 for i in range(N_CHAN)]
+        return [self._max_sb[i].value() if i in avail else 0.0 for i in range(N_CHAN)]
 
     def _on_target_changed(self):
         if self._guard:
@@ -498,52 +503,129 @@ class CaptureWindow(QMainWindow):
         self.core.update_ranges(self._current_lo(), self._current_hi())
         self._log(f"主通道 → {'all' if idx >= N_CHAN else f'ch{idx}'}（目标/范围已同步）。")
 
+    def _available_channels(self):
+        """已连接 modbus 组对应的可驱动通道：组1→ch0-2，组2→ch3-5。都没连→空集。"""
+        conn = (self.controller.connected_groups
+                if hasattr(self.controller, "connected_groups") else {1, 2})
+        avail = set()
+        if 1 in conn:
+            avail.update(range(0, 3))
+        if 2 in conn:
+            avail.update(range(3, 6))
+        return avail
+
     def _apply_channel_lock(self, idx=None):
-        """按主通道模式启停 spinbox + 气压曲线显隐（不改值，纯 UX 保护）。"""
+        """按 主通道模式 × 已连接组 启停 spinbox + 曲线显隐（不改值，纯 UX）。
+        未连接组的通道恒 disabled/隐藏；all 模式也只开放已连接组的通道。"""
         if idx is None:
             idx = self._active_idx()
+        avail = self._available_channels()
         single = idx < N_CHAN
         for i in range(N_CHAN):
-            enabled = (i == idx) if single else True
+            if i not in avail:
+                enabled = False
+            elif single:
+                enabled = (i == idx)
+            else:
+                enabled = True
             for sb in (self._min_sb[i], self._max_sb[i], self._target_sb[i]):
                 sb.setEnabled(enabled)
         for i, curve in enumerate(self.p_curves):
-            curve.setVisible((i == idx) if single else True)
+            if i not in avail:
+                curve.setVisible(False)
+            elif single:
+                curve.setVisible(i == idx)
+            else:
+                curve.setVisible(True)
 
-    def _on_connect(self):
-        if self.controller.connected:
-            self._log("Modbus 已连接。"); return
-        self.btn_connect.setEnabled(False)
-        self.lbl_conn.setText("连接中…"); self.lbl_conn.setStyleSheet("color:#888")
-        # 真机在后台线程连（串口 open 可能阻塞）；mock 的 connect 瞬时
-        g1, g2 = self.le_g1.text().strip(), self.le_g2.text().strip()
-        from valve_control import ValveController
-        if not self.mock_valve and isinstance(self.controller, ValveController):
-            self.controller.group_ports = {1: g1, 2: g2}
-            self.controller.baudrate = int(self.sb_baud.value())
-            self.controller.slave_addr = int(self.sb_slave.value())
+    def _update_active_dropdown_availability(self):
+        """主通道下拉里禁用未连接组的通道项；当前选中项若被禁用→切到首个可用通道或 all。"""
+        avail = self._available_channels()
+        model = self.cb_active.model()
+        if model is not None:
+            for i in range(N_CHAN):
+                item = model.item(i)
+                if item is not None:
+                    item.setEnabled(i in avail)
+        cur = self.cb_active.currentIndex()
+        if cur < N_CHAN and cur not in avail:
+            new = next((i for i in range(N_CHAN) if i in avail), N_CHAN)  # 首个可用单通道，否则 all
+            if new != cur:
+                self.cb_active.setCurrentIndex(new)   # 自然触发 _on_active_changed
 
-        def worker():
-            self.controller.connect()
-        threading.Thread(target=worker, daemon=True).start()
+    def _toggle_group(self, gid: int):
+        """组1/组2 切换按钮：未连→连，已连→断。串口操作放后台线程（open/close 可能阻塞）。"""
+        btn = self.btn_g1 if gid == 1 else self.btn_g2
+        if self.controller.is_group_connected(gid):
+            btn.setEnabled(False); btn.setText(f"组{gid} 断开中…")
+            threading.Thread(target=lambda: self.controller.disconnect_group(gid), daemon=True).start()
+            return
+        port = (self.le_g1 if gid == 1 else self.le_g2).text().strip()
+        if not port:
+            self._log(f"⚠ 请先填组{gid}串口。"); return
+        if not self.mock_valve:
+            from valve_control import ValveController
+            if isinstance(self.controller, ValveController):
+                self.controller.group_ports[gid] = port
+                self.controller.baudrate = int(self.sb_baud.value())
+                self.controller.slave_addr = int(self.sb_slave.value())
+        btn.setEnabled(False); btn.setText(f"组{gid} 连接中…")
+        threading.Thread(target=lambda: self.controller.connect_group(gid), daemon=True).start()
+
+    def _on_grp_conn(self, gid: int, ok: bool):
+        """某组连接状态变化：更新按钮文案/颜色 + 状态标签 + 刷新 ch 联动。"""
+        btn = self.btn_g1 if gid == 1 else self.btn_g2
+        btn.setEnabled(True)
+        if ok:
+            btn.setText(f"组{gid} 断开"); btn.setStyleSheet("background:#EF4E4E;color:white")
+        else:
+            btn.setText(f"组{gid} 连接"); btn.setStyleSheet("background:#2CB1BC;color:white")
+        conn = sorted(self.controller.connected_groups) if hasattr(self.controller, "connected_groups") else []
+        self.lbl_conn.setText("已连接: " + (",".join(f"组{g}" for g in conn) if conn else "无"))
+        self.lbl_conn.setStyleSheet("color:#2CB1BC" if conn else "color:#888")
+        self._update_active_dropdown_availability()   # 下拉禁用未连组的通道
+        self._apply_channel_lock()                    # spinbox/曲线按可用通道刷新
+
+    def _toggle_ndi(self):
+        """NDI 连接/断开 切换。断开时 ndi.stop() 的 finally 会 stop_tracking 释放 Aurora 串口。"""
+        if self.ndi.isRunning():
+            self._log("NDI 断开中…")
+            try:
+                self.ndi.stop()
+            except Exception as e:
+                self._log(f"NDI 断开异常: {e}")
+            self._log("NDI 已断开。")
+            self._sync_ndi_button()
+        else:
+            self._on_connect_ndi()
+            self._sync_ndi_button()
+
+    def _sync_ndi_button(self):
+        running = self.ndi.isRunning()
+        self.btn_ndi.setText("断开 NDI" if running else "连接 NDI")
+        self.btn_ndi.setStyleSheet("background:#EF4E4E;color:white" if running else "background:#2CB1BC;color:white")
+        if not running:
+            self.lbl_ndi.setText("NDI 已断开"); self.lbl_ndi.setStyleSheet("color:#888")
 
     def _on_connect_ndi(self):
         if self.ndi.isRunning():
             self._log("NDI 已在运行。"); return
         old = self.ndi
+        # 重建全新线程（mock 也重建）：取最新端口 + 保证断开后能重连（旧线程 stop 后 _running=False 不可复用）
         if not self.mock_ndi:
             from hardware_threads import NdiThread
-            # 重建以取最新端口（NdiThread 在 run 里 ndi_load）
             self.ndi = NdiThread(port=self.le_ndi.text().strip())
-            self.ndi.ndi_data.connect(self.core._on_ndi)   # 重新接线
-            # ⚠ 必须同步更新 recorder 的引用，否则 shutdown() 会停到 __init__ 里那个
-            #    未启动的旧线程 → 真机正在跑的 NdiThread + Aurora _tracker 永不关闭（句柄/串口泄漏 + 退出崩溃）
-            self.core.ndi = self.ndi
+        else:
+            from hardware_threads import MockNdiThread
+            self.ndi = MockNdiThread()
+        self.ndi.ndi_data.connect(self.core._on_ndi)
+        # ⚠ 同步更新 recorder 引用，否则 shutdown() 停到旧线程 → 真 Aurora _tracker 永不关闭
+        self.core.ndi = self.ndi
         self.ndi.start()
-        # 停掉旧线程：若它在跑→关其 Aurora _tracker；若是未启动的→stop() 是无害 no-op
+        # 停掉旧线程（在跑→关其 Aurora _tracker；未启动→stop() 无害 no-op；去旧死连接防双发）
         if old is not self.ndi:
             try:
-                old.ndi_data.disconnect(self.core._on_ndi)   # 去掉旧死连接（防重连后双发）
+                old.ndi_data.disconnect(self.core._on_ndi)
             except (TypeError, RuntimeError):
                 pass
             try:
@@ -690,9 +772,9 @@ def main():
     p.add_argument("--mock-cam", action="store_true", help="假相机")
     p.add_argument("--mock-valve", action="store_true", help="假阀/Modbus")
     p.add_argument("--mock-ndi", action="store_true", help="假 NDI 末端")
-    p.add_argument("--group1", default="COM3", help="Modbus 组1 串口")
-    p.add_argument("--group2", default="COM46", help="Modbus 组2 串口")
-    p.add_argument("--ndi", default="COM9", dest="ndi_port", help="NDI 串口")
+    p.add_argument("--group1", default="COM55", help="Modbus 组1 串口")
+    p.add_argument("--group2", default="COM56", help="Modbus 组2 串口")
+    p.add_argument("--ndi", default="COM1", dest="ndi_port", help="NDI 串口")
     p.add_argument("--baudrate", type=int, default=9600)
     p.add_argument("--slave", type=int, default=1, dest="slave_addr")
     p.add_argument("--fps", type=int, default=30)
