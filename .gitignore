@@ -1,5 +1,6 @@
 /data/fixed_camera/
 /data/moving_camera/
+/data/real_seq/
 /__pycache__
 /train_log/
 /nedf_0410/data/
