@@ -121,13 +121,20 @@ def parse_checkpoint_path(ckpt_path):
 
 
 def scan_data_dirs():
+    """扫描 data/ 下所有"直接包含 .npz"的目录（兼容任意深度）。
+
+    兼容两种数据布局：
+      仿真: data/<seq_set>/*.npz                      （一层）
+      实物: data/real_seq/seq_<id>/{train,val}/*.npz  （三层，按 split 拆分）
+
+    返回所有直接含 .npz 的目录（按路径排序），供 select_from_list 选择。
+    """
     data_root = os.path.join(PROJECT_ROOT, 'data')
     dirs = []
-    for d in sorted(os.listdir(data_root)):
-        full = os.path.join(data_root, d)
-        if os.path.isdir(full) and glob.glob(os.path.join(full, '*.npz')):
-            dirs.append(full)
-    return dirs
+    for dirpath, _dirnames, filenames in os.walk(data_root):
+        if any(f.endswith('.npz') for f in filenames):
+            dirs.append(dirpath)
+    return sorted(set(dirs))
 
 
 def scan_npz_files(data_dir):
