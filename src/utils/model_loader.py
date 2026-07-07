@@ -216,7 +216,13 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
     saved_cfg = _load_config_json(checkpoint_path)
 
     train_cfg = load_config('training')
-    action_dim = _infer_action_dim(data_dir)
+    # action_dim 优先取 checkpoint 自身 config.json（实物 ad=1 / 仿真 ad=2 都能正确还原），
+    # 避免可视化等"未传 data_dir"场景下误用仿真默认 2 → 与实物 checkpoint 形状不符。
+    # 兜底：config 无 action_dim 时再用 data_dir npz 推断，最后默认 2。
+    if saved_cfg and saved_cfg.get('action_dim'):
+        action_dim = saved_cfg['action_dim']
+    else:
+        action_dim = _infer_action_dim(data_dir)
     norm_factor = _load_norm_factor(checkpoint_path, data_dir)
     if window_size is None:
         window_size = saved_cfg.get('window_size') if saved_cfg else None
