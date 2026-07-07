@@ -37,6 +37,54 @@ def _add_skeleton_traces(fig, gt_skeleton=None, pred_skeleton=None):
         ))
 
 
+def _to_Nx3(p):
+    """把骨架点统一成 (N,3)。兼容 result['points'] 的 (N,3) 与 GT/Pred 的 (3,N)。"""
+    a = np.asarray(p, dtype=float)
+    if a.ndim != 2:
+        a = a.reshape(-1, 3)
+    if a.shape[0] == 3 and a.shape[1] != 3:
+        a = a.T  # (3,N) -> (N,3)
+    return a
+
+
+def _skeleton_scene_ranges(point_arrays, margin=0.05):
+    """从一组点云/骨架计算自适应 3D 轴范围（固定相机 + aspectmode='data'）。
+
+    兼容任意坐标系：仿真(米, ~0.6 跨度) 与 实物(像素, ~300) 都按数据自身范围
+    自适应，避免硬编码米制视口导致实物预测(~300px)落在视口外、整图全空。
+    零跨度轴(如实物 z≡0)给单位 1，避免退化。
+
+    Args:
+        point_arrays: [(N,3) | (3,N) | None, ...] —— 预测点 / GT / Pred 等。
+        margin: 各轴方向的相对留白。
+
+    Returns:
+        dict: plotly scene 配置（xaxis/yaxis/zaxis/aspectmode/camera）；
+              无有效点时返回 None（由调用方兜底 aspectmode='data'）。
+    """
+    pts = [_to_Nx3(p) for p in point_arrays
+           if p is not None and np.asarray(p).size >= 3]
+    if not pts:
+        return None
+    allp = np.concatenate(pts, axis=0)
+    mins = allp.min(axis=0)
+    maxs = allp.max(axis=0)
+    spans = (maxs - mins).astype(float)
+    spans = np.where(spans < 1e-6, 1.0, spans)  # 零跨度轴(实物 z)给单位 1
+    pad = spans * margin
+    return dict(
+        xaxis=dict(range=[float(mins[0] - pad[0]), float(maxs[0] + pad[0])]),
+        yaxis=dict(range=[float(mins[1] - pad[1]), float(maxs[1] + pad[1])]),
+        zaxis=dict(range=[float(mins[2] - pad[2]), float(maxs[2] + pad[2])]),
+        aspectmode='data',
+        camera=dict(
+            eye=dict(x=1.5, y=0.0, z=0.5),
+            center=dict(x=0.0, y=0.0, z=-0.1),
+            up=dict(x=0, y=0, z=1),
+        ),
+    )
+
+
 def render_pointcloud_html(result, gt_skeleton=None, pred_skeleton=None, title=""):
     """Flow Matching 点云 → Plotly Figure。"""
     import plotly.graph_objects as go
@@ -80,21 +128,14 @@ def render_skeleton_html(result, gt_skeleton=None, pred_skeleton=None, title="")
         ))
     _add_skeleton_traces(fig, gt_skeleton, pred_skeleton)
 
-    # 固定坐标轴：仿真全局范围 + 少量 margin，等比例显示
-    # x≈0, y∈[-0.35, 0.30], z∈[-0.05, 0.55]
-    # 最大跨度 0.6，以此为基准等比例缩放
-    max_range = 0.6
-    fig.update_layout(scene=dict(
-        xaxis=dict(range=[-0.3, 0.3]),
-        yaxis=dict(range=[-0.35, 0.25]),
-        zaxis=dict(range=[-0.05, 0.55]),
-        aspectmode='cube',
-        camera=dict(
-            eye=dict(x=1.5, y=0.0, z=0.5),
-            center=dict(x=0.0, y=0.0, z=-0.1),
-            up=dict(x=0, y=0, z=1),
-        ),
-    ))
+    # 自适应坐标轴：按预测点 + GT + Pred 的实际范围推导（兼容仿真米/实物像素），
+    # 替代原先硬编码的仿真米制视口——否则实物预测(~300px)落在视口外，整图全空。
+    scene = _skeleton_scene_ranges([pts, gt_skeleton, pred_skeleton]) or dict(
+        aspectmode='data',
+        camera=dict(eye=dict(x=1.5, y=0.0, z=0.5),
+                    center=dict(x=0.0, y=0.0, z=-0.1),
+                    up=dict(x=0, y=0, z=1)))
+    fig.update_layout(scene=scene)
     fig.update_layout(
         title=title or 'Skeleton Prediction',
         width=700, height=700, margin=dict(l=0, r=0, t=30, b=0),
@@ -261,19 +302,25 @@ def render_animation(results, model_type, threshold, gt_skeletons,
             step['args'][0]['visible'][i * n_traces_per_frame + j] = True
         steps.append(step)
 
-    # 坐标轴：骨架模型固定范围，其他模型自适应
+    # 坐标轴：骨架模型按"全部帧的预测点+GT+Pred"求全局范围（帧间不跳变），
+    # 兼容仿真米/实物像素；其他模型自适应。
     if is_skeleton:
-        scene_cfg = dict(
-            xaxis=dict(range=[-0.3, 0.3]),
-            yaxis=dict(range=[-0.35, 0.25]),
-            zaxis=dict(range=[-0.05, 0.55]),
-            aspectmode='cube',
-            camera=dict(
-                eye=dict(x=1.5, y=0.0, z=0.5),
-                center=dict(x=0.0, y=0.0, z=-0.1),
-                up=dict(x=0, y=0, z=1),
-            ),
-        )
+        _collect = []
+        for i in range(n_frames):
+            _r = results[i]
+            if _r.get('points') is not None:
+                _collect.append(_r['points'])
+            _g = gt_skeletons[i] if gt_skeletons else None
+            if _g is not None:
+                _collect.append(_g)
+            _p = pred_skeletons[i] if pred_skeletons else None
+            if _p is not None:
+                _collect.append(_p)
+        scene_cfg = _skeleton_scene_ranges(_collect) or dict(
+            aspectmode='data',
+            camera=dict(eye=dict(x=1.5, y=0.0, z=0.5),
+                        center=dict(x=0.0, y=0.0, z=-0.1),
+                        up=dict(x=0, y=0, z=1)))
     else:
         scene_cfg = dict(aspectmode='data')
 
