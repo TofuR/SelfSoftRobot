@@ -82,6 +82,8 @@ def main(argv=None):
     pa.add_argument('--out-dir', default=None,
                     help='输出目录（缺省 derived/<seq>/overlay）')
     pa.add_argument('--n-points', type=int, default=31, help='骨架节点数')
+    pa.add_argument('--tip-fix', action=argparse.BooleanOptionalAction, default=True,
+                    help='末端 node0 垂直切片修正(修弯管 cap 角落偏移, 与训练 npz 同源; --no-tip-fix 关闭)')
     pa.add_argument('--mask-color', default='0,0,255', help='mask 覆盖色 BGR（默认红）')
     pa.add_argument('--mask-alpha', type=float, default=0.35, help='mask 透明度')
     pa.add_argument('--raw-color', default='255,255,0', help='原始骨架色 BGR（默认青）')
@@ -129,7 +131,7 @@ def main(argv=None):
         skels = np.zeros((len(pairs), args.n_points, 2), np.float32)
         for i, (_ip, mp) in enumerate(pairs):
             m = (cv2.imread(mp, cv2.IMREAD_GRAYSCALE) > 127).astype(np.uint8)
-            skels[i] = extract_skeleton_2d(m, args.n_points)
+            skels[i] = extract_skeleton_2d(m, args.n_points, tip_fix=args.tip_fix)
         pos = np.zeros((len(pairs), 3, args.n_points), np.float32)
         pos[:, 0, :] = skels[:, :, 0]
         pos[:, 1, :] = skels[:, :, 1]
@@ -147,7 +149,7 @@ def main(argv=None):
         if img is None:
             continue
         m01 = (cv2.imread(mp, cv2.IMREAD_GRAYSCALE) > 127).astype(np.uint8)
-        sk_raw = extract_skeleton_2d(m01, args.n_points)
+        sk_raw = extract_skeleton_2d(m01, args.n_points, tip_fix=args.tip_fix)
         if np.abs(sk_raw).max() == 0:
             n_empty += 1
         sk_clean = cleaned[i] if (args.clean and cleaned is not None) else None

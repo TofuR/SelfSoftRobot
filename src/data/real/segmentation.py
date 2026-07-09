@@ -155,15 +155,16 @@ def segment_views(images_bgr, method="backlight", bg=None,
     return masks
 
 
-def masks_to_skeletons_2d(masks, n_points=31):
+def masks_to_skeletons_2d(masks, n_points=31, tip_fix=True):
     """(V,N,H,W) 二值 → (V,N,n_points,2) 2D 骨架，复用 skeleton_2d。
 
     返回 [col,row]；无前景帧为全 0（与 extract_skeleton_2d 约定一致，三角化时跳过）。
+    tip_fix=True(默认): 末端 node0 垂直切片修正(修弯管 cap 角落偏移), 实物默认开。
     """
     from src.utils.skeleton_2d import batch_extract_skeleton_2d
 
     V, N = masks.shape[:2]
     out = np.zeros((V, N, n_points, 2), np.float32)
     for v in range(V):
-        out[v] = batch_extract_skeleton_2d(masks[v], n_points)
+        out[v] = batch_extract_skeleton_2d(masks[v], n_points, tip_fix=tip_fix)
     return out

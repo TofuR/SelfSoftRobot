@@ -75,14 +75,19 @@ def action_max_per_channel(seq_dir, channels, actions):
     return np.array(maxes, np.float32)
 
 
-def masks_to_positions(mask_dir, n_points=31):
-    """mask PNG → (T,3,N) positions [col,row,0]。空 mask → 全 0 骨架(下游跳过)。"""
+def masks_to_positions(mask_dir, n_points=31, tip_fix=True):
+    """mask PNG → (T,3,N) positions [col,row,0]。空 mask → 全 0 骨架(下游跳过)。
+
+    tip_fix=True(默认): 末端 node0 做"垂直于局部轴切片"修正, 修弯管 cap 倾斜导致的
+    node0 落角落 + node0-1-2 折角(实物 34% 帧受益, 末端误差 -71%)。详见
+    src/utils/skeleton_2d.extract_skeleton_2d 的 tip_fix 参数。
+    """
     fs = sorted(glob.glob(os.path.join(mask_dir, "*.png")))
     if not fs:
         sys.exit(f"无 mask: {mask_dir}")
     masks = np.stack([(cv2.imread(f, cv2.IMREAD_GRAYSCALE) > 127).astype(np.uint8)
                       for f in fs])                         # (T,H,W)
-    sk2d = batch_extract_skeleton_2d(masks, n_points)       # (T,N,2) [col,row]
+    sk2d = batch_extract_skeleton_2d(masks, n_points, tip_fix=tip_fix)  # (T,N,2) [col,row]
     T, N, _ = sk2d.shape
     positions = np.zeros((T, 3, N), np.float32)
     positions[:, 0, :] = sk2d[:, :, 0]                      # col → x
@@ -220,6 +225,8 @@ def build_parser():
     pa.add_argument("--action-max", default=None,
                     help="每通道归一化上限(逗号分隔, kPa)；默认读 meta.json hi6[ch]")
     pa.add_argument("--n-points", type=int, default=31)
+    pa.add_argument("--tip-fix", action=argparse.BooleanOptionalAction, default=True,
+                    help="末端 node0 垂直切片修正(修弯管 cap 角落偏移, 实物默认开; --no-tip-fix 关闭)")
     pa.add_argument("--skel-dev-thresh", type=float, default=80.0,
                     help="骨架离群判据(px)：偏离时间中位>此值→插值修复(默认80，落正常66与离群>100间隙)")
     pa.add_argument("--val-frac", type=float, default=0.2,
@@ -240,8 +247,8 @@ def main():
         os.path.join("data", "real_seq", seq_name))
     channels = [c.strip() for c in args.action_channels.split(",") if c.strip() != ""]
 
-    print(f">>> 读 mask → 2D 骨架: {masks_dir}")
-    positions, fs = masks_to_positions(masks_dir, args.n_points)
+    print(f">>> 读 mask → 2D 骨架: {masks_dir}  (tip_fix={args.tip_fix})")
+    positions, fs = masks_to_positions(masks_dir, args.n_points, tip_fix=args.tip_fix)
     T = positions.shape[0]
     valid = int((positions[:, :2, :].sum(axis=(1, 2)) > 0).sum())   # 非空骨架帧
     print(f"    {T} 帧, 非空骨架 {valid} ({valid/T*100:.1f}%)")
