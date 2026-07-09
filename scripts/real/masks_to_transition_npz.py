@@ -121,6 +121,86 @@ def clean_outlier_skeletons(positions, deviation_px=80):
     return out, int(bad.sum()), bad
 
 
+def stabilize_static_region(positions, joint_xy, n_static=11):
+    """绝对位置锚定的静态段共识稳定（用户选定：均值/共识方案）。
+
+    双段臂: node0(图底/末端)..关节..node30(图顶/base)。只驱动末端 1-DOF → 动作段=
+    node0..关节(保留每帧真实弯曲)；关节及以上(近端段)静止。但骨架按弧长重采样到 31 点,
+    提取臂长帧间变化(分割差异/管茬)→ 同一物理关节落到不同 node id（实测 19-27, 中位 20；
+    用户提示"不能用相对 node id"）。故用关节**绝对位置**每帧定位:
+      1. 每帧关节 node = 离 joint_xy 最近的 node（handles id 漂移）。
+      2. 静态段 = nodes[joint_node..N-1]，按弧长重采样到 n_static 点 → 跨帧中位 = 共识曲线。
+      3. 每帧静态段 nodes ← 共识按每帧弧长映射回（保持该帧 node 数与序，col/row 都修）。
+    动作段(node0..joint_node-1)原值不动。关节的连接处偏移(node~20 突偏右)、上方 mask
+    缺块致 node30 col 抖动 等，都由共识修复。joint_xy 由调用方 robust 估计(见 detect_joint_xy)。
+
+    Args:
+        positions: (T,3,N) [col,row,0]（建议先过 clean_outlier_skeletons）。
+        joint_xy: (2,) 关节绝对位置 [col,row]（固定；相机/近端不动）。
+        n_static: 静态段弧长重采样点数。
+    Returns:
+        stabilized: (T,3,N)。
+        joint_node: (T,) int 每帧关节 node id（QC 用）。
+        cons_col, cons_row: (n_static,) 静态段共识曲线。
+    """
+    T, _, N = positions.shape
+    xy = positions[:, :2, :]
+    out = positions.copy()
+    anchor = np.asarray(joint_xy, np.float64)
+    # 1) 每帧关节 node = 离绝对位置最近
+    dist = np.sqrt(((xy - anchor[None, :, None]) ** 2).sum(1))   # (T,N)
+    jn = dist.argmin(1).astype(int)
+    # 2) 每帧静态段弧长重采样到 n_static 点
+    u_grid = np.linspace(0, 1, n_static)
+    cols = np.full((T, n_static), np.nan)
+    rows = np.full((T, n_static), np.nan)
+    for t in range(T):
+        x = xy[t, 0, jn[t]:N]
+        y = xy[t, 1, jn[t]:N]
+        if len(x) < 2:
+            continue
+        seg = np.concatenate([[0.0], np.sqrt(np.diff(x) ** 2 + np.diff(y) ** 2)]).cumsum()
+        if seg[-1] < 1e-6:
+            continue
+        u = seg / seg[-1]
+        cols[t] = np.interp(u_grid, u, x)
+        rows[t] = np.interp(u_grid, u, y)
+    cons_col = np.nanmedian(cols, axis=0)
+    cons_row = np.nanmedian(rows, axis=0)
+    # 3) 共识按每帧弧长映射回该帧静态段
+    for t in range(T):
+        js = slice(int(jn[t]), N)
+        x = xy[t, 0, js]
+        y = xy[t, 1, js]
+        if len(x) < 2:
+            continue
+        seg = np.concatenate([[0.0], np.sqrt(np.diff(x) ** 2 + np.diff(y) ** 2)]).cumsum()
+        if seg[-1] < 1e-6:
+            continue
+        u = seg / seg[-1]
+        out[t, 0, js] = np.interp(u, u_grid, cons_col)
+        out[t, 1, js] = np.interp(u, u_grid, cons_row)
+    return out, jn, cons_col, cons_row
+
+
+def detect_joint_xy(positions, node_lo=8, node_hi=25):
+    """robust 估计关节绝对位置 [col,row]。
+
+    关节处管-臂合并 → 局部 col 突偏(2nd-diff)；跨帧该位置稳定突偏。排除末端真实弯曲
+    (node0-7 高曲率)与上方 mask 缺块噪声区(node26-30)，在 node_lo..node_hi 范围取跨帧
+    mean|Δ²col| 峰值 node，返回其中位 (col,row)。默认搜 node8-25(关节实测落在 node19-21)。
+    """
+    T, _, N = positions.shape
+    if node_hi is None:
+        node_hi = N - 3
+    xy = positions[:, :2, :]
+    mean_d2 = np.abs(np.diff(xy[:, 0, :], n=2, axis=1)).mean(axis=0)   # idx0..N-3 ↔ node1..N-2
+    sub = mean_d2[node_lo - 1:node_hi]                                  # node_lo..node_hi+1
+    peak_node = (node_lo - 1) + int(sub.argmax()) + 1                   # node id (1..N-2)
+    joint_xy = np.median(xy[:, :, peak_node], axis=0)
+    return joint_xy, peak_node
+
+
 def save_npz(path, positions, actions):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     np.savez_compressed(path, positions=positions.astype(np.float32),
