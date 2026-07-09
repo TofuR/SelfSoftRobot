@@ -48,19 +48,17 @@ def _to_Nx3(p):
 
 
 def _skeleton_scene_ranges(point_arrays, margin=0.05):
-    """从一组点云/骨架计算自适应 3D 轴范围（固定相机 + aspectmode='data'）。
+    """从一组骨架/点云计算 3D 场景配置（自适应范围 + 固定相机，帧间不跳变）。
 
-    兼容任意坐标系：仿真(米, ~0.6 跨度) 与 实物(像素, ~300) 都按数据自身范围
-    自适应，避免硬编码米制视口导致实物预测(~300px)落在视口外、整图全空。
-    零跨度轴(如实物 z≡0)给单位 1，避免退化。
-
-    Args:
-        point_arrays: [(N,3) | (3,N) | None, ...] —— 预测点 / GT / Pred 等。
-        margin: 各轴方向的相对留白。
-
-    Returns:
-        dict: plotly scene 配置（xaxis/yaxis/zaxis/aspectmode/camera）；
-              无有效点时返回 None（由调用方兜底 aspectmode='data'）。
+    按数据形态分两种渲染（自动判别 z 是否退化）：
+    - 实物 2D 骨架（z 恒 0，单相机平面弯曲）：data 填满 + 面对 x-y 平面的相机(沿 -z 看)
+      + y 轴反转。实物骨架是近一维曲线(宽~50×高~293)，cube 会把它缩成细线(占 17% 宽)，
+      视觉上"挤成一团"；data 模式让骨架填满画面、清晰可见（轻微比例失真换可见性，
+      且让 col 方向的弯曲更醒目——这正是动作的效果）。y 反转使 row 小的固定端(base)
+      显示在上=与相机原图一致(图顶固定/图底随动作)。沿 -z 看才能露出 col 弯曲(从 +x 看
+      会把弯曲压进深度方向→只见一条直线)。
+    - 仿真 3D 骨架（三轴都变）：cube 等比例 + up=最长轴(臂主轴竖直) + 侧向相机。
+    render_animation 传全部帧进来→全局范围(帧间不跳)。
     """
     pts = [_to_Nx3(p) for p in point_arrays
            if p is not None and np.asarray(p).size >= 3]
@@ -70,18 +68,37 @@ def _skeleton_scene_ranges(point_arrays, margin=0.05):
     mins = allp.min(axis=0)
     maxs = allp.max(axis=0)
     spans = (maxs - mins).astype(float)
-    spans = np.where(spans < 1e-6, 1.0, spans)  # 零跨度轴(实物 z)给单位 1
-    pad = spans * margin
+    spans_safe = np.where(spans < 1e-6, 1.0, spans)  # 零跨度轴给单位 1 防退化
+    pad = spans_safe * margin
+
+    # 实物 2D 骨架判别：z 跨度相对 x/y 可忽略（单相机平面，第 3 维恒 0）
+    is_2d = spans[2] < 1e-3 * max(spans[0], spans[1], 1e-6)
+    if is_2d:
+        return dict(
+            xaxis=dict(range=[float(mins[0] - pad[0]), float(maxs[0] + pad[0])]),
+            # y 反转: range=[max,min] → row 小(base/图顶)在上 = 图像方向
+            yaxis=dict(range=[float(maxs[1] + pad[1]), float(mins[1] - pad[1])]),
+            zaxis=dict(range=[-1.0, 1.0]),  # 给小范围避免退化(数据 z≡0)
+            # cube：三轴等长 → 各向异性的实物骨架(col~36 / row~295)被各自拉满 → 填满画面。
+            # data 模式会保比例→骨架缩成 6.7% 的细条(实测)；cube 才填满(实测 66%)。
+            aspectmode='cube',
+            # 相机沿 -z 看 x-y 平面(面对骨架)：露出 col 方向的弯曲(从 +x 看=侧视，
+            # 会把平面内的弯曲压进深度→只见一条直线="挤在一起")。up=+y 配合 y 反转→base 在上。
+            camera=dict(eye=dict(x=0.0, y=0.0, z=1.5),
+                        center=dict(x=0.0, y=0.0, z=0.0),
+                        up=dict(x=0.0, y=1.0, z=0.0)),
+        )
+    # 仿真 3D：cube 等比例 + up=最长轴(臂主轴竖直)
+    _longest = int(np.argmax(spans_safe))
+    _up = {0: (1.0, 0.0, 0.0), 1: (0.0, 1.0, 0.0), 2: (0.0, 0.0, 1.0)}[_longest]
     return dict(
         xaxis=dict(range=[float(mins[0] - pad[0]), float(maxs[0] + pad[0])]),
         yaxis=dict(range=[float(mins[1] - pad[1]), float(maxs[1] + pad[1])]),
         zaxis=dict(range=[float(mins[2] - pad[2]), float(maxs[2] + pad[2])]),
-        aspectmode='data',
-        camera=dict(
-            eye=dict(x=1.5, y=0.0, z=0.5),
-            center=dict(x=0.0, y=0.0, z=-0.1),
-            up=dict(x=0, y=0, z=1),
-        ),
+        aspectmode='cube',
+        camera=dict(eye=dict(x=1.5, y=0.0, z=0.5),
+                    center=dict(x=0.0, y=0.0, z=0.0),
+                    up=dict(x=_up[0], y=_up[1], z=_up[2])),
     )
 
 
@@ -219,91 +236,99 @@ def render_sdf_html(result, sdf_mode='mesh', gt_skeleton=None,
     return fig
 
 
-def render_animation(results, model_type, threshold, gt_skeletons,
-                     pred_skeletons, frame_indices, sdf_mode='mesh',
-                     output_path=None):
-    """多帧动画 HTML（带滑块）。"""
+def _frame_traces_3d(result, gt, pred, frame_idx, model_type, threshold, sdf_mode):
+    """构建单帧的 3D plotly traces 列表（供 render_animation 的 frames 使用）。"""
     import plotly.graph_objects as go
-
-    n_frames = len(results)
     is_sdf = model_type in ('sdf', 'skeleton_sdf')
     is_pc = model_type == 'flowmatch'
     is_skeleton = model_type in _SKELETON_MODEL_TYPES
-    fig = go.Figure()
+    tr = []
+    if is_sdf:
+        if result.get('vertices') is not None:
+            v, f = result['vertices'], result['faces']
+            tr.append(go.Mesh3d(
+                x=v[:, 0], y=v[:, 1], z=v[:, 2],
+                i=f[:, 0], j=f[:, 1], k=f[:, 2],
+                color='lightblue', opacity=0.8, name=f'Frame {frame_idx}'))
+    elif is_skeleton:
+        pts = result.get('points')
+        if pts is not None:
+            tr.append(go.Scatter3d(
+                x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
+                mode='lines+markers',
+                marker=dict(size=4, color='blue'), line=dict(color='blue', width=3),
+                name=f'Pred {frame_idx}'))
+    elif is_pc:
+        pts = result.get('points')
+        if pts is not None and len(pts) > 0:
+            tr.append(go.Scatter3d(
+                x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
+                mode='markers',
+                marker=dict(size=1.5, color='deepskyblue', opacity=0.6),
+                name=f'Frame {frame_idx}'))
+    else:
+        pts = result.get('points')
+        dens = result.get('density')
+        if pts is not None and dens is not None:
+            mask = dens > threshold
+            if mask.any():
+                tr.append(go.Scatter3d(
+                    x=pts[mask, 0], y=pts[mask, 1], z=pts[mask, 2],
+                    mode='markers',
+                    marker=dict(size=1.5, color=dens[mask], colorscale='Viridis', opacity=0.6),
+                    name=f'Frame {frame_idx}'))
+    for skel, color, name_prefix in [(gt, 'red', 'GT'), (pred, 'blue', 'Pred')]:
+        if skel is not None:
+            tr.append(go.Scatter3d(
+                x=skel[0], y=skel[1], z=skel[2],
+                mode='lines+markers',
+                marker=dict(size=3, color=color), line=dict(color=color, width=2),
+                name=f'{name_prefix} {frame_idx}'))
+    return tr
 
+
+def render_animation(results, model_type, threshold, gt_skeletons,
+                     pred_skeletons, frame_indices, sdf_mode='mesh',
+                     output_path=None):
+    """多帧动画 HTML（visibility-toggle 滑块；帧间不跳变）。
+
+    滑块用 method='update' 切换每帧 trace 的 visible——这是仿真沿用至今、稳定可用的写法
+    （拖动滑块即跳帧，从不卡顿）。⚠️ 不用 plotly frames+animate：在 WebGL scatter3d 上
+    实测会卡顿（拖动/播放一次后画面不再变化），即便修了 mode='immediate' 也复现，故放弃
+    frames 与 ▶播放按钮，回归此稳定实现。骨架模型坐标轴按全部帧求全局范围 + 固定相机，
+    兼容仿真 3D(米) / 实物 2D(像素)。
+    """
+    import plotly.graph_objects as go
+
+    n_frames = len(results)
+    is_skeleton = model_type in _SKELETON_MODEL_TYPES
+
+    # 全部帧 traces 平铺进一个 figure，初始只显示第 0 帧（visible 逐帧切换）
+    fig = go.Figure()
+    traces_per_frame = []
     for i in range(n_frames):
-        visible = (i == 0)
-        r = results[i]
         gt = gt_skeletons[i] if gt_skeletons else None
         pred = pred_skeletons[i] if pred_skeletons else None
+        tr = _frame_traces_3d(results[i], gt, pred, frame_indices[i],
+                              model_type, threshold, sdf_mode)
+        traces_per_frame.append(len(tr))
+        for t in tr:
+            t.visible = (i == 0)
+            fig.add_trace(t)
 
-        if is_sdf:
-            if r.get('vertices') is not None:
-                v, f = r['vertices'], r['faces']
-                fig.add_trace(go.Mesh3d(
-                    x=v[:, 0], y=v[:, 1], z=v[:, 2],
-                    i=f[:, 0], j=f[:, 1], k=f[:, 2],
-                    color='lightblue', opacity=0.8,
-                    visible=visible, name=f'Frame {frame_indices[i]}',
-                ))
-        elif is_skeleton:
-            pts = r.get('points')
-            if pts is not None:
-                fig.add_trace(go.Scatter3d(
-                    x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
-                    mode='lines+markers',
-                    marker=dict(size=4, color='blue'),
-                    line=dict(color='blue', width=3),
-                    visible=visible, name=f'Pred {frame_indices[i]}',
-                ))
-        elif is_pc:
-            pts = r.get('points')
-            if pts is not None and len(pts) > 0:
-                fig.add_trace(go.Scatter3d(
-                    x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
-                    mode='markers',
-                    marker=dict(size=1.5, color='deepskyblue', opacity=0.6),
-                    visible=visible, name=f'Frame {frame_indices[i]}',
-                ))
-        else:
-            pts = r.get('points')
-            dens = r.get('density')
-            if pts is not None and dens is not None:
-                mask = dens > threshold
-                if mask.any():
-                    fig.add_trace(go.Scatter3d(
-                        x=pts[mask, 0], y=pts[mask, 1], z=pts[mask, 2],
-                        mode='markers',
-                        marker=dict(size=1.5, color=dens[mask], colorscale='Viridis', opacity=0.6),
-                        visible=visible, name=f'Frame {frame_indices[i]}',
-                    ))
-
-        for skel, color, name_prefix in [(gt, 'red', 'GT'), (pred, 'blue', 'Pred')]:
-            if skel is not None:
-                fig.add_trace(go.Scatter3d(
-                    x=skel[0], y=skel[1], z=skel[2],
-                    mode='lines+markers',
-                    marker=dict(size=3, color=color),
-                    line=dict(color=color, width=2),
-                    visible=visible,
-                    name=f'{name_prefix} {frame_indices[i]}',
-                ))
-
-    # 滑块
-    steps = []
-    n_traces_per_frame = len(fig.data) // n_frames if n_frames > 0 else 1
+    # 滑块：每步 method='update'，只把对应帧的 traces 置 visible（visibility-toggle，稳定）
+    n_total = len(fig.data)
+    steps, base = [], 0
     for i in range(n_frames):
-        step = dict(
-            method='update',
-            args=[{'visible': [False] * len(fig.data)}],
-            label=str(frame_indices[i]),
-        )
-        for j in range(n_traces_per_frame):
-            step['args'][0]['visible'][i * n_traces_per_frame + j] = True
-        steps.append(step)
+        vis = [False] * n_total
+        for j in range(traces_per_frame[i]):
+            vis[base + j] = True
+        base += traces_per_frame[i]
+        steps.append(dict(method='update',
+                          args=[{'visible': vis}],
+                          label=str(frame_indices[i])))
 
-    # 坐标轴：骨架模型按"全部帧的预测点+GT+Pred"求全局范围（帧间不跳变），
-    # 兼容仿真米/实物像素；其他模型自适应。
+    # 坐标轴：骨架按全部帧求全局范围(帧间不跳变) + 固定相机；其他自适应
     if is_skeleton:
         _collect = []
         for i in range(n_frames):
@@ -317,7 +342,7 @@ def render_animation(results, model_type, threshold, gt_skeletons,
             if _p is not None:
                 _collect.append(_p)
         scene_cfg = _skeleton_scene_ranges(_collect) or dict(
-            aspectmode='data',
+            aspectmode='cube',
             camera=dict(eye=dict(x=1.5, y=0.0, z=0.5),
                         center=dict(x=0.0, y=0.0, z=-0.1),
                         up=dict(x=0, y=0, z=1)))
