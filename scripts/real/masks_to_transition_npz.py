@@ -126,8 +126,10 @@ def clean_outlier_skeletons(positions, deviation_px=80):
     return out, int(bad.sum()), bad
 
 
-def stabilize_static_region(positions, joint_xy, n_static=11):
+def stabilize_static_region(positions, joint_xy, n_static=None):
     """绝对位置锚定的静态段共识稳定（用户选定：均值/共识方案）。
+
+    n_static 为 None 时按 N 自适应(max(4, 0.4·N)), 任意 n_points 不需手调。
 
     双段臂: node0(图底/末端)..关节..node30(图顶/base)。只驱动末端 1-DOF → 动作段=
     node0..关节(保留每帧真实弯曲)；关节及以上(近端段)静止。但骨架按弧长重采样到 31 点,
@@ -149,6 +151,8 @@ def stabilize_static_region(positions, joint_xy, n_static=11):
         cons_col, cons_row: (n_static,) 静态段共识曲线。
     """
     T, _, N = positions.shape
+    if n_static is None:
+        n_static = max(4, int(0.4 * N))            # 静态段弧长重采样点数(随 N 缩放)
     xy = positions[:, :2, :]
     out = positions.copy()
     anchor = np.asarray(joint_xy, np.float64)
@@ -188,16 +192,14 @@ def stabilize_static_region(positions, joint_xy, n_static=11):
     return out, jn, cons_col, cons_row
 
 
-def detect_joint_xy(positions, node_lo=8, node_hi=25):
-    """robust 估计关节绝对位置 [col,row]。
-
-    关节处管-臂合并 → 局部 col 突偏(2nd-diff)；跨帧该位置稳定突偏。排除末端真实弯曲
-    (node0-7 高曲率)与上方 mask 缺块噪声区(node26-30)，在 node_lo..node_hi 范围取跨帧
-    mean|Δ²col| 峰值 node，返回其中位 (col,row)。默认搜 node8-25(关节实测落在 node19-21)。
-    """
+def detect_joint_xy(positions, node_lo=None, node_hi=None):
+    """robust 估计关节绝对位置 [col,row]。node_lo/node_hi 为 None 时按 N 的分数自适应
+    (排除末端弯曲段~前25% 与 上方缺块噪声~后15%), 使任意 n_points 都不需手调。"""
     T, _, N = positions.shape
+    if node_lo is None:
+        node_lo = max(4, int(0.25 * N))
     if node_hi is None:
-        node_hi = N - 3
+        node_hi = min(N - 3, int(0.85 * N))
     xy = positions[:, :2, :]
     mean_d2 = np.abs(np.diff(xy[:, 0, :], n=2, axis=1)).mean(axis=0)   # idx0..N-3 ↔ node1..N-2
     sub = mean_d2[node_lo - 1:node_hi]                                  # node_lo..node_hi+1

@@ -62,8 +62,11 @@ def interpolate_frames(positions, bad):
     return out
 
 
-def clean_split(positions, joint_xy, act_dev_thresh, act_nodes=18):
-    """增强清洗。动作段核心 nodes[0..act_nodes]恒为动作段(关节≥19)→用它检测残余离群。"""
+def clean_split(positions, joint_xy, act_dev_thresh, act_nodes=None):
+    """增强清洗。act_nodes=None→0.6·N(动作段核心节点数, 用于残余离群检测), 任意 N 自适应。"""
+    T, _, N = positions.shape
+    if act_nodes is None:
+        act_nodes = max(5, int(0.6 * N))
     raw = positions.copy()
     stab, jn, ccol, crow = stabilize_static_region(positions, joint_xy)
     act_xy = stab[:, :2, :act_nodes + 1]
@@ -124,6 +127,8 @@ def process_npz(npz_path, out_path, act_dev_thresh, act_nodes, joint_xy=None):
         joint_xy, peak_node = detect_joint_xy(pos)
     else:
         _, peak_node = detect_joint_xy(pos)
+    if act_nodes is None:
+        act_nodes = max(5, int(0.6 * pos.shape[2]))
     cleaned, raw, jn, ccol, crow, n_out, bad = clean_split(
         pos, joint_xy, act_dev_thresh, act_nodes)
     T, _, N = pos.shape
@@ -150,8 +155,8 @@ def main(argv=None):
     pa.add_argument('--act-dev-thresh', type=float, default=60.0,
                     help='动作段残余离群阈值 px(默认 60: 实测真实极端弯曲最大偏离~48px,'
                          '腐败>80px 已被 clean_outlier 处理,故 60 只兜底捕获残留腐败,不误伤真实极端弯曲)')
-    pa.add_argument('--act-nodes', type=int, default=18,
-                    help='动作段核心节点数(关节≥此+1;用于残余离群检测,默认18)')
+    pa.add_argument('--act-nodes', type=int, default=None,
+                    help='动作段核心节点数(用于残余离群检测;默认None=0.6·N 自适应)')
     pa.add_argument('--joint-col', type=float, default=None, help='手动指定关节 col(覆盖自动检测)')
     pa.add_argument('--joint-row', type=float, default=None, help='手动指定关节 row(覆盖自动检测)')
     pa.add_argument('--cam0', default=None, help='原图目录(默认 real_capture/data/raw/<seq>/cam0)')

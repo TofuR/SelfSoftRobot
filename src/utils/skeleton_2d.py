@@ -31,8 +31,8 @@ def _perpendicular_tip_fix(skeleton, binary_img, n_points):
     if len(xs) < 10:
         return skeleton
     pts = np.column_stack([xs.astype(float), ys.astype(float)])  # (col, row)
-    far = sk[min(7, n_points - 1)]       # body 节点(偏 base)
-    near = sk[min(3, n_points - 1)]      # body 节点(偏 tip)
+    far = sk[min(max(2, int(0.25 * n_points)), n_points - 1)]    # body 节点(偏 base, ~25%处)
+    near = sk[min(max(1, int(0.10 * n_points)), n_points - 1)]   # body 节点(偏 tip, ~10%处)
     seg = near - far                      # 指向 tip 的局部轴方向
     L = float(np.hypot(*seg))
     if L < 1e-6:
