@@ -100,7 +100,7 @@ def main(argv=None):
             window_size=temp_cfg["window_size"], n_orders=temp_cfg["n_scales"],
             encoder_type=args.encoder, z_dim=args.z_dim,
             episode_len=args.episode_len).to(device)
-        _warm_start_open_loop(model, args.init_from, device)
+        _warm_start_open_loop(model, args.init_from, device, action_dim=action_dim)
         p0 = model.training_spec.phases[0]
         p0.teacher_forcing_ratio = args.tf_ratio
         p0.tf_anneal_epochs = args.tf_anneal_epochs
@@ -134,20 +134,50 @@ def main(argv=None):
     trainer.train(data_dirs)
 
 
-def _warm_start_open_loop(model, init_from, device):
+def _ckpt_action_dim(ckpt_path):
+    """读 checkpoint 的 action_dim：优先 sibling config.json，否则从 state_mlp 权重推断。
+
+    state_mlp.0.weight 形状 [hidden, 6*action_dim]（输入拼接 [cond, flatten(s_{t-1}), v]）。
+    """
+    import json
+    exp_dir = os.path.dirname(os.path.dirname(os.path.dirname(ckpt_path)))  # .../exp_X
+    cfg = os.path.join(exp_dir, "config.json")
+    if os.path.isfile(cfg):
+        try:
+            with open(cfg) as f:
+                ad = json.load(f).get("action_dim")
+            if ad is not None:
+                return int(ad)
+        except Exception:
+            pass
+    try:
+        sd = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+        w = sd.get("temporal.state_mlp.0.weight")
+        if w is not None and w.dim() == 2 and w.shape[1] % 6 == 0:
+            return int(w.shape[1] // 6)
+    except Exception:
+        pass
+    return None
+
+
+def _warm_start_open_loop(model, init_from, device, action_dim=None):
     """open_loop 从 gt_transition checkpoint 热启动单步动力学。
 
     ⚠️ 必须 _migrate_gru_keys（gt ckpt 用旧 GRUCell 键名，strict=False 会静默丢弃整层 GRU）。
+    ⚠️ 自动检测时按 action_dim 过滤候选——否则可能选到仿真 ckpt(ad=2)套到实物模型(ad=1)
+       上 → state_mlp size mismatch 崩溃。传 action_dim 后只挑匹配的 checkpoint。
     """
     if init_from is None:
         cands = sorted(glob.glob(os.path.join(
             "train_log", "gt_transition", "*", "phase_gt_transition", "model",
             "best_model.pt")))
+        if action_dim is not None and cands:
+            cands = [c for c in cands if _ckpt_action_dim(c) == action_dim]
         if cands:
             init_from = cands[-1]
-            print(f"[warm-start] 自动检测 gt_transition checkpoint: {init_from}")
+            print(f"[warm-start] 自动检测 gt_transition checkpoint (action_dim={action_dim}): {init_from}")
     if init_from is None:
-        print("[warm-start] 未找到 gt_transition checkpoint — 从头冷启动。")
+        print(f"[warm-start] 未找到 action_dim={action_dim} 的 gt_transition checkpoint — 从头冷启动。")
         return
     if not os.path.exists(init_from):
         raise FileNotFoundError(f"--init_from 不存在: {init_from}")
@@ -161,6 +191,13 @@ def _warm_start_open_loop(model, init_from, device):
     assert not real_missing, (
         f"[warm-start BLOCKER] trained keys dropped (GRU etc.): {real_missing}. "
         f"missing={incompatible.missing_keys}, unexpected={incompatible.unexpected_keys}")
+    # reset delta_scale 到收缩值：gt 训练的 delta_scale(~4)对 open_loop 太大→tf=0 rollout
+    # 发散→BPTT 梯度 NaN。配合 model 的 delta_scale_max clamp，从 0.1 起在收缩区重新学。
+    if hasattr(model, 'delta_scale'):
+        with torch.no_grad():
+            model.delta_scale.fill_(0.1)
+        print(f"  reset delta_scale=0.1 (gt 值对开环太大→发散 NaN；clamp_max="
+              f"{getattr(model, 'delta_scale_max', 'inf')})")
     print(f"[warm-start] loaded {init_from}")
     print(f"  missing(应仅 mode buffer)={incompatible.missing_keys}")
     print(f"  unexpected(应仅 gt_observed_mode)={incompatible.unexpected_keys}")

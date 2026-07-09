@@ -79,6 +79,9 @@ class OpenLoopTransitionModel(StateTransitionSpatialModel):
             window_size=window_size, n_orders=n_orders, encoder_type=encoder_type,
             z_dim=z_dim,
         )
+        # open_loop 强制 delta_scale 收缩(≤1.0)：gt 热启动带入的 delta_scale~4 会让
+        # tf=0 的 40 步 rollout 发散→BPTT 梯度 NaN。clamp 到 1.0 保 rollout 有界(实测无 NaN)。
+        self.delta_scale_max = 1.0
         # 窗口开环模式标识（非参数，仅用于 model_loader 从 config.json 区分本模型；
         # 三类模型继承同一基类 → state_dict key 完全相同，无法靠 key 区分）
         self.register_buffer('open_loop_mode', torch.tensor(True))

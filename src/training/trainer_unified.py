@@ -436,6 +436,11 @@ class UnifiedTrainer:
 
                     optimizer.zero_grad()
                     losses["total"].backward()
+                    # 梯度裁剪：open_loop 等序列模型在 K 步 BPTT 下梯度易爆炸→NaN。
+                    # 默认 max_norm=1.0(RNN/BPTT 标准)，可用 config optimizer.grad_clip 覆盖/置 0 关闭。
+                    grad_clip = opt_cfg.get("grad_clip", 1.0)
+                    if grad_clip:
+                        torch.nn.utils.clip_grad_norm_(trainable, grad_clip)
                     optimizer.step()
 
                     epoch_loss += losses["total"].item()

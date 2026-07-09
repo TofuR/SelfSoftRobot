@@ -169,6 +169,10 @@ class StateTransitionSpatialModel(nn.Module, TemporalMixin):
         )
         # delta_scale: 可学习标量，约束 Δ 幅度，保证收缩、防 NaN
         self.delta_scale = nn.Parameter(torch.tensor(0.1))
+        # delta_scale 上限(默认 inf=不限)。open_loop 设小值(如 1.0)强制收缩——
+        # gt 训练会把 delta_scale 拉到 ~4(单步无累积可承受)，但 open_loop(tf=0)会因 Δ 放大
+        # 导致 40 步 rollout 发散→BPTT 梯度溢出 NaN。clamp 让 open_loop 保持收缩。
+        self.delta_scale_max = float('inf')
 
         # 冷启动回退：prev_skeleton=None 时用 cond 生成 GRU 种子（保持旧行为）
         self.init_hidden = nn.Sequential(
@@ -264,7 +268,9 @@ class StateTransitionSpatialModel(nn.Module, TemporalMixin):
         # S1：GRU 输入序列 (B, N, H)，每个节点 = cond + 该节点位置嵌入 + z 投影
         gru_seq = (cond + z_proj).unsqueeze(1) + z_emb_all.unsqueeze(0)  # (B, N, H)
         out, _ = self.gru(gru_seq, h.unsqueeze(0))                       # out (B, N, H)；h(种子)→h0(1,B,H)
-        delta = self.delta_scale * torch.tanh(self.delta_head(out))      # (B, N, 3)
+        # clamp delta_scale 到 delta_scale_max(默认 inf 不影响 gt；open_loop 设 1.0 强制收缩)
+        _ds = torch.clamp(self.delta_scale, max=self.delta_scale_max)
+        delta = _ds * torch.tanh(self.delta_head(out))      # (B, N, 3)
         if prev_skeleton is None:
             # 冷启动首帧：s_{t-1} 视为零，s_t = Δ
             skeleton = delta
