@@ -15,6 +15,7 @@ Loss 分两层:
 """
 
 import csv
+import glob
 import os
 import random
 import numpy as np
@@ -259,10 +260,28 @@ class UnifiedTrainer:
         for attr in ('skeleton_mode', 'rod_radius', 'd_filter', 'n_freqs',
                      'n_fine', 'n_medium', 'n_coarse', 'deform_n_freqs',
                      'fourier_n_freq', 'bspline_n_ctrl', 'catmullrom_n_ctrl',
-                     'encoder_type'):
+                     'encoder_type',
+                     'n_nodes', 'z_dim', 'episode_len'):   # 状态转移族关键参数(辨识模型用)
             val = getattr(model, attr, None)
             if val is not None:
                 config[attr] = val
+
+        # 数据预处理参数(从 npz 元数据读, 便于辨识"这个模型用的什么数据配置")
+        data_prep = {}
+        for _mode, _ddir in data_dirs.items():
+            _npzs = sorted(glob.glob(os.path.join(str(_ddir), '*.npz')))
+            if _npzs:
+                try:
+                    _d = np.load(_npzs[0], allow_pickle=False)
+                    for _k in ('n_points', 'tip_fix'):
+                        if _k in _d:
+                            _v = _d[_k]
+                            data_prep[_k] = _v.item() if hasattr(_v, 'item') else _v
+                except Exception:
+                    pass
+                break
+        if data_prep:
+            config['data_prep'] = data_prep
 
         # 多视角参数
         mv_cfg = self.config.get("multiview", {})
@@ -287,6 +306,24 @@ class UnifiedTrainer:
         path = os.path.join(phase_dir, "model", "phase_modules.pt")
         torch.save(save_dict, path)
         return path
+
+    def _write_model_card(self, exp_dir, cfg):
+        """写一行人类可读的 model_card.txt 到 exp 根目录, 方便浏览 train_log/ 时快速辨识模型。"""
+        try:
+            dp = cfg.get('data_prep', {})
+            line = (
+                f"{cfg.get('model_tag')} | {cfg.get('model')} | "
+                f"n_nodes={cfg.get('n_nodes')} action_dim={cfg.get('action_dim')} "
+                f"enc={cfg.get('encoder_type')} z_dim={cfg.get('z_dim')} "
+                f"K(episode_len)={cfg.get('episode_len')} win={cfg.get('window_size')} "
+                f"hidden={cfg.get('hidden_dim')} | "
+                f"data: {cfg.get('data_dirs', {}).get('sequence', '?')} "
+                f"| data_prep: n_points={dp.get('n_points', '-')} tip_fix={dp.get('tip_fix', '-')}\n"
+            )
+            with open(os.path.join(exp_dir, "model_card.txt"), "w", encoding="utf-8") as f:
+                f.write(line)
+        except Exception:
+            pass
 
     def _update_config_phase_trained(self, exp_dir, phase_name, best_loss):
         """Phase 完成后更新 config.json，标记 trained=true 并记录最终 loss。"""
@@ -357,6 +394,7 @@ class UnifiedTrainer:
         if exp_dir is None:
             exp_config = self._build_exp_config(data_dirs, n_epochs_per_phase)
             exp_dir = create_experiment(f"train_log/{self.model_tag}", exp_config)
+            self._write_model_card(exp_dir, exp_config)
 
         saved_modules_by_phase = {}
 

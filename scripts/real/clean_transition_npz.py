@@ -123,6 +123,7 @@ def process_npz(npz_path, out_path, act_dev_thresh, act_nodes, joint_xy=None):
     d = np.load(npz_path)
     pos = d['positions'].astype(np.float32)
     act = d['actions'].astype(np.float32)
+    _meta = {k: d[k].item() for k in ('n_points', 'tip_fix') if k in d}   # 保留数据配置元数据
     if joint_xy is None:
         joint_xy, peak_node = detect_joint_xy(pos)
     else:
@@ -141,8 +142,10 @@ def process_npz(npz_path, out_path, act_dev_thresh, act_nodes, joint_xy=None):
     print(f"    动作段(node0-{act_nodes}) 时间 std: 清洗前 {act_std_before:.2f} → 后 {act_std_after:.2f}px (应≈不变)")
     print(f"    残余离群(动作段>{act_dev_thresh}px)插值: {n_out} 帧")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    np.savez_compressed(out_path, positions=cleaned.astype(np.float32),
-                        actions=act.astype(np.float32))
+    kw = dict(positions=cleaned.astype(np.float32), actions=act.astype(np.float32))
+    for k, v in _meta.items():           # 透传 n_points/tip_fix 元数据
+        kw[k] = np.array(v)
+    np.savez_compressed(out_path, **kw)
     print(f"    → {os.path.relpath(out_path)}")
     return cleaned, raw, bad, joint_xy
 

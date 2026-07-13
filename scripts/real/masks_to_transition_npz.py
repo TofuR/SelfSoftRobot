@@ -208,10 +208,15 @@ def detect_joint_xy(positions, node_lo=None, node_hi=None):
     return joint_xy, peak_node
 
 
-def save_npz(path, positions, actions):
+def save_npz(path, positions, actions, n_points=None, tip_fix=None):
+    """存 npz。n_points/tip_fix 作元数据存入(供训练 config.json 记录数据配置, 辨识模型用)。"""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    np.savez_compressed(path, positions=positions.astype(np.float32),
-                        actions=actions.astype(np.float32))
+    kw = dict(positions=positions.astype(np.float32), actions=actions.astype(np.float32))
+    if n_points is not None:
+        kw['n_points'] = np.array(n_points)
+    if tip_fix is not None:
+        kw['tip_fix'] = np.array(bool(tip_fix))
+    np.savez_compressed(path, **kw)
     print(f"    {path}  positions={positions.shape} actions={actions.shape}")
 
 
@@ -286,8 +291,10 @@ def main():
     pos_tr, pos_va = positions[:n_train], positions[n_train:]
     act_tr, act_va = actions[:n_train], actions[n_train:]
     print(f">>> 切分: train {n_train} 帧 / val {n_val} 帧  → {out_root}")
-    save_npz(os.path.join(out_root, "train", f"{seq_name}_train.npz"), pos_tr, act_tr)
-    save_npz(os.path.join(out_root, "val", f"{seq_name}_val.npz"), pos_va, act_va)
+    save_npz(os.path.join(out_root, "train", f"{seq_name}_train.npz"), pos_tr, act_tr,
+             n_points=args.n_points, tip_fix=args.tip_fix)
+    save_npz(os.path.join(out_root, "val", f"{seq_name}_val.npz"), pos_va, act_va,
+             n_points=args.n_points, tip_fix=args.tip_fix)
 
     print(f"\n>>> 完成。训练: --data_dir {os.path.join(out_root,'train')}")
     print(f"           验证: {os.path.join(out_root,'val')}")
