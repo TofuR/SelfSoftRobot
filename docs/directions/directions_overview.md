@@ -2,7 +2,7 @@
 
 > 基于文献调研和深度讨论，从"出发点（真问题）"推导出的研究方向体系
 > 核心出发点：软体机器人自建模 = 带迟滞的 3D 全身状态估计
-> 最后更新：2026-06-24
+> 最后更新：2026-07-10
 
 ---
 
@@ -34,6 +34,8 @@
 > - **约束导向控制**：[16](16_constraint_oriented_control.md) 用前向模型作可微黑箱，给定避障点/任务约束反求动作序列（**迟滞感知**，区别于 hu2025 静态关节求逆）。
 >
 > 即「**骨架预测 → 全身形态 → 约束导向控制**」。实物数据采集已打通（[11 §最小验证平台](11_sim_to_real_transfer.md) + 采集程序 `docs/ref/Main UI-plc/`）。
+>
+> **实物免标定 2D 工作流已落地并训练验证**：1-DOF 双段臂 + 单相机 + 免标定，2D 图像骨架 `[col,row,0]` 作 state，NDI 末端作度量验证。GT 模型（`gt_transition exp_20260709_5`）末端误差 mean 0.77mm / median 0.57mm，已到 NDI 仿射标定底（0.74mm）；骨架+常数半径 r=14 即得形态 IoU 0.91（vs repaired mask），说明形态≈骨架+管、NN 空间小。详见 [docs/research/2026-07-10-real-data-2d-workflow.md](../research/2026-07-10-real-data-2d-workflow.md)。
 
 ---
 
@@ -158,7 +160,7 @@
 
 | 方向 | 文档 | 核心思想 | 优先级 |
 |------|------|---------|--------|
-| **骨架→形状转换** | [05_skeleton_to_shape_conversion.md](05_skeleton_to_shape_conversion.md) | Phase 0-3 迁移主线（接口→半径场→theta 截面→时序一致） | ★★★ |
+| **骨架→形状转换** | [05_skeleton_to_shape_conversion.md](05_skeleton_to_shape_conversion.md) | Phase 0-3 迁移主线（接口→半径场→theta 截面→时序一致）；已有半径偏移基线 `skeleton_to_shape.py`（骨架+常数半径 r=14 → IoU 0.91）作骨架引导形态预测的 v0 | ★★★ |
 | **拓扑引导残差流** | [09_topology_guided_residual_flow.md](09_topology_guided_residual_flow.md) | 物理粗变形 + FM 残差 | ★★☆ |
 | **从轮廓恢复形状** | [07_shape_from_silhouette.md](07_shape_from_silhouette.md) | 骨架条件 Visual Hull | ★★☆ |
 

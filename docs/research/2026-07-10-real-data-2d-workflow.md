@@ -179,6 +179,92 @@ data/real_seq/<seq>_clean/{train,val}/*.npz         清洗后 npz（静态段共
 
 ---
 
+## 7. 形态预测与 mask 级修复（两条独立修复轨道，不累计）
+
+§3.2/§3.3 的清洗都活在 **node 层**（骨架化之后）：把偏掉的节点拉回、用共识稳定。但**形态预测的 GT 是 mask**，
+mask 本身的分割误差（静态段顶部被截、非封闭孔、关节处宽度凸起）在 node 层修不了——node 层用共识把点拉回了，
+mask 仍错，不能当形态 GT。于是有**两条独立、不累计**的修复轨道：
+
+| 轨道 | 脚本 | 修什么 | 产物 |
+|---|---|---|---|
+| **node 轨道**（§3.2/§3.3，本工作流训练吃这条） | `masks_to_transition_npz` + `clean_transition_npz` | 骨架化后的节点偏移/抖动 | `data/real_seq/<seq>_clean/*.npz` |
+| **mask 轨道**（形态 GT 用） | `repair_masks.py` | mask 本身的分割误差（不重骨架化） | `derived/<seq>/masks_repaired/` |
+
+> "不累计"= 两条轨道各自从原始 `masks/` 出发，互不喂给对方。`masks_repaired/` 不进 npz 训练链，
+> 只在需要形态 GT（IoU/形态误差）时单独引用。
+
+### 7.1 mask 级修复 — `scripts/real/repair_masks.py`
+- **功能**：静态段（关节以上、跨帧稳定）**逐行宽共识**替换每帧；动作段（关节以下）不动（保留真实弯曲）；
+  全图 `binary_fill_holes` 兜底小洞。**只产 `masks_repaired/`，不碰 node npz。**
+- **关节行定位**：用**宽度凸起**（管-臂合并处宽 ~36 vs 常态 ~31）而非质心 std ——顶部质心 std 受缺失噪声干扰反而偏大，
+  宽度凸起是结构性、跨帧稳定的；实测关节 row~96，与 node 层 `detect_joint_xy`（row~95.7）一致。
+- **实测**：f4080 静态段顶部被截成 w=17 → 共识修复回 w=31；跨帧逐行质心 col **std 4.57 → 0.75 px**（静态段）；
+  动作段弯曲保留。
+- **CLI**：
+  ```bash
+  python scripts/real/repair_masks.py --seq seq_20260627_163921
+  python scripts/real/repair_masks.py --seq ... --joint-row 95   # 手动指定关节行
+  ```
+
+### 7.2 形态 = 骨架 + 管半径 基线 — `scripts/real/skeleton_to_shape.py`
+复用 `sdf_utils` 思路（SDF = dist_to_skeleton − radius）：骨架画成厚度 2r 的粗折线 + 节点圆 = 半径 r 的管。
+用来量化"形态被骨架+常数半径解释了多少"，决定 NN decoder / action 是否必要。
+
+- **uniform**：全臂常数半径 r（自动拟合 max-IoU vs GT mask）。
+- **variable**：per-node 半径（从 GT mask 估局部半宽 = `distance_transform_edt`），处理 taper/末端；**这是 offset 法的上界**
+  （预测时无 GT，需 NN 预测半径）。
+
+**实测结论**：uniform r=14 → **IoU 0.91**（vs repaired mask）。即形态 ≈ 骨架 + 常数管，**NN 空间小（~9%）**；
+残差（压力依赖宽度变化、末端 cap 形、taper）才是 NN 该学。action 窗口仅在"形态有骨架未捕捉的压力依赖形变"时才需要
+（骨架已编码弯曲，瞬时形态 ≈ f(骨架)）。
+
+- **演进路线**：v0 uniform → v1 per-node 半径（从 GT 估，上界）→ **v2 NN 预测半径**（预测时无 GT）。
+- **CLI**：
+  ```bash
+  python scripts/real/skeleton_to_shape.py \
+      --npz data/real_seq/seq_20260627_163921_clean/train/*.npz \
+      --masks-dir real_capture/data/derived/seq_20260627_163921/masks_repaired
+  # per-node 半径上界:
+  ... --mode variable
+  ```
+
+---
+
+## 8. 参数保存 / 模型辨识（config.json + model_card.txt）
+
+浏览 `train_log/` 时要快速回答"这个 exp 是什么模型、用了什么数据配置"。两处落盘保证可辨识 + 可回溯：
+
+### 8.1 `config.json`（机器可读，exp 根目录）
+`_build_exp_config`（`src/training/trainer_unified.py`）构建、`_update_config_phase_trained` 逐 phase 更新。
+状态转移族关键参数（辨识模型用）从模型实例读属性落盘：
+- **模型结构**：`n_nodes`、`z_dim`、`episode_len`（K）、`encoder_type`、`action_dim`、`window_size`、`hidden_dim`。
+- **数据预处理**（`data_prep` 子 dict）：**从 npz 元数据透传** `n_points`、`tip_fix`（`np.load(npz)[key]`），
+  便于辨识"这个模型用的什么骨架节点数 / 是否开了末端修复"。
+- 每个 phase 还记 `trained` 标志 + 最终 loss。
+
+### 8.2 `model_card.txt`（一行人类可读，exp 根目录）
+`_write_model_card` 把上面关键字段压成一行，扫目录时一眼辨识：
+```
+<model_tag> | <Model> | n_nodes=31 action_dim=1 enc=gru z_dim=16 K(episode_len)=40 win=... hidden=... | data: ..._clean/train | data_prep: n_points=31 tip_fix=True
+```
+
+### 8.3 `--n-points` 一处改全流水线
+骨架节点数 N 是贯穿全链路的维度。`masks_to_transition_npz --n-points N` 一处指定后：
+- npz 元数据记 `n_points`；
+- 节点索引全部按 **N 的分数**自适应（关节搜索 ~0.25–0.85·N、静态共识 ~0.4·N、动作段 ~0.6·N、末端修复 body 节点 ~0.10/0.25·N），
+  **不需手调任何魔法数**；
+- 训练时 `detect_n_nodes` 从 npz 探测 N → 喂模型 `n_nodes=N` → config.json 落盘；
+- 已验证 N=31/21/15 给**同一物理关节与末端**（节点索引分数化的直接收益）。
+
+### 8.4 旧 exp 回填 model_card
+早期 exp 可能缺 `model_card.txt`。因 `config.json` 已含全部所需字段，可从 config.json 重生成 model_card
+（`_write_model_card` 接收 cfg dict，喂回读出的 config.json 即可）。
+
+---
+
 **一句话流程**：`masks_to_transition_npz`（mask→2D npz, tip_fix）→ `clean_transition_npz`（静态共识）
 → `train_transition --mode gt/open_loop --data_dir ..._clean/train` → `eval_real_quant`（末端 mm via NDI + 形态 px）
 → `visualize_real_overlay`（预测叠照片）。
+
+> 形态 GT 走另一条 mask 修复轨道：`repair_masks`（静态段宽共识 → `masks_repaired/`）→ `skeleton_to_shape`
+> （骨架+半径基线，量化 NN 空间）。两条修复轨道独立、不累计（详见 §7）。
