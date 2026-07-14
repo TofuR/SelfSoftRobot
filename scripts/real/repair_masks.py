@@ -265,6 +265,58 @@ def repair_actuated(masks, joint_row, neighbors=(-2, -1, 1, 2),
     return out
 
 
+def repair_hand_frames(masks, area_ratio=1.3):
+    """整帧手污染/管茬/臂缺失修复。
+
+    判 needs_fix = (顶部行>20, 臂没到顶→臂缺失/手占据) OR (area>1.3×中位, 手合并)。
+    邻帧判 clean = (顶部行<=20 且 0.7~1.3×中位, 即完整臂) —— **不能只用 area**: partial-hand
+    帧(如 f2316 mask 只在 rows283-370) area 可能刚低于手阈值但仍腐败, 会污染插值。
+    half-mask 帧(顶部行<=20、area 正常)判为 clean, 留给 repair_actuated 处理(不在这里整帧替换)。
+    对每个 needs_fix 帧, 找最近 clean 邻帧 lo/hi, 逐行 [min,max] col 按 α 线性插值 → 跟随臂
+    运动重建臂 mask(手/管茬被剔除)。返回 (repaired, n_fix)。
+    """
+    T, H, W = masks.shape
+    areas = masks.sum(axis=(1, 2))
+    med = float(np.median(areas))
+    top_row = np.full(T, H, dtype=int)
+    for i in range(T):
+        rows = np.where(masks[i].any(1))[0]
+        if len(rows):
+            top_row[i] = int(rows.min())
+    clean = (top_row <= 20) & (areas >= 0.7 * med) & (areas <= 1.3 * med)
+    needs_fix = (top_row > 20) | (areas > 1.3 * med)   # ⊂ ~clean
+    fix_idx = np.where(needs_fix)[0]
+    if len(fix_idx) == 0:
+        return masks, 0
+    out = masks.copy()
+    for t in fix_idx:
+        lo = t - 1
+        while lo >= 0 and not clean[lo]:
+            lo -= 1
+        hi = t + 1
+        while hi < T and not clean[hi]:
+            hi += 1
+        if lo < 0 and hi >= T:
+            continue
+        if lo < 0:
+            lo = hi
+        if hi >= T:
+            hi = lo
+        alpha = (t - lo) / (hi - lo) if hi != lo else 0.0
+        new = np.zeros((H, W), np.uint8)
+        for r in range(H):
+            clo = np.where(masks[lo, r] > 0.5)[0]
+            chi = np.where(masks[hi, r] > 0.5)[0]
+            if len(clo) == 0 or len(chi) == 0:
+                continue
+            l = int(round((1 - alpha) * clo.min() + alpha * chi.min()))
+            rr = int(round((1 - alpha) * clo.max() + alpha * chi.max()))
+            if rr > l:
+                new[r, l:rr + 1] = 1
+        out[t] = new
+    return out, int(len(fix_idx))
+
+
 def montage(raw, rep, frame_ids, out_path):
     cells = []
     for fi in frame_ids:
@@ -272,7 +324,7 @@ def montage(raw, rep, frame_ids, out_path):
             continue
         pair = np.hstack([raw[fi] * 255, rep[fi] * 255]).astype(np.uint8)
         pair = np.repeat(pair[:, :, None], 3, 2)
-        cv2.putText(pair, f"f{fi} L=raw R=repaired", (8, 22),
+        cv2.putText(pair, f"f{fi} | LEFT=RAW mask | RIGHT=REPAIRED mask", (8, 22),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         cells.append(pair)
     if not cells:
@@ -295,6 +347,8 @@ def main(argv=None):
     pa.add_argument("--joint-row", type=int, default=None, help="手动指定关节行(默认自动检测)")
     pa.add_argument("--actuated", action=argparse.BooleanOptionalAction, default=True,
                     help="动作段时间插值修复(半mask/缺块, 默认开; --no-actuated 关闭)")
+    pa.add_argument("--hand", action=argparse.BooleanOptionalAction, default=True,
+                    help="整帧手污染/管茬时间插值(area>1.5×中位, 默认开; --no-hand 关闭)")
     pa.add_argument("--limit", type=int, default=None, help="只处理前 N 帧(预览)")
     args = pa.parse_args(argv)
 
@@ -312,7 +366,12 @@ def main(argv=None):
     joint_row, std = detect_joint_row(masks) if args.joint_row is None else (args.joint_row, None)
     print(f"  关节行(静态段以上) = row {joint_row} (静态段行 0..{joint_row - 1})")
 
-    rep = repair_static_segment(masks, joint_row)
+    rep = masks
+    if args.hand:
+        rep, n_hand = repair_hand_frames(masks)
+        if n_hand:
+            print(f"  [repair_hand_frames] 整帧手污染/管茬时间插值 {n_hand} 帧 (area>1.5×中位)")
+    rep = repair_static_segment(rep, joint_row)
     if args.actuated:
         rep = repair_actuated(rep, joint_row, verbose=True)
 
@@ -336,8 +395,12 @@ def main(argv=None):
     print(f"  → {out_dir}")
 
     ids = [f for f in [100, 4079, 4080, 4085, 4902, 2330, T // 2, T - 1] if f < T]
-    montage(masks, rep, ids, os.path.join(out_dir, "repair_qc_montage.png"))
-    print(f"  QC: {os.path.join(out_dir, 'repair_qc_montage.png')} (左=raw 右=repaired)")
+    # montage 写到 out_dir/qc/ 子目录(非递归 glob 不污染; 名称自描述)
+    qc_dir = os.path.join(out_dir, "qc")
+    os.makedirs(qc_dir, exist_ok=True)
+    qc_path = os.path.join(qc_dir, "mask_raw_vs_repaired.png")
+    montage(masks, rep, ids, qc_path)
+    print(f"  QC: {qc_path} (左=raw 右=repaired)")
 
 
 if __name__ == "__main__":

@@ -231,7 +231,8 @@ def build_parser():
                     help="逗号分隔的通道下标(默认 0=ch0；本序列单通道)")
     pa.add_argument("--action-max", default=None,
                     help="每通道归一化上限(逗号分隔, kPa)；默认读 meta.json hi6[ch]")
-    pa.add_argument("--n-points", type=int, default=31)
+    pa.add_argument("--n-points", type=int, default=15,
+                    help="骨架节点数(默认 15; 实测降节点误差不大, 全管线按 N 分数自适应)")
     pa.add_argument("--tip-fix", action=argparse.BooleanOptionalAction, default=True,
                     help="末端 node0 垂直切片修正(修弯管 cap 角落偏移, 实物默认开; --no-tip-fix 关闭)")
     pa.add_argument("--skel-dev-thresh", type=float, default=80.0,
