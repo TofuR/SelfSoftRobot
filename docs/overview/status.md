@@ -105,9 +105,9 @@
 
 16 个研究方向在 [`../directions/`](../directions/)(`directions_overview.md` 索引)。当前焦点:
 
-- **方向 14(gt_observed)**: 实物每步观测, 当前主线, 已到 NDI 噪声底。
-- **方向 15(open_loop)**: 窗口开环 rollout, 热启动自 gt, drift_by_k 评估中。
-- **方向 13(closed_loop)**: 纯自回归(误差无界, 作对照)。
+- **部署目标 = open_loop(方向15)**: 形状控制需"给定动作→预测形状"的规划能力, open_loop 是部署形态; gt(方向14)退为训练基础+精度上界(NDI 0.77mm)。[[open-loop-deployment-target]]
+- **方向 16(逆运动学形状控制, 新进展)**: 方向1 视野认证(`eval_horizon.py`, open_loop drift 1.7×, K_max~50-120步) + 方向2 可微逆规划(`scripts/control/inverse_plan.py`, reach 3.07px / 0.38× do-nothing)已验证。详见 [`../directions/16_constraint_oriented_control.md`](../directions/16_constraint_oriented_control.md)。
+- **方向 13(closed_loop)**: 纯自回归(误差无界, 作对照; gt 漂移 272× 不可作规划仿真器)。
 - **SAM2 mask**: 已就绪, 待对比 SAM2 vs 启发式 mask 对模型精度的影响。
 - 仿真侧: 多视角(方向C, 消除深度歧义)、sim2real(方向D)。
 
