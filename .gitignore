@@ -36,3 +36,9 @@ output/
 .claude/
 docs/ref/
 docs/papers/*.pdf
+
+# SAM2 (大: 源码/checkpoints/输出仅本地; 只入库脚本 sam2/segment_video.py 与 README)
+sam2/sam2_src/
+sam2/checkpoints/
+sam2/masks/
+sam2/_jpeg_tmp/
