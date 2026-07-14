@@ -128,6 +128,42 @@ def dataset_qc(args):
     print(f"→ {out_png}  ({len(cells)} 帧 ×4列: raw mask | {args.src_tag} mask | skel-from-{args.src_tag} | cleaned-skel)")
 
 
+def overlay_qc(args):
+    """单帧叠图 montage: 每帧 = 原图 + mask(半透明绿) + 骨架 node(黄), 拼成一张 PNG。
+    用途: 直观看某 mask 源 + 其骨架(来自 npz, 通常清洗后) 在原图上的效果。
+      python scripts/real/viz_qc.py overlay --npz <npz> --mask-dir <masks> --tag sam2 --seq <seq>
+    """
+    frames = [int(x) for x in args.frames.split(",")] if args.frames else DEFAULT_FRAMES
+    d = np.load(args.npz)
+    pos = d["positions"].astype(np.float32)          # (T,3,N)
+    N = pos.shape[2]
+    cells = []
+    for f in frames:
+        if f >= len(pos):
+            continue
+        sk = pos[f, :2, :].T                          # (N,2) [col,row]
+        m = _load_mask(args.mask_dir, f)
+        photo = _photo(args.seq, f)
+        img = _mask_on_photo(photo, m, alpha=0.4, color=(0, 255, 0))   # 绿=mask
+        _draw_skel(img, sk, (0, 255, 255))                              # 黄=node
+        _label(img, f"f{f} | {args.tag.upper()} mask(green)+node(yellow) N={N}")
+        cells.append(img)
+    if not cells:
+        print("[skip] 无可用帧")
+        return
+    h, w = cells[0].shape[:2]
+    cols = args.cols
+    rows = int(np.ceil(len(cells) / cols))
+    grid = np.zeros((rows * h, cols * w, 3), np.uint8)
+    for k, im in enumerate(cells):
+        r, c = divmod(k, cols)
+        grid[r * h:(r + 1) * h, c * w:(c + 1) * w] = im
+    out_png = os.path.join(args.out, f"overlay_{args.tag}.png")
+    os.makedirs(args.out, exist_ok=True)
+    cv2.imwrite(out_png, grid)
+    print(f"→ {out_png}  ({len(cells)} 帧, 每帧: 原图+{args.tag} mask(绿)+node(黄))")
+
+
 def main(argv=None):
     pa = argparse.ArgumentParser(description="清晰标注的 QC 可视化(raw vs 处理过, mask vs node)")
     sub = pa.add_subparsers(dest="mode", required=True)
@@ -148,8 +184,18 @@ def main(argv=None):
     pd.add_argument("--frames", default=None)
     pd.add_argument("--out", required=True)
 
+    po = sub.add_parser("overlay", help="单帧叠图: 原图+mask+骨架(node) montage")
+    po.add_argument("--npz", required=True, help="骨架 npz(用其 positions 画 node)")
+    po.add_argument("--mask-dir", required=True, help="mask 目录(叠图层)")
+    po.add_argument("--tag", required=True, help="mask 标签(如 sam2/repaired/raw)")
+    po.add_argument("--seq", default="seq_20260627_163921")
+    po.add_argument("--frames", default=None, help="逗号分隔帧(默认含腐败+抽样)")
+    po.add_argument("--cols", type=int, default=3, help="montage 列数")
+    po.add_argument("--out", required=True)
+
     args = pa.parse_args(argv)
-    (mask_compare if args.mode == "mask-compare" else dataset_qc)(args)
+    fn = {"mask-compare": mask_compare, "dataset": dataset_qc, "overlay": overlay_qc}[args.mode]
+    fn(args)
 
 
 if __name__ == "__main__":

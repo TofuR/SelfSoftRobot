@@ -345,11 +345,25 @@ def composite(mask, skels, cam0_path):
 
 # ----------------------------- 主流程 -----------------------------
 def main(argv=None):
+    global MASKS, CAM0, OUT, SEQ
     pa = argparse.ArgumentParser()
     pa.add_argument("--n-sample", type=int, default=24)
     pa.add_argument("--frames", default=None, help="指定帧(逗号分隔), 覆盖采样")
     pa.add_argument("--n-points", type=int, default=31)
+    pa.add_argument("--seq", default=SEQ,
+                    help="序列/数据集名(定 outlier 文件 + 默认 mask/cam0 路径; "
+                         "传数据集名如 seq_..._n15_sam2 可用其 outlier 文件)")
+    pa.add_argument("--masks-dir", default=None,
+                    help="mask 目录(默认 derived/<seq>/masks; 传 sam2/masks/<seq>_full 比 SAM2)")
+    pa.add_argument("--cam0", default=None, help="原图目录(默认 raw/<seq>/cam0)")
+    pa.add_argument("--out", default=None, help="输出目录(默认 output/skeleton_method_cmp)")
     args = pa.parse_args(argv)
+
+    SEQ = args.seq
+    MASKS = args.masks_dir or os.path.join(PROJECT_ROOT, "real_capture", "data", "derived", SEQ, "masks")
+    CAM0 = args.cam0 or os.path.join(PROJECT_ROOT, "real_capture", "data", "raw", SEQ, "cam0")
+    OUT = args.out or os.path.join(PROJECT_ROOT, "output", "skeleton_method_cmp")
+    print(f"mask: {MASKS}\ncam0: {CAM0}\nout:  {OUT}")
 
     allf = sorted(int(os.path.splitext(f)[0]) for f in os.listdir(MASKS) if f.endswith(".png"))
     if args.frames:
