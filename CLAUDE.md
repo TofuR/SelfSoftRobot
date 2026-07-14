@@ -10,7 +10,7 @@ The project builds on the FBV-SM (Field-Based Vision Soft Manipulation) codebase
 
 The project follows **two data routes**:
 - **(A) Simulation** — PyElastica 3D arm + PyVista rendering (the original main line; all `train_unified` / MS-SCNF / SkeletonSDF work below stays valid).
-- **(B) Real-world** (newer, calibration-free) — a physical 1-DOF two-segment soft arm driven by a TwinCAT PLC + syringe motors, single Intel RealSense camera, **no camera calibration**: the 2D image skeleton `[col,row,0]` is used directly as `state` (predicted output is de-normalized back to pixels), and an NDI 6DOF tracker provides end-effector ground truth in mm for metric validation. The full real-data pipeline is documented in [`docs/research/2026-07-10-real-data-2d-workflow.md`](docs/research/2026-07-10-real-data-2d-workflow.md).
+- **(B) Real-world** (newer, calibration-free) — a physical 1-DOF two-segment soft arm driven by a TwinCAT PLC + syringe motors, single Intel RealSense camera, **no camera calibration**: the 2D image skeleton `[col,row,0]` is used directly as `state` (predicted output is de-normalized back to pixels), and an NDI 6DOF tracker provides end-effector ground truth in mm for metric validation. The full real-data pipeline is documented in [`docs/real_data/workflow.md`](docs/real_data/workflow.md).
 
 ## Running the Code
 
@@ -70,7 +70,7 @@ There is no formal test suite. Validation is done through notebooks and the eval
 
 ### Real-Data Pipeline (route B, calibration-free 2D)
 
-Data prep → training → evaluation. Full workflow in [`docs/research/2026-07-10-real-data-2d-workflow.md`](docs/research/2026-07-10-real-data-2d-workflow.md).
+Data prep → training → evaluation. Full workflow in [`docs/real_data/workflow.md`](docs/real_data/workflow.md).
 
 ```bash
 # --- scripts/real/ : mask + skeleton prep ---

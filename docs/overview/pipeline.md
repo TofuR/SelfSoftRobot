@@ -1,7 +1,7 @@
 # 软体机器人自建模 — 项目技术文档
 
 > 本文档介绍项目的技术管线、模型设计思路、以及从基线方法到 MS-SCNF 的演进过程。
-> 具体文件说明和运行命令见 [PROJECT_HELP.md](PROJECT_HELP.md)。
+> 具体文件说明和运行命令见 [project_help.md](project_help.md)。
 
 ---
 

@@ -85,7 +85,7 @@ python scripts/real/capture_to_npz.py \
 CUDA_VISIBLE_DEVICES=1 python scripts/training/train_gt_transition.py --data_dir data/real_seq
 ```
 > 单相机 + 平面弯曲用 `--planar-lift`；多相机三角化去掉它并给多视角。详见
-> `docs/research/2026-06-19-real-data-pipeline-howto.md`。
+> `docs/real_data/workflow.md`。
 
 ## mock 选项（任意组合）
 - `--mock`：三个组件全 mock（= `--mock-cam --mock-valve --mock-ndi`）。
