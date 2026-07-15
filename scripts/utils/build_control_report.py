@@ -173,6 +173,9 @@ __PLAN_GIF__
 <div class="key"><b>机制</b>: 避障 = loss 加 <code>w_obs·Σ_k Σ_obs relu(r−dist(ŝ_k,obs))²</code>。每步骨架都被罚穿透
 → 优化出的轨迹全程避开。CLI: <code>--obstacle "cx,cy,r"</code>(<code>|</code>分隔多个)。注: 单调约束让中间受控,
 避障才有意义——否则(末态only)中间会穿过障碍再回来。</div>
+<p><b>实跑演示</b>(t1772→t1812, 障碍圆心 (322,268) r=12px, 正落在末端摆动路径上):</p>
+__OBSTACLE_DEMO__
+<div class="cap">左: 无避障直线穿过(节点最近 10.2px &lt; r, 穿透); 右: 有避障绕开(最近 12.7px &gt; r, 达标)。代价: reach 4.3→8.7px(为绕路牺牲精度, 诚实权衡)。</div>
 
 <h3>3.5 变长 K: 据首末差距选步数(修"固定 40 步中间反复横跳")</h3>
 <p><b>你的诊断对</b>: 固定 K=40 时, 目标只需几步即可到达, 多余步数"闲不住" → 中间反复横跳(plan_reach.gif 现象)。
@@ -319,7 +322,8 @@ def main():
             .replace("__K_CHOSEN__", str(K))
             .replace("__K_SWEEP__", img_tag(os.path.join(fd, "plan_k_sweep.png")))
             .replace("__K_SWEEP_TABLE__", ktab)
-            .replace("__PLAN_TRAJ__", img_tag(os.path.join(fd, "plan_trajectory.png"))))
+            .replace("__PLAN_TRAJ__", img_tag(os.path.join(fd, "plan_trajectory.png")))
+            .replace("__OBSTACLE_DEMO__", img_tag(os.path.join(fd, "obstacle_compare.png"))))
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w") as f:
