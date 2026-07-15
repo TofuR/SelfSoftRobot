@@ -176,6 +176,9 @@
 | **视觉辅助部署** | [10_vision_corrected_deployment.md](10_vision_corrected_deployment.md) | 在线适应 + 残差修正 | ★★☆ |
 | **Sim-to-Real 迁移** | [11_sim_to_real_transfer.md](11_sim_to_real_transfer.md) | 残差物理 / 域随机化（实物硬件+采集管线已打通） | ★★☆ |
 | **约束导向控制** | [16_constraint_oriented_control.md](16_constraint_oriented_control.md) | 前向模型作可微黑箱，给定约束反求动作序列（迟滞感知） | ★★☆ |
+| **路径依赖 IK（论文方向）** | [17_path_dependent_ik.md](17_path_dependent_ik.md) | 软体臂 IK 是泛函非函数：准静态方法在动态/循环加载下物理性失败 + history-aware 修复；实物 hysteresis loop 已验证（路径依赖 1.5–2mm） | ★★★ |
+
+> **下一篇论文的骨架**：[17](17_path_dependent_ik.md) 把 [16](16_constraint_oriented_control.md) 的控制工程升级为科学问题——"软体臂 IK 路径依赖"。三问检验①（迟滞真实）已用原始数据验证；②（无记忆方法失败）待训 window=1 对照。
 
 ---
 
