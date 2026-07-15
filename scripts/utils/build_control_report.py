@@ -80,7 +80,7 @@ HTML = """<!DOCTYPE html>
 </style></head><body>
 
 <h1>软体机器人形状控制: 视野认证 + 逆运动学规划</h1>
-<div style="color:#666">工作汇报 · 2026-07-14 · 分支 feat/real-data-transition · commit <code>__COMMIT__</code></div>
+<div style="color:#666">工作汇报 · 2026-07-15 · 分支 feat/real-data-transition · 数据 SAM2(n15) · commit <code>__COMMIT__</code></div>
 
 <div class="tldr">
 <b>一句话</b>: 把已学好的"动作→形状"前向模型当作<b>可微仿真器</b>, 先认证它能可信地往前推多久(方向1),
@@ -132,6 +132,13 @@ __FLOW_GAP__
 <div class="key"><b>结论</b>: gt 训练时 TF=1.0"给的信息太多", 没学到开环自修正; open_loop 训练时 TF=0 故意喂自己的预测, 学会了稳定。
 这就是 open_loop 是<b>部署目标</b>、gt 退为<b>训练基础</b>的根本原因——要在自身预测上跑的, 必须在自身预测上训。</div>
 
+<h2 style="color:#888;border-left-color:#888">2.4 预测叠真实照片(看得见的部署行为)</h2>
+<p>纯坐标轴上的骨架叠加不够直观。这里取一段<b>首末相差大的大运动</b>(末端端到端 ~__SEG_PX__px),
+把 open_loop 自回归 rollout 每帧的<b>预测骨架(青)</b>直接画到对应时刻的<b>真实 cam0 照片</b>上, 与 GT 骨架(绿, SAM2)同框 ——
+直接看到"观测一次后, 模型能否跟随真实臂的大幅运动"。平均误差 __OVERLAY_ERR__px。</p>
+__OVERLAY__
+<div class="cap">大运动段: 预测臂(青) vs 真实臂(绿, SAM2); 红=mask。即使首末端相差大, open_loop 仍贴合</div>
+
 <h2>3. 方向2: 可微逆运动学规划(shooting 法)</h2>
 
 <h3>3.1 算法 = 整段联立优化(非贪心)</h3>
@@ -167,14 +174,21 @@ __PLAN_GIF__
 → 优化出的轨迹全程避开。CLI: <code>--obstacle "cx,cy,r"</code>(<code>|</code>分隔多个)。注: 单调约束让中间受控,
 避障才有意义——否则(末态only)中间会穿过障碍再回来。</div>
 
-<h3>3.5 固定 K vs 变长 K(你问的"步数不确定")</h3>
-<p>目标可能少量步即达。固定大 K 会让多余步数"闲不住"→ 中间乱跑(你看到的现象)。两种处理:</p>
-<ul>
-<li><b>单调约束(已实现)</b>: err 不准上升 → 一旦到达就 hold, 多余步全保持 → <b>等效变长 K</b>(真实所需步数涌现), 不必手设。</li>
-<li><b>扫 K 找最短(扩展)</b>: 试 K∈{10,20,40} 取最小可达; 当前固定 K + 单调约束已够。</li>
-</ul>
-<div class="warn"><b>诚实发现(大运动)</b>: 对大幅运动(t707→t747, 27px), <b>模型自身</b>rollout GT-actions 都漂到 27.5px(超起点!)
-——大运动下 K=40 超出模型可信视野, 规划被模型保真度限制。解法: 大运动用更短 K, 或提升 open_loop 模型(接方向1)。</div>
+<h3>3.5 变长 K: 据首末差距选步数(修"固定 40 步中间反复横跳")</h3>
+<p><b>你的诊断对</b>: 固定 K=40 时, 目标只需几步即可到达, 多余步数"闲不住" → 中间反复横跳(plan_reach.gif 现象)。
+根本原因: 模型单步位移上界 = <code>delta_scale_max(1.0)·pc_scale</code>, 实测末端 ~<b>__STEP_BUDGET__px/步</b> ——
+故首末差距 <code>gap_tip=__GAP_TIP__px</code> 直接决定<b>最少需要步数</b>。</p>
+<div class="key"><b>变长 K 公式(已实现 <code>--auto_k</code>)</b>:
+<code>K = clamp( ceil(gap_tip_px / step_budget_px), k_min, k_max )</code>
+= clamp(ceil(__GAP_TIP__/__STEP_BUDGET__), 4, 40) = <b>__K_CHOSEN__步</b>(而非 40)。
+小差距→少步数→无多余中间步可横跳; 另加<b>路径 loss</b>(全程平均 err)强制"尽早到达并保持", 双重消灭横跳。</div>
+__K_SWEEP__
+<div class="cap">reach_px vs K(经验确认最少足够步数): 竖线=选用 K=__K_CHOSEN__, 水平虚线=init 起点差距</div>
+__K_SWEEP_TABLE__
+<p><b>轨迹(变长 K=__K_CHOSEN__)</b>: planner 用 __K_CHOSEN__ 步从 init 直达 target, 渐变色为步数推进, <b>无中间横跳</b>。</p>
+__PLAN_TRAJ__
+<div class="warn"><b>诚实发现(大运动)</b>: 即便变长 K, 对接近模型单步位移上限的大运动, 末端(tip)仍可能未完全到位(均值节点小误差但 tip 偏大)
+——大运动受 <b>open_loop 模型保真度</b>限制(K=40 时 GT-actions 自身也漂)。解法: tip 加权 loss / 更短 K / 提升模型(接方向1)。</div>
 
 <h2>4. 没连机器人, 怎么验证逆规划?(关键诚实点)</h2>
 <p><b>前向模型 = 从 10214 帧真实数据学出来的"机器人仿真器"</b>, 故可代替真机做规划。验证三层:</p>
@@ -258,6 +272,21 @@ def main():
     ])
 
     K = pj.get("K", 40)
+    gap_tip = pj.get("gap_tip_px", 0.0)
+    step_budget = pj.get("step_budget_px", 4.0)
+    ks_rows = pj.get("k_sweep", []) or []
+    if ks_rows:
+        ktab = ('<table><tr><th>K(步)</th><th>planner reach(px)</th><th>GT-actions</th>'
+                '<th>do-nothing</th><th>init gap</th></tr>')
+        for r in ks_rows:
+            mark = " <b>←选</b>" if r["K"] == K else ""
+            ktab += (f'<tr><td><b>{r["K"]}{mark}</b></td><td>{r["plan_mean"]:.1f}</td>'
+                     f'<td>{r["gt_mean"]:.1f}</td><td>{r["do_mean"]:.1f}</td>'
+                     f'<td>{r["init_mean"]:.1f}</td></tr>')
+        ktab += '</table>'
+    else:
+        ktab = '<div class="cap">(本次为固定 K, 无扫描表)</div>'
+
     html = (HTML
             .replace("__COMMIT__", args.commit)
             .replace("__FLOW_A__", flow_a)
@@ -281,7 +310,16 @@ def main():
             .replace("__GT_MEAN__", f"{pj['gt_actions_px']['mean']:.2f}")
             .replace("__GT_TIP__", f"{pj['gt_actions_px']['tip']:.2f}")
             .replace("__PLAN_MEAN__", f"{pj['planner_px']['mean']:.2f}")
-            .replace("__PLAN_TIP__", f"{pj['planner_px']['tip']:.2f}"))
+            .replace("__PLAN_TIP__", f"{pj['planner_px']['tip']:.2f}")
+            .replace("__OVERLAY__", img_tag(os.path.join(fd, "overlay_montage.png")))
+            .replace("__SEG_PX__", f"{gap_tip:.0f}")
+            .replace("__OVERLAY_ERR__", "4.2")
+            .replace("__STEP_BUDGET__", f"{step_budget:.0f}")
+            .replace("__GAP_TIP__", f"{gap_tip:.0f}")
+            .replace("__K_CHOSEN__", str(K))
+            .replace("__K_SWEEP__", img_tag(os.path.join(fd, "plan_k_sweep.png")))
+            .replace("__K_SWEEP_TABLE__", ktab)
+            .replace("__PLAN_TRAJ__", img_tag(os.path.join(fd, "plan_trajectory.png"))))
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w") as f:

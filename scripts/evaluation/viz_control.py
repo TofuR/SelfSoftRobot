@@ -32,8 +32,12 @@ import argparse
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
+import re
+import cv2
 import numpy as np
 import torch
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import matplotlib
 matplotlib.use("Agg")
@@ -239,6 +243,101 @@ def viz_plan_gif(model, history_t, s_init, s_target, a_plan, K, window_size,
     ani.save(out_path, writer=PillowWriter(fps=6)); plt.close()
 
 
+# ── 4. 大运动段自动选择(首末端端到端位移最大) ──
+def pick_large_motion_segment(positions, segment_len, top_n=1):
+    """返回末端(node0)端到端位移最大的 segment_len 段起始索引 + disp 数组。
+    positions (T,3,N)。端到端位移 = ||tip(i+len)-tip(i)||(px), 选单调大移动非高频抖动。"""
+    T = positions.shape[0]
+    node0 = positions[:, :, 0]                       # (T,3) [col,row,z]
+    seg = min(segment_len, T - 1)
+    disp = np.array([np.hypot(node0[i + seg, 0] - node0[i, 0],
+                              node0[i + seg, 1] - node0[i, 1])
+                     for i in range(T - seg)])
+    top = np.argsort(disp)[::-1][:top_n]
+    return sorted(int(i) for i in top), disp
+
+
+# ── 5. 真实照片叠加(预测骨架 / GT 骨架 画到 cam0 原图) ──
+def guess_raw_seq(data_dir):
+    """data_dir=.../seq_YYYYMMDD_HHMMSS[_n15][_sam2][_clean]/{train,val} → 原始 seq 名。"""
+    base = os.path.basename(os.path.dirname(os.path.normpath(data_dir)))
+    m = re.search(r"seq_\d{8}_\d{6}", base)
+    return m.group(0) if m else base
+
+
+def auto_offset_npz(data_dir):
+    """npz 索引 t → cam0 全局帧号偏移。train=0; val=len(sibling train positions)。"""
+    base = os.path.dirname(os.path.normpath(data_dir))
+    split = os.path.basename(os.path.normpath(data_dir))
+    if split == "val":
+        tr = sorted(glob.glob(os.path.join(base, "train", "*.npz")))
+        if tr:
+            return int(np.load(tr[0])["positions"].shape[0])
+    return 0
+
+
+def _draw_skel_cv(img, xy, color, r=3, lw=2):
+    if xy is None or np.abs(xy).max() == 0:
+        return
+    pts = np.round(xy).astype(np.int32).reshape(-1, 1, 2)
+    cv2.polylines(img, [pts], False, color, lw, cv2.LINE_AA)
+    for p in pts.reshape(-1, 2):
+        cv2.circle(img, (int(p[0]), int(p[1])), r, color, -1, cv2.LINE_AA)
+
+
+def overlay_one(photo, mask, gt_xy, pred_xy, err, frame):
+    """单帧合成: 原图 + mask 半透明红 + GT骨架(绿) + 预测骨架(青) + 末端圈 + 误差标注。"""
+    img = photo.copy()
+    if mask is not None and mask.any():
+        ov = img.copy(); ov[mask > 0] = (0, 0, 255)
+        cv2.addWeighted(ov, 0.22, img, 0.78, 0, dst=img)
+    _draw_skel_cv(img, gt_xy, (0, 255, 0), r=3, lw=2)
+    _draw_skel_cv(img, pred_xy, (255, 255, 0), r=3, lw=2)
+    if gt_xy is not None and np.abs(gt_xy).max() > 0:
+        cv2.circle(img, (int(gt_xy[0, 0]), int(gt_xy[0, 1])), 6, (0, 220, 0), 2)
+    if pred_xy is not None and np.abs(pred_xy).max() > 0:
+        cv2.circle(img, (int(pred_xy[0, 0]), int(pred_xy[0, 1])), 6, (0, 200, 255), 2)
+    cv2.putText(img, f"f{frame} err={err:.1f}px", (8, 26),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+    return img
+
+
+def viz_overlay_montage(model, actions_norm_t, positions, t0, max_steps, window_size,
+                        pc_center, pc_scale, device, cam0_dir, masks_dir, offset,
+                        n_show, out_path, title):
+    """open_loop 纯自回归 rollout(种子 t0), 把每帧预测骨架叠在真实 cam0 照片上拼 montage。
+    preds[k-1] 对应真实帧 t0+k → cam0 全局帧号 t0+k+offset。"""
+    preds, gts = rollout_autoregressive(model, actions_norm_t, positions, t0,
+                                        max_steps, window_size, device)
+    K = preds.shape[0]
+    idxs = np.linspace(0, K - 1, n_show).astype(int)
+    cells, errs = [], []
+    for ki in idxs:
+        frame = t0 + (ki + 1) + offset           # preds[ki] = 预测真实帧 t0+ki+1
+        ip = os.path.join(cam0_dir, f"{frame:05d}.png")
+        photo = cv2.imread(ip)
+        if photo is None:
+            continue
+        mp = os.path.join(masks_dir, f"{frame:05d}.png")
+        mask = (cv2.imread(mp, cv2.IMREAD_GRAYSCALE) > 127).astype(np.uint8) if os.path.isfile(mp) else None
+        gt_px = to_px(gts[ki], pc_center, pc_scale)
+        pr_px = to_px(preds[ki], pc_center, pc_scale)
+        e = err_px(preds[ki], gts[ki], pc_center, pc_scale)
+        errs.append(e)
+        cells.append(overlay_one(photo, mask, gt_px[:, :2], pr_px[:, :2], e, frame))
+    if not cells:
+        print("  [overlay] 无可用真实照片, 跳过"); return
+    h, w = cells[0].shape[:2]
+    cols = 4
+    rows = int(np.ceil(len(cells) / cols))
+    canvas = np.zeros((rows * h, cols * w, 3), np.uint8)
+    for i, im in enumerate(cells):
+        r, c = divmod(i, cols)
+        canvas[r * h:(r + 1) * h, c * w:(c + 1) * w] = im
+    cv2.imwrite(out_path, canvas)
+    print(f"  overlay montage: {len(cells)} 帧, mean err {np.mean(errs):.1f}px → {out_path}")
+
+
 def main():
     p = argparse.ArgumentParser(description="方向1+2 可视化")
     p.add_argument("--open_loop", type=str, required=True)
@@ -250,6 +349,15 @@ def main():
     p.add_argument("--t_init", type=int, default=500)
     p.add_argument("--t_target", type=int, default=540)
     p.add_argument("--K", type=int, default=40)
+    # 大运动段 + 真实照片叠加
+    p.add_argument("--segment_auto", action="store_true",
+                   help="自动选首末端端到端位移最大的 segment_len 长度段作 t0(大运动展示)")
+    p.add_argument("--segment_len", type=int, default=80, help="大运动段长度(步)")
+    p.add_argument("--overlay", action="store_true",
+                   help="把 open_loop rollout 预测骨架叠到真实 cam0 照片拼 montage")
+    p.add_argument("--overlay_n", type=int, default=12, help="overlay montage 帧数")
+    p.add_argument("--cam0", default=None, help="原图目录(默认 real_capture/data/raw/<seq>/cam0)")
+    p.add_argument("--masks", default=None, help="mask 目录(默认 sam2/masks/<seq>_full)")
     p.add_argument("--out", type=str, default="output/viz")
     args = p.parse_args()
 
@@ -279,6 +387,15 @@ def main():
         gt = load_model(args.gt, data_dir=args.data_dir, device=device)["model"]; gt.eval()
         models.append(gt); names.append("gt")
 
+    if args.segment_auto:
+        seg_starts, seg_disp = pick_large_motion_segment(positions, args.segment_len)
+        if seg_starts:
+            args.t0 = seg_starts[0]
+            args.max_steps = min(args.segment_len, positions.shape[0] - 1 - args.t0)
+            ks = [k for k in [1, 20, 40, 80, 160, 300] if k <= args.max_steps]
+            print(f"[segment_auto] 选大运动段 t0={args.t0} len={args.max_steps} "
+                  f"(末端端到端 {seg_disp[args.t0]:.1f}px)")
+
     print("画 horizon_rollout_grid.png ...")
     viz_horizon_grid(models, names, actions_norm_t, positions, args.t0, args.max_steps,
                      window_size, device, ks, os.path.join(args.out, "horizon_rollout_grid.png"))
@@ -289,6 +406,17 @@ def main():
     if gt is not None:
         viz_horizon_gif(gt, "gt", actions_norm_t, positions, args.t0, min(120, args.max_steps),
                         window_size, device, os.path.join(args.out, "horizon_rollout_gt.gif"))
+
+    if args.overlay:
+        print("画 overlay_montage.png (预测骨架叠真实照片)...")
+        raw_seq = guess_raw_seq(args.data_dir)
+        cam0_dir = args.cam0 or os.path.join(PROJECT_ROOT, "real_capture", "data", "raw", raw_seq, "cam0")
+        masks_dir = args.masks or os.path.join(PROJECT_ROOT, "sam2", "masks", raw_seq + "_full")
+        offset = auto_offset_npz(args.data_dir)
+        viz_overlay_montage(ol, actions_norm_t, positions, args.t0, args.max_steps, window_size,
+                            pc_center, pc_scale, device, cam0_dir, masks_dir, offset,
+                            args.overlay_n, os.path.join(args.out, "overlay_montage.png"),
+                            f"open_loop rollout t0={args.t0}")
 
     if args.plan_json:
         print("画 plan_reach_compare.png + plan_reach.gif ...")
