@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **新接手本项目?先读 [`docs/HANDOFF.md`](docs/HANDOFF.md)** — 5 分钟接手指南:当前真实状态、别破坏的不变量、怎么跑最新控制/规划、诚实边界。本文件(CLAUDE.md)是完整规范,HANDOFF 是快速定向。
+
 ## Project Overview
 
 SelfSoftRobot is a research project implementing **neural field-based 3D self-modeling for soft robots**. The robot learns to predict its own 3D shape from 2D camera observations conditioned on actuator inputs, using NeRF-inspired volume rendering as the training signal.
