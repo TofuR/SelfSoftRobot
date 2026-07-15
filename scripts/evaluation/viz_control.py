@@ -37,6 +37,14 @@ import torch
 
 import matplotlib
 matplotlib.use("Agg")
+# CJK 字体: 系统 NotoSansCJK-Regular.ttc 在 matplotlib 里只注册为 "Noto Sans CJK JP"
+# (CJK 统一表意文字中日韩共用, JP 变体也能渲染中文)。addfont 确保注册 + 用 JP 名。
+from matplotlib import font_manager as _fm
+for _p in ('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',):
+    if os.path.exists(_p):
+        _fm.fontManager.addfont(_p)
+matplotlib.rcParams['font.sans-serif'] = ['Noto Sans CJK JP', 'DejaVu Sans']
+matplotlib.rcParams['axes.unicode_minus'] = False
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
 
@@ -125,7 +133,7 @@ def viz_horizon_grid(models, names, actions_norm_t, positions, t0, max_steps,
             ax.plot(gt_px[:, 0], gt_px[:, 1], "o--", color="gray", lw=2, ms=3, alpha=0.7, label="GT 真实")
             ax.plot(pr_px[:, 0], pr_px[:, 1], "s-", color="crimson" if r == 1 else "navy",
                     lw=2, ms=3, label="预测")
-            ax.invert_yaxis(); ax.set_aspect("equal")
+            ax.invert_yaxis(); ax.set_aspect("auto")  # auto: col范围小(50px)vs row(283px), equal会把x轴压成1/6; auto让x填满面板便于阅读(横向略拉伸, 但预测与GT同拉伸, 相对形变不失真)
             ax.set_title(f"k={k} ({k*FRAME_DT:.0f}s)  err={e:.1f}px", fontsize=8)
             if c == 0:
                 ax.set_ylabel(name, fontsize=10, fontweight="bold")
@@ -162,7 +170,7 @@ def viz_horizon_gif(model, name, actions_norm_t, positions, t0, max_steps,
         ax.plot(gt[:, 0], gt[:, 1], "o--", color="gray", lw=3, ms=6, alpha=0.8, label="GT 真实")
         ax.plot(pr[:, 0], pr[:, 1], "s-", color="navy", lw=3, ms=6, label="预测")
         e = err_px(preds[k - 1], gts[k - 1], pc_center, pc_scale)
-        ax.set_xlim(lo[0], hi[0]); ax.set_ylim(hi[1], lo[1]); ax.set_aspect("equal")
+        ax.set_xlim(lo[0], hi[0]); ax.set_ylim(hi[1], lo[1]); ax.set_aspect("auto")
         ax.set_title(f"{name}  k={k}/{K} ({k*FRAME_DT:.0f}s)  err={e:.1f}px", fontsize=11)
         ax.legend(loc="upper right", fontsize=9)
         ax.set_xlabel("col (px)"); ax.set_ylabel("row (px)")
@@ -194,7 +202,7 @@ def viz_plan_compare(model, history_t, s_init, s_target, a_plan, gt_act, seed_la
         ax.plot(pi[:, 0], pi[:, 1], "o-", color="blue", lw=2.5, ms=5, label="s_init")
         ax.plot(pt[:, 0], pt[:, 1], "s-", color="red", lw=2.5, ms=6, label="s_target")
         ax.plot(pp[:, 0], pp[:, 1], "^-", color=col, lw=2.5, ms=6, label=f"末态({fin_err:.1f}px)")
-        ax.invert_yaxis(); ax.set_aspect("equal")
+        ax.invert_yaxis(); ax.set_aspect("auto")
         ax.set_title(title, fontsize=11, fontweight="bold")
         ax.legend(fontsize=8, loc="best"); ax.grid(True, alpha=0.3)
         ax.set_xlabel("col (px)"); ax.set_ylabel("row (px)")
@@ -224,7 +232,7 @@ def viz_plan_gif(model, history_t, s_init, s_target, a_plan, K, window_size,
         ax.plot(pi[:, 0], pi[:, 1], "o-", color="blue", lw=2.5, ms=5, label="s_init")
         ax.plot(pt[:, 0], pt[:, 1], "s-", color="red", lw=2.5, ms=6, label="s_target")
         ax.plot(p[:, 0], p[:, 1], "^-", color="navy", lw=2.5, ms=6, label=f"当前({e:.1f}px)")
-        ax.set_xlim(lo[0], hi[0]); ax.set_ylim(hi[1], lo[1]); ax.set_aspect("equal")
+        ax.set_xlim(lo[0], hi[0]); ax.set_ylim(hi[1], lo[1]); ax.set_aspect("auto")
         ax.set_title(f"planner  k={k+1}/{K} ({(k+1)*FRAME_DT:.1f}s)  err={e:.1f}px", fontsize=11)
         ax.legend(loc="upper right", fontsize=9)
     ani = FuncAnimation(fig, draw, frames=K, interval=150)

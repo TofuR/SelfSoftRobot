@@ -100,7 +100,7 @@ def obstacle_loss(preds_norm, pc_center, pc_scale, obs_list):
 
 
 def optimize_plan(model, history_t, s_init, s_target, K, window_size, a_lo, a_hi,
-                  device, n_iter=400, lr=0.05, w_reach=1.0, w_smooth=0.01,
+                  device, n_iter=400, lr=0.05, w_reach=1.0, w_smooth=0.01, w_mono=1.0,
                   obs_list=None, pc_center=None, pc_scale=None, w_obs=1.0,
                   init_kind="zero", seed_last=None):
     """单起点 shooting 优化。返回 (a_opt(K,D) numpy, loss 曲线, 末态 reach loss)。"""
@@ -121,9 +121,15 @@ def optimize_plan(model, history_t, s_init, s_target, K, window_size, a_lo, a_hi
         opt.zero_grad()
         buffer_t = torch.cat([history_t, a], 0)
         preds = plan_rollout(model, buffer_t, t_start, K, window_size, s_init)
-        L_reach = ((preds[-1] - s_target.squeeze(0)) ** 2).mean()
+        # errs: 每步到目标的 MSE (K,)
+        errs = ((preds - s_target.squeeze(0)) ** 2).mean(dim=(1, 2))
+        # ① 末态必须到达(主目标)
+        L_terminal = errs[-1]
+        # ② 单调性: 惩罚 errs 逐差上升 → 到达后不准跑开(wandering), 等效变长K(早到则后续 hold)。
+        #    修掉"中间跳到奇怪位置": 一旦 err 降下来, 后续不准再升高(否则重罚)。
+        L_mono = (torch.relu(errs[1:] - errs[:-1]) ** 2).mean()
         L_smooth = ((a[1:] - a[:-1]) ** 2).mean() if K > 1 else torch.zeros((), device=device)
-        L = w_reach * L_reach + w_smooth * L_smooth
+        L = w_reach * L_terminal + w_mono * L_mono + w_smooth * L_smooth
         if obs_list:
             L = L + w_obs * obstacle_loss(preds, pc_center, pc_scale, obs_list)
         L.backward()
@@ -131,7 +137,7 @@ def optimize_plan(model, history_t, s_init, s_target, K, window_size, a_lo, a_hi
         opt.step()
         with torch.no_grad():
             a.clamp_(a_lo, a_hi)
-        losses.append(L_reach.item())
+        losses.append(errs[-1].item())   # 记录末态MSE(multi-start 选最小 = 最佳到达)
     return a.detach().cpu().numpy(), losses, losses[-1]
 
 
