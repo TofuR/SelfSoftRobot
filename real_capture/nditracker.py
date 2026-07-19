@@ -35,12 +35,35 @@ def ndi_load(port):
 #             Rxyz = quaternion2euler( t[0, 0:4] )  # t为[[qw,qx,qy,qz,x,y,z]]
 #             return [t[0, 4], t[0, 5], t[0, 6], Rxyz[0], Rxyz[1], Rxyz[2], quality[0]]  # 重新组合为[x,y,z,Rx,Ry,Rz,Quality]
 
-def get_ndi_value(tracker):
+def _one_pose(raw, quality):
+    """把一个 Aurora tracking object 规整成 11 维位姿。"""
+    import numpy as np
+    arr = np.asarray(raw, dtype=float).reshape(-1)
+    q = float(np.asarray(quality, dtype=float).reshape(-1)[0]) if np.size(quality) else float("nan")
+    if arr.size < 7 or not math.isfinite(q):
+        return [float("nan")] * 10 + [q]
+    try:
+        Rxyz = quaternion2euler(arr[0:4])
+        return [arr[4], arr[5], arr[6], Rxyz[0], Rxyz[1], Rxyz[2],
+                arr[0], arr[1], arr[2], arr[3], q]
+    except Exception:
+        return [float("nan")] * 10 + [q]
+
+
+def get_ndi_values(tracker, count=None):
+    """返回前 count 个 tracking object 的扁平位姿列表。"""
     port_handles, timestamps, framenumbers, tracking, quality = tracker.get_frame()
-    for t in tracking:  # t为[[wx,wy,wz,w,x,y,z]]
-        if math.isnan( quality[0] ):  # 判断是否为空
-            return [10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000]  # 为空则将其重置很大的数，在坐标轴显示不出来
+    n = len(tracking) if count is None else max(0, int(count))
+    poses = []
+    for i in range(n):
+        if i < len(tracking):
+            q = quality[i] if i < len(quality) else float("nan")
+            poses.extend(_one_pose(tracking[i], q))
         else:
-            # 保存为三维坐标系位姿形式 + 四元数
-            Rxyz = quaternion2euler( t[0, 0:4] )  # t为[[qw,qx,qy,qz,x,y,z]]
-            return [t[0, 4], t[0, 5], t[0, 6], Rxyz[0], Rxyz[1], Rxyz[2], t[0, 0], t[0, 1], t[0, 2], t[0, 3], quality[0]]  # 重新组合为[x,y,z,Rx,Ry,Rz,qw,qx,qy,qz,Quality]
+            poses.extend([float("nan")] * 11)
+    return poses
+
+
+def get_ndi_value(tracker):
+    """兼容旧接口：只返回第一个 tracking object。"""
+    return get_ndi_values(tracker, count=1)

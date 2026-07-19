@@ -91,7 +91,7 @@ def build_parser():
                    help="相机 fps，生成均匀帧时刻 i/fps（须与气压同一时钟原点）")
     p.add_argument("--frame-times", default=None,
                    help="每帧时间戳文件(秒，每行一个)，优先于 --fps")
-    p.add_argument("--ndi-tip", default=None, help="NDI 末端锚点 npz(字段 tip)")
+    p.add_argument("--ndi-tip", default=None, help="NDI 末端锚点 npz(字段 tip 或 tips；多探头保留 tips)")
     p.add_argument("--planar-lift", action="store_true",
                    help="单相机平面升维：射线-平面相交把 2D 骨架升成 3D（1-DOF 平面弯曲）")
     p.add_argument("--plane-point", type=float, nargs=3, default=[0.0, 0.0, 0.0],
@@ -166,7 +166,11 @@ def main():
                             args.actions_rate, frame_times)
     if frame_times is not None:
         print(f"    气压按帧时刻插值对齐（{len(frame_times)} 帧）")
-    ndi_tip = (np.load(args.ndi_tip)["tip"] if args.ndi_tip else None)
+    if args.ndi_tip:
+        tip_data = np.load(args.ndi_tip)
+        ndi_tip = tip_data["tip"] if "tip" in tip_data else tip_data["tips"]
+    else:
+        ndi_tip = None
 
     save_real_npz(args.out, images=images, masks=masks, skeletons_3d=sk3d,
                   actions=actions, camera_params=cp, dt=args.dt,

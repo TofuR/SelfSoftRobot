@@ -1,8 +1,8 @@
 # hardware_threads.py
 """NDI 电磁导航读取线程（Aurora）+ mock 合成末端轨迹。
 
-真机：`NdiThread` 用 `nditracker.ndi_load(port)` 起跟踪，循环 `get_ndi_value` 取末端
-6-DOF 位姿，发 `ndi_data(list[11], float monotonic)`：
+真机：`NdiThread` 用 `nditracker.ndi_load(port)` 起跟踪，循环读取前 `ndi_count` 个
+tracking object，发 `ndi_data(list[11*ndi_count], float monotonic)`；每个探头的布局为：
     [x, y, z, Rx, Ry, Rz, qw, qx, qy, qz, quality]
 失锁（quality 为 NaN）时把 x..qz 置 NaN（下游 clean-nan 可剔），不写 10000 哨兵。
 
@@ -39,10 +39,11 @@ class NdiThread(QThread):
     ndi_data = pyqtSignal(list, float)
     error = pyqtSignal(str)
 
-    def __init__(self, port: str, rate_hz: float = 50.0, parent=None):
+    def __init__(self, port: str, rate_hz: float = 50.0, ndi_count: int = 1, parent=None):
         super().__init__(parent)
         self.port = port
         self.period = 1.0 / max(1.0, float(rate_hz))
+        self.ndi_count = max(1, int(ndi_count))
         self._running = True
         self._tracker = None
 
@@ -59,7 +60,7 @@ class NdiThread(QThread):
             return
         try:
             while self._running:
-                pose = nditracker.get_ndi_value(self._tracker)   # list[float]
+                pose = nditracker.get_ndi_values(self._tracker, self.ndi_count)
                 self.ndi_data.emit(self._normalize(pose), time.monotonic())
                 # 短睡控采样率；sleep 对 stop() 响应足够快（period ~20ms）
                 time.sleep(self.period)
@@ -69,26 +70,23 @@ class NdiThread(QThread):
             self._stop_tracking()
 
     def _normalize(self, pose: list) -> list:
-        """对齐成 11 维；失锁（quality NaN 或哨兵 10000）→ x..qz 置 NaN。
-
-        nditracker.get_ndi_value 有效分支返回 11 值，失锁分支返回 10 个 10000
-        （长度不一致的坑在这里抹平）。
-        """
-        # 不足 11 维补 NaN；超出截断
-        if len(pose) < _NDI_N:
-            pose = list(pose) + [float("nan")] * (_NDI_N - len(pose))
-        pose = list(pose[:_NDI_N])
-        quality = pose[10]
-        try:
-            bad = (math.isnan(float(quality))
-                   or abs(float(quality)) > 1e6        # 哨兵 10000 视为失锁
-                   or any(abs(float(v)) > 1e6 for v in pose[:10]))
-        except (TypeError, ValueError):
-            bad = True
-        if bad:
-            q = float(quality)
-            return [float("nan")] * 10 + [q]
-        return [float(v) for v in pose]
+        """按 ndi_count 对齐多个 11 维位姿，单个探头失锁不影响其他探头。"""
+        out = []
+        values = list(pose)
+        for i in range(self.ndi_count):
+            one = values[i * _NDI_N:(i + 1) * _NDI_N]
+            if len(one) < _NDI_N:
+                one += [float("nan")] * (_NDI_N - len(one))
+            one = one[:_NDI_N]
+            quality = one[10]
+            try:
+                bad = (not math.isfinite(float(quality))
+                       or any(abs(float(v)) > 1e6 for v in one[:10]))
+            except (TypeError, ValueError):
+                bad = True
+            out.extend(([float("nan")] * 10 + [float(quality)]) if bad
+                       else [float(v) for v in one])
+        return out
 
     def _stop_tracking(self):
         if self._tracker is None:
@@ -112,9 +110,10 @@ class MockNdiThread(QThread):
     """
     ndi_data = pyqtSignal(list, float)
 
-    def __init__(self, rate_hz: float = 50.0, parent=None):
+    def __init__(self, rate_hz: float = 50.0, ndi_count: int = 1, parent=None):
         super().__init__(parent)
         self.period = 1.0 / max(1.0, float(rate_hz))
+        self.ndi_count = max(1, int(ndi_count))
         self._running = True
         self._t0 = time.monotonic()
 
@@ -129,7 +128,11 @@ class MockNdiThread(QThread):
             rx, ry, rz = 5.0 * math.sin(t * 0.5), 5.0 * math.cos(t * 0.4), 0.0
             qw, qx, qy, qz = 1.0, 0.0, 0.0, 0.0
             quality = 0.95
-            self.ndi_data.emit([x, y, z, rx, ry, rz, qw, qx, qy, qz, quality], time.monotonic())
+            poses = []
+            for i in range(self.ndi_count):
+                dx = 90.0 * i
+                poses.extend([x + dx, y, z, rx, ry, rz, qw, qx, qy, qz, quality])
+            self.ndi_data.emit(poses, time.monotonic())
             time.sleep(self.period)
 
     def stop(self):

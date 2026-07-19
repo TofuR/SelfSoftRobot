@@ -3,6 +3,7 @@ try:
     import serial.tools.list_ports      # noqa: F401  (list_available_ports 用)
 except Exception:                       # 未装时 mock / 仅相机+NDI 模式仍可用
     serial = None
+import queue
 import time
 from PyQt5.QtCore import QObject, pyqtSignal, QThread
 import struct
@@ -162,19 +163,25 @@ class ModbusRTU:
 
 class ModbusThread(QThread):
     """Modbus通信线程"""
-    data_sent = pyqtSignal(list, int)  # 发送的数据和控制组ID
-    error_occurred = pyqtSignal(str, int)  # 错误信息和控制组ID
+    data_sent = pyqtSignal(list, int, str, float)  # values, group, command_id, ack time
+    error_occurred = pyqtSignal(str, int, str, float)  # status, group, command_id, time
 
     def __init__(self, serial_port, group_id):
         super().__init__()
         self.serial_port = serial_port
         self.group_id = group_id
         self.running = True
-        self.command_queue = []
+        # 有界队列，避免串口异常或过快采样时无限堆积命令。
+        self.command_queue = queue.Queue(maxsize=64)
+        self._busy = False
 
     def add_command(self, command_data):
         """添加命令到队列"""
-        self.command_queue.append(command_data)
+        try:
+            self.command_queue.put_nowait(command_data)
+            return True
+        except queue.Full:
+            return False
 
     def _expected_response_len(self, function_code):
         # 0x06/0x10 正常响应固定8字节（地址+功能码+4字节+CRC）
@@ -190,9 +197,11 @@ class ModbusThread(QThread):
     def run(self):
         """线程运行"""
         while self.running:
-            if self.command_queue and self.serial_port.is_open:
+            if not self.command_queue.empty() and self.serial_port.is_open:
                 try:
-                    command_data = self.command_queue.pop(0)
+                    command_data = self.command_queue.get_nowait()
+                    command_id = str(command_data.get('command_id', ''))
+                    self._busy = True
 
                     # 清理历史残留字节，避免上一帧干扰当前校验
                     self.serial_port.reset_input_buffer()
@@ -209,7 +218,7 @@ class ModbusThread(QThread):
 
                     if len(response) != expected_len:
                         print(f"[组{self.group_id}] 无响应或长度不足: {len(response)}/{expected_len}")
-                        self.error_occurred.emit("无响应", self.group_id)
+                        self.error_occurred.emit("timeout", self.group_id, command_id, time.monotonic())
                         continue
 
                     print(f"[组{self.group_id}] 收到({len(response)}字节): {response.hex(' ').upper()}")
@@ -217,17 +226,25 @@ class ModbusThread(QThread):
                     # Modbus异常响应: 功能码最高位置1
                     if response[1] & 0x80:
                         exc_code = response[2] if len(response) > 2 else -1
-                        self.error_occurred.emit(f"从站异常响应, 异常码={exc_code}", self.group_id)
+                        self.error_occurred.emit(f"exception_{exc_code}", self.group_id,
+                                                 command_id, time.monotonic())
                         continue
 
                     # 验证响应
                     if self.validate_response(response, command_data):
-                        self.data_sent.emit(command_data['values'], self.group_id)
+                        self.data_sent.emit(command_data['values'], self.group_id,
+                                            command_id, time.monotonic())
                     else:
-                        self.error_occurred.emit("响应验证失败", self.group_id)
+                        self.error_occurred.emit("invalid_response", self.group_id,
+                                                 command_id, time.monotonic())
 
                 except Exception as e:
-                    self.error_occurred.emit(f"通信错误: {e}", self.group_id)
+                    self.error_occurred.emit(f"serial_error:{e}", self.group_id,
+                                             str(command_data.get('command_id', ''))
+                                             if 'command_data' in locals() else "",
+                                             time.monotonic())
+                finally:
+                    self._busy = False
 
             # 队列轮询间隔：原 50ms 把吞吐限制在 ~20 帧/s 并给每条命令增加最多
             # 50ms 下发延迟。压缩到 5ms 后，命令下发更跟手、采样写入更及时，
@@ -254,12 +271,22 @@ class ModbusThread(QThread):
         self.running = False
         self.wait()
 
+    def wait_idle(self, timeout_s=1.0):
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        while time.monotonic() < deadline:
+            if self.command_queue.empty() and not self._busy:
+                return True
+            time.sleep(0.005)
+        return self.command_queue.empty() and not self._busy
+
 
 class ModbusManager(QObject):
     """Modbus管理类，管理多个控制组的串口连接"""
 
     # 定义信号
-    pressure_data_sent = pyqtSignal(list, int)  # 气压数据发送完成
+    pressure_data_sent = pyqtSignal(list, int)  # 兼容旧调用
+    command_ack = pyqtSignal(str, int, float)  # command_id, group, ack time
+    command_error = pyqtSignal(str, int, float, str)  # command_id, group, time, status
     connection_status_changed = pyqtSignal(str, bool)  # 连接状态变化
 
     def __init__(self):
@@ -367,7 +394,7 @@ class ModbusManager(QObject):
         self.connection_status[group_id] = False
         self.connection_status_changed.emit(f"group_{group_id}", False)
 
-    def set_pressure(self, group_id, channel_idx, pressure_kpa):
+    def set_pressure(self, group_id, channel_idx, pressure_kpa, command_id=None):
         """设置单通道气压
 
         Args:
@@ -396,21 +423,21 @@ class ModbusManager(QObject):
 
             # 添加到线程队列
             if group_id in self.modbus_threads:
-                self.modbus_threads[group_id].add_command({
+                return self.modbus_threads[group_id].add_command({
                     'data': command_data,
                     'slave_addr': slave_addr,
                     'function_code': 0x06,
                     'values': [pressure_kpa],
-                    'channel': channel_idx
+                    'channel': channel_idx,
+                    'command_id': str(command_id or '')
                 })
-                return True
 
         except Exception as e:
             print(f"设置气压错误: {e}")
 
         return False
 
-    def set_all_pressures(self, group_id, pressure_values):
+    def set_all_pressures(self, group_id, pressure_values, command_id=None):
         """设置控制组所有通道气压
 
         Args:
@@ -443,31 +470,32 @@ class ModbusManager(QObject):
 
             # 添加到线程队列
             if group_id in self.modbus_threads:
-                self.modbus_threads[group_id].add_command({
+                return self.modbus_threads[group_id].add_command({
                     'data': command_data,
                     'slave_addr': slave_addr,
                     'function_code': 0x10,
                     'values': pressure_values,
-                    'channel': -1  # 表示所有通道
+                    'channel': -1,  # 表示所有通道
+                    'command_id': str(command_id or '')
                 })
-                return True
 
         except Exception as e:
             print(f"设置所有气压错误: {e}")
 
         return False
 
-    def on_data_sent(self, values, group_id):
+    def on_data_sent(self, values, group_id, command_id, t_ack):
         """数据发送完成处理"""
         # 由于比例阀没有反馈，这里不需要再次发送pressure_data_sent信号
         # 因为在主界面中已经直接更新了实际值显示
         # 注释掉这行避免重复更新导致的显示错乱
-        # self.pressure_data_sent.emit(values, group_id)
-        pass
+        self.pressure_data_sent.emit(values, group_id)
+        self.command_ack.emit(str(command_id), int(group_id), float(t_ack))
 
-    def on_error_occurred(self, error_msg, group_id):
+    def on_error_occurred(self, error_msg, group_id, command_id, t_error):
         """错误处理"""
         print(f"控制组{group_id}通信错误: {error_msg}")
+        self.command_error.emit(str(command_id), int(group_id), float(t_error), str(error_msg))
 
     def is_group_connected(self, group_id):
         """检查控制组是否已连接"""
@@ -477,4 +505,10 @@ class ModbusManager(QObject):
         """关闭所有连接"""
         for group_id in list(self.serial_ports.keys()):
             self.disconnect_group(group_id)
+
+    def wait_idle(self, timeout_s=1.0):
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        for thread in list(self.modbus_threads.values()):
+            remaining = max(0.0, deadline - time.monotonic())
+            thread.wait_idle(remaining)
 

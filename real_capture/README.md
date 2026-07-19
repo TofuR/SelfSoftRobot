@@ -5,14 +5,14 @@
 > 产出 `scripts/real/capture_to_npz.py` 直接能吃的 raw 数据 → 训练状态转移/形状模型。
 
 与旧 `docs/ref/Main UI-plc/`（1-DOF 单通道）的关系：本项目自包含、可 git 提交（旧目录在
-`docs/ref/` 下被 gitignore）。6 通道向后兼容单通道（见下）。
+`docs/ref/` 下被 gitignore）。当前仍支持单通道操作，但统一使用六通道动作格式。
 
 ## 文件
 | 文件 | 作用 |
 |---|---|
 | `modbus_manager.py` | Modbus RTU 协议 + 2 组×3 通道控制（原样复制，仅把 `import serial` 改成可选） |
 | `realsense_cam.py` | RealSense RGB 捕获线程（+ mock 合成剪影帧，原样复制） |
-| `nditracker.py` | NDI Aurora 封装 `ndi_load` / `get_ndi_value`（原样复制） |
+| `nditracker.py` | NDI Aurora 封装 `ndi_load` / 多探头位姿读取 |
 | `hardware_threads.py` | `NdiThread`（真）+ `MockNdiThread`（合成末端轨迹） |
 | `valve_control.py` | `ValveController`（6 维→2 组）+ `MockValveController` + `ValveDriver`（随机/扫描） |
 | `recorder.py` | `SaveThread` + `ValveRecorder`（动作门控同步核心）+ `build_ndi_tip_npz` / `export_summary_csv` |
@@ -31,13 +31,13 @@ python main_capture.py --group1 COM3 --group2 COM46 --ndi COM9
 ```
 1. **连接 Modbus**（两组串口；2 组 × 3 通道 = 6 路）→ **连接 NDI**（末端串口）；相机已自动开预览。
 2. **设通道范围**：每个通道 `min/max`（kPa）。**单通道**：只给目标通道设范围，其余 5 路 `min=max=0`。
-3. 模式选 **Manual**（手动目标）/ **Random**（随机游走）/ **Sweep**（往返扫描）；
-   填 `动作间隔`（默认 0.2s）+ `稳定等待`（默认 0.19s）→ 勾 **自动时间戳命名** → **▶ 开始采集**。
+3. 模式选 **Manual** / **Random** / **Sweep** / **Replay**；设置动作间隔、稳定等待、每通道
+   rise/fall 速率上限（kPa/s，填 0 表示不限速），Random 可填 seed 和预生成步数，Replay 选择已有 `actions6.csv`。
 4. **■ 停止采集** → **⚡ 生成 npz**（自动先出 `tip.npz`，再调 `capture_to_npz`）/ **📋 导出汇总 CSV**。
 
 ## 2. 动作门控采集（核心）
 动作每 `动作间隔`（默认 **0.2s**）下发一次；下发后等 `稳定等待`（默认 **0.19s**）让软臂稳定，
-再到缓存里取**最新一帧 + 一个 NDI 末端**落盘。每拍产出一组同索引 `(action_i, frame_i, ndi_i)`：
+再到缓存里取**最新一帧 + 多个 NDI 末端**落盘。每拍产出一组同索引 `(action_i, frame_i, ndi_i)`：
 ```
 t=0.00s  下发 action_i  → 6 路阀 + 记气压
 t=0.19s  抓 frame_i + ndi_i（缓存最新值）→ 同索引落盘
@@ -47,22 +47,20 @@ t=0.20s  下一拍
   下游 `capture_to_npz --actions-has-timestamps --frame-times` 插值退化为**精确配对**，无串扰。
 - 相机/NDI 自由运行做预览 + 缓存；时钟到点只读缓存（不阻塞、不丢拍）。
 
-## 3. 六通道 → 单通道（向后兼容）
+## 3. 六通道 → 单通道
 - 把不用的 5 路 `min=max=0`，只给目标通道设范围 → 自动只动那 1 路。
-- `主通道` 下拉选 legacy `pressure.csv` 用哪一路（默认 ch0）。
-- 同时生成两份动作日志：
-  - `actions6.csv`：`t, c0,c1,c2,c3,c4,c5`（7 列，新管线 `--actions` 自动探测 A=6）
-  - `pressure.csv`：`t, p_active, 0`（3 列，旧 1-DOF 文档命令照用）
+- 单通道仍生成 `actions6.csv`，未使用通道保持为 0；旧的 `pressure.csv` 不再生成。
 
 ## 输出（每个序列目录 `<本目录>/data/raw/seq_<时间戳>/`）
 | 文件 | 内容 | 去向 |
 |---|---|---|
 | `cam0/00000.png …` | 零填充帧 | `--view-dirs` |
 | `frame_times.txt` | 每帧一行 相对秒 | `--frame-times` |
-| `actions6.csv` | `t_sec, c0..c5`（无表头） | `--actions --actions-has-timestamps` |
-| `ndi.csv` | `t_sec, x,y,z,Rx,Ry,Rz,qw,qx,qy,qz,quality`（失锁行=空） | → `tip.npz` → `--ndi-tip` |
-| `pressure.csv` | `t_sec, p_active, 0`（兼容旧） | 旧 2 列命令 |
-| `meta.json` | t0 / ISO / 模式 / 间隔 / settle / 各通道范围 / 帧数 | 复现 |
+| `actions6.csv` | `t_sec, c0..c5`（首行表头） | `--actions --actions-has-timestamps` |
+| `ndi.csv` | `t_sec + ndi0_* ... ndiN_*`（每探头 11 列） | → `tip.npz` → `--ndi-tip` |
+| `commands.csv` | 命令时间、ACK、最终命令、分组通信状态 | 通信 QC / 复现 |
+| `samples.csv` | `t_grab`、`frame_age`、各 NDI age/quality | 数据质量筛选 |
+| `meta.json` | t0 / 模式 / seed / 速率 / NDI 数量 / age 阈值 / 帧数 | 复现 |
 | `summary.csv` | **(可选)** 按帧对齐：6 路气压 + NDI xyz + 图像名 | 人眼检查 |
 
 > 保存路径默认 `<main_capture.py 所在目录>/data/raw/seq_<时间戳>`（按 **py 文件位置**解析，不依赖运行 cwd；

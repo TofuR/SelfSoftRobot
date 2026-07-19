@@ -42,7 +42,7 @@ from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
     QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPlainTextEdit,
-    QPushButton, QSizePolicy, QSplitter, QVBoxLayout, QWidget)
+    QPushButton, QSizePolicy, QSpinBox, QSplitter, QVBoxLayout, QWidget)
 
 from recorder import ValveRecorder, build_ndi_tip_npz, export_summary_csv
 from realsense_cam import RealSenseCam
@@ -101,11 +101,12 @@ class CaptureWindow(QMainWindow):
 
     def __init__(self, mock_cam=False, mock_valve=False, mock_ndi=False,
                  group1="COM3", group2="COM46", ndi_port="COM9", baudrate=9600,
-                 slave_addr=1, fps=30):
+                 slave_addr=1, fps=30, ndi_count=2):
         super().__init__()
         self.mock_cam = bool(mock_cam)
         self.mock_valve = bool(mock_valve)
         self.mock_ndi = bool(mock_ndi)
+        self.ndi_count = max(1, int(ndi_count))
         self.fps = int(fps)
         self.project_root = _detect_project_root()
         self._cfg_path = os.path.join(SCRIPT_DIR, "real_capture_config.ini")
@@ -120,10 +121,10 @@ class CaptureWindow(QMainWindow):
 
         if mock_ndi:
             from hardware_threads import MockNdiThread
-            self.ndi = MockNdiThread()
+            self.ndi = MockNdiThread(ndi_count=self.ndi_count)
         else:
             from hardware_threads import NdiThread
-            self.ndi = NdiThread(port=ndi_port)
+            self.ndi = NdiThread(port=ndi_port, ndi_count=self.ndi_count)
 
         if mock_valve:
             from valve_control import MockValveController
@@ -133,6 +134,7 @@ class CaptureWindow(QMainWindow):
             self.controller = ValveController({1: group1, 2: group2}, baudrate, slave_addr)
 
         self.core = ValveRecorder(self.cam, self.ndi, self.controller)
+        self.core.set_ndi_count(self.ndi_count)
 
         # ---- 数据缓存（曲线）----
         self._p_buf = np.zeros((N_CHAN, PLOT_LEN))
@@ -147,6 +149,12 @@ class CaptureWindow(QMainWindow):
         # 避免切到单通道把 inactive 显示归零后 _save_config 把配置永久写成 0（review #2）。
         self._cfg_lo = [P_MIN] * N_CHAN
         self._cfg_hi = [DEFAULT_MAX] * N_CHAN
+        self._cfg_rise = [100.0] * N_CHAN
+        self._cfg_fall = [100.0] * N_CHAN
+        self.max_frame_age = 0.5
+        self.max_ndi_age = 0.5
+        self._rise_sb = []
+        self._fall_sb = []
 
         self._build_ui()
         self._connect_core()
@@ -159,10 +167,11 @@ class CaptureWindow(QMainWindow):
         self.le_ndi.setText(ndi_port)
         self.sb_baud.setValue(int(baudrate)); self.sb_slave.setValue(int(slave_addr))
 
-        # 相机立即开（预览）；mock 阀默认连组1（默认使用 modbus1）；mock NDI 立即起
+        # 相机立即开（预览）；mock 阀两组都连，方便直接验证 six-channel/all 模式
         self.cam.start()
         if mock_valve:
             self.controller.connect_group(1)
+            self.controller.connect_group(2)
         if mock_ndi:
             self.ndi.start()
             self._sync_ndi_button()
@@ -203,48 +212,56 @@ class CaptureWindow(QMainWindow):
         ll.addWidget(gb)
 
         # ---- 6 通道阀控制 ----
-        gb = QGroupBox("阀控制（目标/min/max，kPa；范围 0–500）")
+        gb = QGroupBox("阀控制（目标/min/max，kPa；rise/fall 为命令速率上限 kPa/s，0=不限速）")
         g = QGridLayout(gb)
         g.addWidget(QLabel("通道"), 0, 0); g.addWidget(QLabel("目标"), 0, 1)
         g.addWidget(QLabel("min"), 0, 2); g.addWidget(QLabel("max"), 0, 3)
+        g.addWidget(QLabel("rise/s"), 0, 4); g.addWidget(QLabel("fall/s"), 0, 5)
         for i in range(N_CHAN):
             g.addWidget(QLabel(f"ch{i}"), i + 1, 0)
             t = QDoubleSpinBox(); t.setRange(P_MIN, P_MAX); t.setDecimals(1); t.setSingleStep(5.0)
             mn = QDoubleSpinBox(); mn.setRange(P_MIN, P_MAX); mn.setDecimals(1); mn.setSingleStep(5.0)
             mx = QDoubleSpinBox(); mx.setRange(P_MIN, P_MAX); mx.setDecimals(1); mx.setSingleStep(5.0)
+            rise = QDoubleSpinBox(); rise.setRange(0.0, 5000.0); rise.setDecimals(1); rise.setSingleStep(10.0); rise.setValue(100.0)
+            fall = QDoubleSpinBox(); fall.setRange(0.0, 5000.0); fall.setDecimals(1); fall.setSingleStep(10.0); fall.setValue(100.0)
             if i == 0:                                   # 默认 ch0 有范围，其余钉 0（单通道）
                 t.setValue(0.0); mn.setValue(0.0); mx.setValue(DEFAULT_MAX)
             else:
                 t.setValue(0.0); mn.setValue(0.0); mx.setValue(0.0)
             g.addWidget(t, i + 1, 1); g.addWidget(mn, i + 1, 2); g.addWidget(mx, i + 1, 3)
+            g.addWidget(rise, i + 1, 4); g.addWidget(fall, i + 1, 5)
             # 先设值再接线：初始化 setValue 不触发 _on_range_changed（此时 cb_active 尚未创建）
             t.valueChanged.connect(self._on_target_changed)
             mn.valueChanged.connect(self._on_range_changed)   # min/max 改动实时同步驱动（录制中也生效）
             mx.valueChanged.connect(self._on_range_changed)
+            rise.valueChanged.connect(self._on_rate_changed)
+            fall.valueChanged.connect(self._on_rate_changed)
             self._target_sb.append(t); self._min_sb.append(mn); self._max_sb.append(mx)
+            self._rise_sb.append(rise); self._fall_sb.append(fall)
         row = QHBoxLayout()
         row.addWidget(QLabel("主通道")); self.cb_active = QComboBox()
         self.cb_active.addItems([f"ch{i}" for i in range(N_CHAN)] + ["全部 (all)"])
         self.cb_active.setToolTip(
             "单通道 chN：其余 5 路 min/max/target 自动归零并锁定（防误改），气压图只画主通道 1 条线。\n"
             "『全部(all)』：放开 6 路范围可改，气压图画 6 条线。\n"
-            "legacy pressure.csv：单通道记主通道；all 模式记 ch0（6 路全量始终在 actions6.csv）。")
+            "采集动作统一写 actions6.csv；命令 ACK/质量写 commands.csv、samples.csv。")
         self.cb_active.currentIndexChanged.connect(self._on_active_changed)
         row.addWidget(self.cb_active)
         self.btn_send = QPushButton("立即下发目标"); self.btn_send.clicked.connect(self._on_send)
         self.btn_zero = QPushButton("全部归零"); self.btn_zero.clicked.connect(self._on_zero)
         row.addWidget(self.btn_send); row.addWidget(self.btn_zero)
-        g.addLayout(row, N_CHAN + 1, 0, 1, 4)
+        g.addLayout(row, N_CHAN + 1, 0, 1, 6)
         ll.addWidget(gb)
 
         # ---- NDI ----
         gb = QGroupBox("NDI 末端（Aurora 电磁导航）")
         g = QGridLayout(gb)
         g.addWidget(QLabel("串口"), 0, 0); self.le_ndi = QLineEdit("COM1"); g.addWidget(self.le_ndi, 0, 1)
+        g.addWidget(QLabel("探头数"), 0, 2); self.sb_ndi_count = QSpinBox(); self.sb_ndi_count.setRange(1, 8); self.sb_ndi_count.setValue(self.ndi_count); self.sb_ndi_count.valueChanged.connect(self._on_ndi_count_changed); g.addWidget(self.sb_ndi_count, 0, 3)
         self.btn_ndi = QPushButton("连接 NDI"); self.btn_ndi.setStyleSheet("background:#2CB1BC;color:white")
-        self.btn_ndi.clicked.connect(self._toggle_ndi); g.addWidget(self.btn_ndi, 0, 2)
+        self.btn_ndi.clicked.connect(self._toggle_ndi); g.addWidget(self.btn_ndi, 0, 4)
         self.lbl_ndi = QLabel("末端: x=--  y=--  z=--  (失锁时 NaN)"); self.lbl_ndi.setStyleSheet("color:#334E68")
-        g.addWidget(self.lbl_ndi, 1, 0, 1, 3)
+        g.addWidget(self.lbl_ndi, 1, 0, 1, 5)
         ll.addWidget(gb)
 
         # ---- 采集 ----
@@ -253,18 +270,31 @@ class CaptureWindow(QMainWindow):
         g.addWidget(QLabel("保存目录"), 0, 0); self.le_seq = QLineEdit("data/raw"); g.addWidget(self.le_seq, 0, 1, 1, 2)
         self.btn_browse = QPushButton("…"); self.btn_browse.setFixedWidth(34); self.btn_browse.clicked.connect(self._on_browse); g.addWidget(self.btn_browse, 0, 3)
         g.addWidget(QLabel("模式"), 1, 0); self.cb_mode = QComboBox()
-        self.cb_mode.addItems(["手动录制 (Manual)", "自动随机游走 (Random)", "自动往返扫描 (Sweep)"])
+        self.cb_mode.addItems(["手动录制 (Manual)", "自动随机游走 (Random)",
+                               "自动往返扫描 (Sweep)", "actions6.csv 回放 (Replay)"])
         g.addWidget(self.cb_mode, 1, 1, 1, 2)
         self.cb_ts = QCheckBox("自动时间戳命名"); self.cb_ts.setChecked(True); g.addWidget(self.cb_ts, 1, 3)
         g.addWidget(QLabel("动作间隔(s)"), 2, 0); self.sb_interval = QDoubleSpinBox(); self.sb_interval.setRange(0.05, 5.0); self.sb_interval.setSingleStep(0.05); self.sb_interval.setValue(0.20); g.addWidget(self.sb_interval, 2, 1)
         g.addWidget(QLabel("稳定等待(s)"), 2, 2); self.sb_settle = QDoubleSpinBox(); self.sb_settle.setRange(0.0, 4.0); self.sb_settle.setSingleStep(0.01); self.sb_settle.setValue(0.19); g.addWidget(self.sb_settle, 2, 3)
-        g.addWidget(QLabel("备注"), 3, 0); self.le_note = QLineEdit(""); g.addWidget(self.le_note, 3, 1, 1, 3)
+        g.addWidget(QLabel("random seed"), 3, 0); self.sb_seed = QSpinBox(); self.sb_seed.setRange(0, 2147483647); self.sb_seed.setValue(0); self.sb_seed.setSpecialValueText("自动"); g.addWidget(self.sb_seed, 3, 1)
+        g.addWidget(QLabel("预生成步数"), 3, 2); self.sb_steps = QSpinBox(); self.sb_steps.setRange(0, 1000000); self.sb_steps.setValue(0); self.sb_steps.setSpecialValueText("在线"); g.addWidget(self.sb_steps, 3, 3)
+        g.addWidget(QLabel("Replay 文件"), 4, 0); self.le_replay = QLineEdit(""); g.addWidget(self.le_replay, 4, 1, 1, 2)
+        self.btn_replay = QPushButton("…"); self.btn_replay.setFixedWidth(34); self.btn_replay.clicked.connect(self._on_browse_replay); g.addWidget(self.btn_replay, 4, 3)
+        g.addWidget(QLabel("最大 frame age(s)"), 5, 0)
+        self.sb_max_frame_age = QDoubleSpinBox(); self.sb_max_frame_age.setRange(0.0, 60.0)
+        self.sb_max_frame_age.setDecimals(3); self.sb_max_frame_age.setSingleStep(0.05)
+        self.sb_max_frame_age.setValue(0.5); g.addWidget(self.sb_max_frame_age, 5, 1)
+        g.addWidget(QLabel("最大 NDI age(s)"), 5, 2)
+        self.sb_max_ndi_age = QDoubleSpinBox(); self.sb_max_ndi_age.setRange(0.0, 60.0)
+        self.sb_max_ndi_age.setDecimals(3); self.sb_max_ndi_age.setSingleStep(0.05)
+        self.sb_max_ndi_age.setValue(0.5); g.addWidget(self.sb_max_ndi_age, 5, 3)
+        g.addWidget(QLabel("备注"), 6, 0); self.le_note = QLineEdit(""); g.addWidget(self.le_note, 6, 1, 1, 3)
         row = QHBoxLayout()
         self.btn_start = QPushButton("▶ 开始采集"); self.btn_start.setStyleSheet("background:#2CB1BC;color:white"); self.btn_start.clicked.connect(self._on_start)
         self.btn_stop = QPushButton("■ 停止采集"); self.btn_stop.setStyleSheet("background:#667EEA;color:white"); self.btn_stop.setEnabled(False); self.btn_stop.clicked.connect(self._on_stop)
         row.addWidget(self.btn_start); row.addWidget(self.btn_stop)
-        g.addLayout(row, 4, 0, 1, 4)
-        self.lbl_rec = QLabel("未录制"); self.lbl_rec.setStyleSheet("color:#888"); g.addWidget(self.lbl_rec, 5, 0, 1, 4)
+        g.addLayout(row, 7, 0, 1, 4)
+        self.lbl_rec = QLabel("未录制"); self.lbl_rec.setStyleSheet("color:#888"); g.addWidget(self.lbl_rec, 8, 0, 1, 4)
         ll.addWidget(gb)
 
         # ---- 后处理 ----
@@ -333,6 +363,11 @@ class CaptureWindow(QMainWindow):
             self.le_g1.setText(c.get("group1", self.le_g1.text()))
             self.le_g2.setText(c.get("group2", self.le_g2.text()))
             self.le_ndi.setText(c.get("ndi_port", self.le_ndi.text()))
+            self.ndi_count = max(1, int(c.get("ndi_count", self.ndi_count)))
+            self.sb_ndi_count.setValue(self.ndi_count)
+            self.core.set_ndi_count(self.ndi_count)
+            if hasattr(self.ndi, "ndi_count"):
+                self.ndi.ndi_count = self.ndi_count
             self.sb_baud.setValue(float(c.get("baudrate", self.sb_baud.value())))
             self.sb_slave.setValue(float(c.get("slave_addr", self.sb_slave.value())))
             saved = c.get("seq_dir", None)
@@ -343,12 +378,23 @@ class CaptureWindow(QMainWindow):
             self.cb_mode.setCurrentIndex(int(c.get("mode", self.cb_mode.currentIndex())))
             self.sb_interval.setValue(float(c.get("action_interval", self.sb_interval.value())))
             self.sb_settle.setValue(float(c.get("settle", self.sb_settle.value())))
+            self.sb_seed.setValue(int(c.get("random_seed", self.sb_seed.value())))
+            self.sb_steps.setValue(int(c.get("pre_generate_steps", self.sb_steps.value())))
+            self.le_replay.setText(c.get("replay_file", self.le_replay.text()))
+            self.max_frame_age = max(0.0, float(c.get("max_frame_age", self.max_frame_age)))
+            self.max_ndi_age = max(0.0, float(c.get("max_ndi_age", self.max_ndi_age)))
+            self.sb_max_frame_age.setValue(self.max_frame_age)
+            self.sb_max_ndi_age.setValue(self.max_ndi_age)
             self._guard = True                  # 恢复 active/cfg 期间禁止 _on_active_changed/_on_range_changed 回灌
             try:
                 self.cb_active.setCurrentIndex(int(c.get("active_channel", self.cb_active.currentIndex())))
                 for i in range(N_CHAN):          # 只填持久化缓存；spinbox 显示由后续 _on_active_changed 按 mode 刷
                     self._cfg_lo[i] = float(c.get(f"lo{i}", self._cfg_lo[i]))
                     self._cfg_hi[i] = float(c.get(f"hi{i}", self._cfg_hi[i]))
+                    self._cfg_rise[i] = float(c.get(f"rise{i}", self._cfg_rise[i]))
+                    self._cfg_fall[i] = float(c.get(f"fall{i}", self._cfg_fall[i]))
+                    self._rise_sb[i].setValue(self._cfg_rise[i])
+                    self._fall_sb[i].setValue(self._cfg_fall[i])
             finally:
                 self._guard = False
             self.le_camparam.setText(c.get("cam_param", self.le_camparam.text()))
@@ -364,9 +410,15 @@ class CaptureWindow(QMainWindow):
             cp["capture"] = {
                 "group1": self.le_g1.text(), "group2": self.le_g2.text(),
                 "ndi_port": self.le_ndi.text(),
+                "ndi_count": str(self.sb_ndi_count.value()),
                 "baudrate": str(int(self.sb_baud.value())), "slave_addr": str(int(self.sb_slave.value())),
                 "seq_dir": self.le_seq.text(), "mode": str(self.cb_mode.currentIndex()),
                 "action_interval": str(self.sb_interval.value()), "settle": str(self.sb_settle.value()),
+                "random_seed": str(self.sb_seed.value()),
+                "pre_generate_steps": str(self.sb_steps.value()),
+                "replay_file": self.le_replay.text(),
+                "max_frame_age": str(self.sb_max_frame_age.value()),
+                "max_ndi_age": str(self.sb_max_ndi_age.value()),
                 "active_channel": str(self.cb_active.currentIndex()),
                 "cam_param": self.le_camparam.text(), "threshold": str(int(self.sb_thresh.value())),
                 "auto_timestamp": "1" if self.cb_ts.isChecked() else "0",
@@ -375,6 +427,8 @@ class CaptureWindow(QMainWindow):
             for i in range(N_CHAN):              # 从持久化缓存写（不被单通道显示归零污染，review #2）
                 cp["capture"][f"lo{i}"] = str(self._cfg_lo[i])
                 cp["capture"][f"hi{i}"] = str(self._cfg_hi[i])
+                cp["capture"][f"rise{i}"] = str(self._cfg_rise[i])
+                cp["capture"][f"fall{i}"] = str(self._cfg_fall[i])
             with open(self._cfg_path, "w", encoding="utf-8") as f:
                 cp.write(f)
         except Exception as e:
@@ -404,7 +458,12 @@ class CaptureWindow(QMainWindow):
     def _on_ndi(self, pose: list):
         x, y, z = (pose[0], pose[1], pose[2]) if len(pose) >= 3 else (float("nan"),) * 3
         q = pose[10] if len(pose) > 10 else float("nan")
-        self.lbl_ndi.setText(f"末端: x={x:.1f}  y={y:.1f}  z={z:.1f}  quality={q:.2f}")
+        parts = [f"ndi0: ({x:.1f},{y:.1f},{z:.1f}) q={q:.2f}"]
+        for i in range(1, self.ndi_count):
+            base = i * 11
+            if len(pose) >= base + 11:
+                parts.append(f"ndi{i}: ({pose[base]:.1f},{pose[base+1]:.1f},{pose[base+2]:.1f}) q={pose[base+10]:.2f}")
+        self.lbl_ndi.setText(" | ".join(parts))
         if np.isfinite(x) and np.isfinite(y):
             pt = np.array([[float(x)], [float(y)]])
             self._xy_trail = np.hstack([self._xy_trail, pt])[:, -PLOT_LEN:]
@@ -468,6 +527,15 @@ class CaptureWindow(QMainWindow):
                 self._cfg_hi[i] = self._max_sb[i].value()
         self.core.update_ranges(self._current_lo(), self._current_hi())
 
+    def _on_rate_changed(self):
+        if self._guard:
+            return
+        for i in range(N_CHAN):
+            if self._rise_sb[i].isEnabled():
+                self._cfg_rise[i] = self._rise_sb[i].value()
+            if self._fall_sb[i].isEnabled():
+                self._cfg_fall[i] = self._fall_sb[i].value()
+
     def _on_active_changed(self, idx=None):
         """主通道切换（一个功能两种实现）：
         - 单通道 chN：chN 设默认范围(0..DEFAULT_MAX)、target=0 并同步其缓存；其余 5 路 min/max/target
@@ -528,7 +596,8 @@ class CaptureWindow(QMainWindow):
                 enabled = (i == idx)
             else:
                 enabled = True
-            for sb in (self._min_sb[i], self._max_sb[i], self._target_sb[i]):
+            for sb in (self._min_sb[i], self._max_sb[i], self._target_sb[i],
+                       self._rise_sb[i], self._fall_sb[i]):
                 sb.setEnabled(enabled)
         for i, curve in enumerate(self.p_curves):
             if i not in avail:
@@ -600,6 +669,16 @@ class CaptureWindow(QMainWindow):
             self._on_connect_ndi()
             self._sync_ndi_button()
 
+    def _on_ndi_count_changed(self, value):
+        if self.ndi.isRunning():
+            self._log("⚠ NDI 运行中不能修改探头数，请先断开 NDI。")
+            self.sb_ndi_count.blockSignals(True)
+            self.sb_ndi_count.setValue(self.ndi_count)
+            self.sb_ndi_count.blockSignals(False)
+            return
+        self.ndi_count = max(1, int(value))
+        self.core.set_ndi_count(self.ndi_count)
+
     def _sync_ndi_button(self):
         running = self.ndi.isRunning()
         self.btn_ndi.setText("断开 NDI" if running else "连接 NDI")
@@ -610,14 +689,16 @@ class CaptureWindow(QMainWindow):
     def _on_connect_ndi(self):
         if self.ndi.isRunning():
             self._log("NDI 已在运行。"); return
+        self.ndi_count = max(1, int(self.sb_ndi_count.value()))
+        self.core.set_ndi_count(self.ndi_count)
         old = self.ndi
         # 重建全新线程（mock 也重建）：取最新端口 + 保证断开后能重连（旧线程 stop 后 _running=False 不可复用）
         if not self.mock_ndi:
             from hardware_threads import NdiThread
-            self.ndi = NdiThread(port=self.le_ndi.text().strip())
+            self.ndi = NdiThread(port=self.le_ndi.text().strip(), ndi_count=self.ndi_count)
         else:
             from hardware_threads import MockNdiThread
-            self.ndi = MockNdiThread()
+            self.ndi = MockNdiThread(ndi_count=self.ndi_count)
         self.ndi.ndi_data.connect(self.core._on_ndi)
         # ⚠ 同步更新 recorder 引用，否则 shutdown() 停到旧线程 → 真 Aurora _tracker 永不关闭
         self.core.ndi = self.ndi
@@ -637,11 +718,15 @@ class CaptureWindow(QMainWindow):
     def _on_send(self):
         if not self.controller.connected:
             self._log("⚠ 先连接 Modbus。"); return
+        idx = self.cb_active.currentIndex()
+        self.controller.set_required_groups({1} if idx < 3 else {2} if idx < N_CHAN else {1, 2})
         self.controller.set_pressures(self._current_targets())
 
     def _on_zero(self):
         if not self.controller.connected:
             self._log("⚠ 先连接 Modbus。"); return
+        idx = self.cb_active.currentIndex()
+        self.controller.set_required_groups({1} if idx < 3 else {2} if idx < N_CHAN else {1, 2})
         for sb in self._target_sb:
             sb.setValue(0.0)
         self.controller.zero_all()
@@ -652,13 +737,15 @@ class CaptureWindow(QMainWindow):
             self.le_seq.setText(d)
 
     def _on_start(self):
-        mode = ["manual", "random", "sweep"][self.cb_mode.currentIndex()]
-        # 真阀：手动/自动都要求先连 Modbus。未连接时 set_pressures 会跳过下发却把目标值
-        # 记进 actions6.csv → 阀不动但数据像在动 = 静默污染训练数据。mock 阀恒 connected 不受影响。
-        if not self.mock_valve and not self.controller.connected:
-            self._log("⚠ 录制前请先【连接 Modbus】（手动/自动均需）。未连接时气压不会下发，但会被记进 actions6.csv。"); return
-        if mode in ("random", "sweep") and not self.controller.connected:
-            self._log("自动驱动需要先连接 Modbus。"); return
+        mode = ["manual", "random", "sweep", "replay"][self.cb_mode.currentIndex()]
+        active_idx = self.cb_active.currentIndex()
+        required_groups = ({1} if active_idx < 3 else {2} if active_idx < N_CHAN else {1, 2})
+        connected = set(getattr(self.controller, "connected_groups", set()))
+        if not required_groups.issubset(connected):
+            self._log(f"⚠ 当前模式需要控制组 {sorted(required_groups)}，已连接 {sorted(connected)}。")
+            return
+        if mode == "replay" and not self.le_replay.text().strip():
+            self._log("⚠ Replay 模式请先选择 actions6.csv。"); return
         base = self.le_seq.text().strip()
         if not base:
             self._log("请填写保存目录。"); return
@@ -667,13 +754,25 @@ class CaptureWindow(QMainWindow):
         seq = base
         if self.cb_ts.isChecked():
             seq = os.path.join(base, "seq_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
-        active_idx = self.cb_active.currentIndex()
-        # all 模式下 legacy pressure.csv 无单一主通道 → 记 ch0（6 路全量始终在 actions6.csv）
-        active_for_legacy = active_idx if active_idx < N_CHAN else 0
+        self.ndi_count = max(1, int(self.sb_ndi_count.value()))
+        self.core.set_ndi_count(self.ndi_count)
+        self.controller.set_required_groups(required_groups)
         self.core.set_manual_target(self._current_targets())
         self.core.start_recording(seq, mode, self._current_lo(), self._current_hi(),
                                   self.sb_interval.value(), self.sb_settle.value(),
-                                  active_for_legacy, self.le_note.text().strip())
+                                  active_idx if active_idx < N_CHAN else 0,
+                                  self.le_note.text().strip(),
+                                  [sb.value() for sb in self._rise_sb],
+                                  [sb.value() for sb in self._fall_sb],
+                                  (self.sb_seed.value() or None), self.sb_steps.value(),
+                                  self.le_replay.text().strip() or None,
+                                  required_groups, self.sb_max_frame_age.value(),
+                                  self.sb_max_ndi_age.value())
+
+    def _on_browse_replay(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择 actions6.csv", self.le_seq.text(), "CSV (*.csv);;All files (*)")
+        if path:
+            self.le_replay.setText(path)
 
     def _on_stop(self):
         self.core.stop_recording()
@@ -775,6 +874,7 @@ def main():
     p.add_argument("--group1", default="COM55", help="Modbus 组1 串口")
     p.add_argument("--group2", default="COM56", help="Modbus 组2 串口")
     p.add_argument("--ndi", default="COM1", dest="ndi_port", help="NDI 串口")
+    p.add_argument("--ndi-count", type=int, default=2, help="NDI 探头数量")
     p.add_argument("--baudrate", type=int, default=9600)
     p.add_argument("--slave", type=int, default=1, dest="slave_addr")
     p.add_argument("--fps", type=int, default=30)
@@ -787,7 +887,8 @@ def main():
     app = QApplication(sys.argv)
     win = CaptureWindow(mock_cam=mock_cam, mock_valve=mock_valve, mock_ndi=mock_ndi,
                         group1=args.group1, group2=args.group2, ndi_port=args.ndi_port,
-                        baudrate=args.baudrate, slave_addr=args.slave_addr, fps=args.fps)
+                        baudrate=args.baudrate, slave_addr=args.slave_addr, fps=args.fps,
+                        ndi_count=args.ndi_count)
     win.show()
     sys.exit(app.exec_())
 

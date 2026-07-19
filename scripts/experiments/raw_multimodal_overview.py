@@ -4,14 +4,13 @@
 一个序列里 4 种模态共用 t_sec 时钟, 完美同步:
   cam0/NNNNN.png   RealSense RGB 帧   (frame_times.txt[i] = cam0/{i:05d}.png 的 t_sec)
   actions6.csv     c0..c5 气压指令 kPa(c0 = 激活通道; 其余 0)
-  pressure.csv     p_active 实测气压 kPa(闭环跟踪验证)
   ndi.csv          末端 6DOF  x,y,z(mm) + 四元数(真值)
 
 画法(一张汇报图):
-  第0行: 时间上均匀采样的 N 帧 相机缩略图, 每帧标 t / p_active, 带序号 ①②③…
-  第1行: 气压 指令 vs 实测 vs t,  在采样帧时刻画 竖虚线 + 序号
+  第0行: 时间上均匀采样的 N 帧 相机缩略图, 每帧标 t / c0, 带序号 ①②③…
+  第1行: c0 气压指令 vs t, 在采样帧时刻画竖虚线 + 序号
   第2行: NDI 末端 x / y / z(mm) vs t, 同样竖虚线(x 为主弯曲轴)
-  第3行: 末端 2D 轨迹(x–y 平面 mm), 按气压着色, 采样帧末端标星 + 序号
+  第3行: 末端 2D 轨迹(x–y 平面 mm), 按 c0 着色, 采样帧末端标星 + 序号
 序号把缩略图 ↔ 曲线时刻一一对应, 让"同步"一眼可见。
 
 输出(output/raw_data_overview/):
@@ -21,7 +20,7 @@
 Usage:
   python scripts/experiments/raw_multimodal_overview.py                       # 默认主训练序列 163921
   python scripts/experiments/raw_multimodal_overview.py --seq seq_20260627_173114 --n_frames 6
-  python scripts/experiments/raw_multimodal_overview.py --sample pressure     # 按气压分层取帧(看准静态形变)
+  python scripts/experiments/raw_multimodal_overview.py --sample action       # 按 c0 动作分层取帧
 """
 import os, sys, csv, json, argparse
 import numpy as np
@@ -69,7 +68,7 @@ def pick_frame_times(t_all, p_all, n, mode):
     """返回 n 个采样帧的索引(避开首尾 3%)。"""
     lo, hi = int(0.03 * len(t_all)), int(0.97 * len(t_all))
     pool = np.arange(lo, hi)
-    if mode == "pressure":
+    if mode == "action":
         qs = np.linspace(0, 1, n)
         picked = [pool[nearest_idx(p_all[pool], np.quantile(p_all[pool], q))] for q in qs]
     else:  # time: 时间均匀
@@ -85,7 +84,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seq", default="seq_20260627_163921")
     ap.add_argument("--n_frames", type=int, default=8)
-    ap.add_argument("--sample", default="time", choices=["time", "pressure"])
+    ap.add_argument("--sample", default="time", choices=["time", "action"])
     ap.add_argument("--out", default=OUT)
     args = ap.parse_args()
     seq = args.seq
@@ -93,13 +92,11 @@ def main():
 
     ft = np.array([float(x) for x in open(os.path.join(d, "frame_times.txt")).read().split()])
     _, act = load_csv(os.path.join(d, "actions6.csv"))      # t,c0..c5
-    _, pre = load_csv(os.path.join(d, "pressure.csv"))      # t,p_active,reserved
     _, ndi = load_csv(os.path.join(d, "ndi.csv"))           # t,x,y,z,...
     meta = json.load(open(os.path.join(d, "meta.json")))
 
     t = ft
-    c0 = act[:, 1]
-    p = pre[:, 1]
+    p = c0 = act[:, 1]
     ndi_x, ndi_y, ndi_z = ndi[:, 1], ndi[:, 2], ndi[:, 3]
     if len(ndi) != len(t):
         ix = np.clip(np.searchsorted(ndi[:, 0], t), 0, len(ndi) - 1)
@@ -110,7 +107,7 @@ def main():
     dur = t[-1] - t[0]
     fps = len(t) / dur if dur > 0 else float("nan")
 
-    print(f"{seq}: {len(t)} 帧, dur={dur:.1f}s, ~{fps:.2f}fps, p=[{p.min():.0f},{p.max():.0f}]kPa, "
+    print(f"{seq}: {len(t)} 帧, dur={dur:.1f}s, ~{fps:.2f}fps, c0=[{p.min():.0f},{p.max():.0f}]kPa, "
           f"tip x=[{ndi_x.min():.1f},{ndi_x.max():.1f}]mm, 采样 {n} 帧 ({args.sample})")
 
     # ── 画图 ──
@@ -131,17 +128,16 @@ def main():
                  va="top", ha="left", color="white",
                  bbox=dict(boxstyle="circle,pad=0.25", fc="#2c3e50", ec="none"))
 
-    # 第1行: 气压 指令 vs 实测
+    # 第1行: 气压指令
     axp = fig.add_subplot(gs[1, :])
     axp.plot(t, c0, "-", color=COL["cmd"], lw=1.2, alpha=0.9, label="指令 c0 (kPa)")
-    axp.plot(t, p, ":", color=COL["meas"], lw=1.0, alpha=0.8, label="实测 p_active (kPa)")
     for j, fi in enumerate(fidx):
         axp.axvline(t[fi], color="#34495e", ls="--", lw=0.8, alpha=0.6)
     ymax = axp.get_ylim()[1]
     for j, fi in enumerate(fidx):
         axp.text(t[fi], ymax, _CIRC[j], fontsize=10, ha="center", va="top", color="#2c3e50")
     axp.set_ylabel("气压 (kPa)", fontsize=11)
-    axp.legend(fontsize=8.5, loc="upper right", ncol=2)
+    axp.legend(fontsize=8.5, loc="upper right")
     axp.grid(True, alpha=0.25)
     axp.set_title(f"{seq}  ·  {meta.get('mode','?')} 模式  ·  {len(t)} 帧 @ ~{fps:.1f}fps  ·  "
                   f"时长 {dur:.0f}s  ·  激活通道 ch{meta.get('active_channel',0)}  ·  "
@@ -178,7 +174,7 @@ def main():
     axt.grid(True, alpha=0.25)
     axt.set_aspect("equal", adjustable="datalim")
 
-    fig.suptitle("同步多模态原始数据采集  —  RealSense 相机 + 气压(指令/实测) + NDI 末端真值(共用 t_sec 时钟)",
+    fig.suptitle("同步多模态原始数据采集  —  RealSense 相机 + 六通道气压指令 + NDI 末端真值(共用 t_sec 时钟)",
                  fontsize=14, y=0.997)
 
     fpng = os.path.join(args.out, f"multimodal_overview_{seq}_{args.sample}.png")
@@ -188,7 +184,7 @@ def main():
     summary = {
         "seq": seq, "mode": meta.get("mode"), "n_frames": len(t),
         "duration_s": float(dur), "fps_est": float(fps),
-        "pressure_kPa": {"min": float(p.min()), "max": float(p.max())},
+        "command_c0_kPa": {"min": float(p.min()), "max": float(p.max())},
         "tip_mm": {"x": [float(ndi_x.min()), float(ndi_x.max())],
                    "y": [float(ndi_y.min()), float(ndi_y.max())],
                    "z": [float(ndi_z.min()), float(ndi_z.max())]},
