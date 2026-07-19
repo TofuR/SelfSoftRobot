@@ -1,6 +1,6 @@
 # docs/ 导航索引
 
-> docs/ 的地图。按主题找文档; 每条一行说明。最后更新 2026-07-15。
+> docs/ 的地图。按主题找文档; 每条一行说明。最后更新 2026-07-20。
 
 ## 接手指南(给 AI agent)
 
@@ -24,8 +24,8 @@
 ## 研究方向 (`directions/`)
 | 文档 | 说明 |
 |---|---|
-| [`directions/directions_overview.md`](directions/directions_overview.md) | 16 个研究方向索引 |
-| `directions/02_*.md` ~ `16_*.md` | 各方向详述(迟滞/编码/骨架/多视角/sim2real/状态转移 gt·open_loop/控制 等) |
+| [`directions/directions_overview.md`](directions/directions_overview.md) | 17 个研究方向索引 |
+| `directions/02_*.md` ~ `17_*.md` | 各方向详述(迟滞/编码/骨架/多视角/sim2real/OpenLoop/控制/路径依赖 IK 等) |
 
 ## 文献与背景 (`background/`)
 | 文档 | 说明 |
@@ -42,6 +42,7 @@
 ## 实验 (`experiments/`)
 | 文档 | 说明 |
 |---|---|
+| [`experiments/openloop_sparse_observation_validation_plan.md`](experiments/openloop_sparse_observation_validation_plan.md) | **当前论文实验主方案**：机制层物理记忆与 H–K 可行域，任务层路径依赖 IK/不可见轨迹，应用层不透明通道稀疏观测巡检 |
 | `experiments/experiment_analysis.md` | 全部实验结果分析 |
 | `experiments/improvement_proposals.md` | 改进方案记录 |
 | `experiments/results_evaluation.md` | 评估结果 |

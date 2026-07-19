@@ -254,7 +254,7 @@ data/real_seq/<seq>_clean/  # 清洗后
 
 **已归档**：ODE-CMSTNF、Smooth-CMSTNF 在 `docs/archived/`。
 
-### 4.2 实物状态转移族（路线 B，当前主线）
+### 4.2 实物状态转移族（路线 B，OpenLoop 当前主线）
 
 学**状态转移** `ŝ_t = F(s_{t-1}, a_t, z_{t-1})` 而非前馈稳态推断。FractionalMemory 编码动作历史（匹配粘弹性迟滞）；**可学习迟滞潜变量 z**（GRUCell 跨帧演化，无 GT 端到端学）；沿臂空间 GRU 逐节点传播；Δ 预测 `s_t = s_{t-1} + delta_scale·tanh(Δ)`。
 
@@ -262,10 +262,11 @@ data/real_seq/<seq>_clean/  # 清洗后
 |------|------|------------|---|-----------|------|
 | **SpatialSequence** | `model_spatial_sequence.py` | 无（纯前馈稳态） | 无 | — | 基线（稳态假设） |
 | **PCSpatial** | `model_pc_spatial.py` | 无（预测 + 图像残差修正） | 无 | — | sim-to-real 两阶段（预测→修正） |
-| StateTransition | `model_state_transition.py` | 自身预测（rollout） | 跨步演化 | 严重（漂移 1000×） | 未来扩展（无法每步观测） |
-| **GTObservedTransition** | `model_gt_transition.py` | **真实观测** | **窗口内演化** | **无（s 每步真实）** | **当前主线** |
+| StateTransition | `model_state_transition.py` | 自身预测（无界 rollout） | 跨步演化 | 无界累积 | 长程前瞻对照 |
+| GTObservedTransition | `model_gt_transition.py` | **每步真实观测** | **窗口内演化** | **无（s 每步真实）** | 局部转移/累计误差诊断 |
+| **OpenLoopTransition** | `model_open_loop_transition.py` | **窗口首帧真实，随后自身预测** | **窗口内演化** | **限制在观测间隔 K 内** | **当前部署与论文主线** |
 
-**GTObservedTransition（主线）**：继承 StateTransition，复用全部 forward / z_module，仅固化 `training_spec`（`teacher_forcing_ratio=1.0` + `episode_len=40` 窗口 + dense supervision，每步预测都算 loss 给无 GT 的 z 直接梯度）。样本自包含（z 不跨样本）→ **样本间可打乱**。无数据泄漏：预测 `ŝ_{j+1}` 只用 ≤s_j 历史，GT s_{j+1} 不在预测路径。
+**OpenLoopTransition（主线）**：继承 StateTransition，窗口只在开始接收一次真实状态锚点，随后 `teacher_forcing_ratio=0.0`，让 s 与 z 在 episode 内使用自身预测演化。GTObserved 使用同一状态转移骨干，但每步输入真实状态，仅用于测量局部单步误差和分解累计误差，不代表最终部署。
 
 ### 4.3 共享层（`layers.py`）
 

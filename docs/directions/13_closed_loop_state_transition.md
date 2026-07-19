@@ -1,12 +1,12 @@
 # 方向：闭环状态转移模型——从"稳态推断"到"一步状态转移"
 
-> 状态：Stage 0（`StateTransitionSpatialModel`）+ 全 GT 驱动窗口框架（[14](14_gt_observed_transition.md)，**当前主线**）已实现并 smoke 验证
+> 状态：Stage 0 已实现；当前论文主线已转为 [15 稀疏观测窗口 OpenLoop](15_open_loop_windowed_transition.md)
 > 基础模型：`model_spatial_sequence.py` 的 `SpatialSequenceModel`
 > 相对方向：比 [01 自回归状态动力学（已归档）](../archived/directions/01_autoregressive_state_dynamics.md) 更进一步
 > 核心思想：`s_t = F(s_{t-1}, a_t, z_{t-1})` —— 把前一步物理状态 + 可学习迟滞潜变量作为显式输入，让模型学习状态转移而非状态推断
 > 创建：2026-06-15
 
-> ⚠️ 主线已确定：见下方"〇·五、主线确定"。本方向的"纯自回归 rollout"（推理时一路喂模型自己的预测）**退为未来扩展**（无法每步采集真实状态的场景）。当前主线是姊妹方向 [14_gt_observed_transition.md](14_gt_observed_transition.md) 的**全 GT 驱动窗口框架**——前一状态永远来自真实观测（仿真 GT / 实物图像骨架化）。
+> 🔁 **2026-07-20 主线更新**：本文“方向 14 为当前主线”的表述是历史决策记录。最终场景无法每步观察，当前主线为 [15](15_open_loop_windowed_transition.md) 的“观察一次、开环预测 K 步”；方向 14 只保留为局部转移误差与累计误差诊断。本文关于无界 rollout、潜变量 z 和误差收缩的理论分析继续有效。
 
 > 📝 **2026-06-17 更新（勘误 + 定位收窄）**：
 > 1. **1170× 勘误**：本文引用的"纯自回归 rollout 漂移比 1170×"（§〇·五冒烟结论）与表格"1000×"来自 `eval_rollout.py` 旧版——onestep 参考与 rollout 共用单条 `z_t`，分母被 rollout 演化的 z 污染。bug 已修（现维护独立 `z_t` rollout + `z_tf` 干净 teacher-forced 参考，见 [15 §五 Bug 1](15_open_loop_windowed_transition.md)）。故 1170× 非干净比值，定量待重测；**无界累积的定性结论不变**。

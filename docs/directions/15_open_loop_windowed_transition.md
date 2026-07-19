@@ -1,10 +1,10 @@
 # 方向：窗口开环状态转移——"观测一次，开环预测 K 步"
 
-> 状态：已实现 + 冒烟通过（warm-start 零缺失键、tf=0 前向无 NaN、窗口评估基线已测，见 §4.1）；完整开环训练待跑
+> 状态：**当前论文与部署主线**；已实现、完成 OpenLoop 训练与窗口/视野评估
 > 模型：`src/models/model_open_loop_transition.py` 的 `OpenLoopTransitionModel`
 > 训练：`scripts/training/train_open_loop_transition.py`（默认热启动 gt_transition + 纯闭环 tf=0）
 > 评估：`scripts/evaluation/eval_rollout.py --windowed`
-> 姊妹方向：[13_closed_loop_state_transition.md](13_closed_loop_state_transition.md)（无界自回归 rollout）、[14_gt_observed_transition.md](14_gt_observed_transition.md)（每步真实观测，当前主线）
+> 姊妹方向：[13_closed_loop_state_transition.md](13_closed_loop_state_transition.md)（无界自回归 rollout）、[14_gt_observed_transition.md](14_gt_observed_transition.md)（每步真实观测，仅作诊断）
 > 核心思想：**每个窗口仅以 1 帧 GT 观测作种子，窗口内 K 步把模型自身预测喂回（s 与 z 自演化）**，窗口结束重新观测 → 把 rollout 漂移约束在 K 步内
 > 创建：2026-06-17
 > 🔁 **2026-06-24 补充**：本方向的「窗口开环 rollout（给定动作序列预测 K 步形状）」正是 [16 约束导向控制](16_constraint_oriented_control.md) 里「前向可微黑箱」的直接实现——控制求逆时复用本窗口前向。实物强迟滞验证已解锁（采集程序 `docs/ref/Main UI-plc/` + [11 §最小验证平台](11_sim_to_real_transfer.md)）。

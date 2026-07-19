@@ -2,7 +2,7 @@
 
 > 基于文献调研和深度讨论，从"出发点（真问题）"推导出的研究方向体系
 > 核心出发点：软体机器人自建模 = 带迟滞的 3D 全身状态估计
-> 最后更新：2026-07-10
+> 最后更新：2026-07-20
 
 ---
 
@@ -19,21 +19,21 @@
 
 ## 状态转移主线（当前工作焦点）
 
-> **当前主线 = 方向 14（全 GT 驱动单步转移）**。状态转移模型族按"前一状态 s_{t-1} 从哪来"分为三姊妹方向，构成 s_{t-1}-来源轴：
+> **当前主线 = 方向 15（稀疏观测窗口 OpenLoop）**。最终场景无法每步获得真实形态，模型每个窗口只接收一次状态锚点，随后根据动作和自身预测自由运行。方向 14 保留为局部转移误差与累计误差的诊断上界。状态转移模型族按“前一状态 s_{t-1} 从哪来”分为三姊妹方向：
 
 | 方向 | 模型 | s_{t-1} 来源 | 状态 |
 |------|------|------------|------|
 | [13 闭环状态转移](13_closed_loop_state_transition.md) | `StateTransitionSpatialModel` | 预测（**无界** rollout） | Stage0 实现；未来扩展=多步前瞻 |
-| [**14 全 GT 驱动**（主线）](14_gt_observed_transition.md) | `GTObservedTransitionModel` | **每步真实观测** | ✅ 已实现+验证（per-frame MSE~1e-8，56× 优于 copy） |
-| [15 窗口开环](15_open_loop_windowed_transition.md) | `OpenLoopTransitionModel` | 预测，**每 K 步重观测** | ✅ 已实现+冒烟（完整训练待跑） |
+| [14 全 GT 驱动（诊断）](14_gt_observed_transition.md) | `GTObservedTransitionModel` | **每步真实观测** | ✅ 已实现+验证；用于隔离累计误差，不作为最终部署 |
+| [**15 窗口开环（主线）**](15_open_loop_windowed_transition.md) | `OpenLoopTransitionModel` | 预测，**每 K 步重观测** | ✅ 已实现+训练；最终部署与论文验证主线 |
 
-三者共享可学习迟滞潜变量 z（无 GT，端到端学）与 Δ 预测 + 收缩约束设计（理论基础见 [13 §一](13_closed_loop_state_transition.md)）。**工作模型族**：`SpatialSequenceModel`（前馈基线）、`StateTransitionSpatialModel`、`GTObservedTransitionModel`（=主线）、`OpenLoopTransitionModel`、`FlowMatchPointCloudModel`。
+三者共享可学习迟滞潜变量 z（无 GT，端到端学）与 Δ 预测 + 收缩约束设计（理论基础见 [13 §一](13_closed_loop_state_transition.md)）。**工作模型族**：`SpatialSequenceModel`（前馈基线）、`StateTransitionSpatialModel`、`GTObservedTransitionModel`（诊断）、`OpenLoopTransitionModel`（主线）、`FlowMatchPointCloudModel`。
 
-> **下一阶段（形态 / 控制接入主线）**：当前主线（[14](14_gt_observed_transition.md)/[15](15_open_loop_windowed_transition.md)）只输出**骨架**。后续两步构成完整闭环：
+> **下一阶段（形态 / 控制接入主线）**：当前 OpenLoop 主线只输出**骨架**。后续两步构成完整闭环：
 > - **全身形态**：[05](05_skeleton_to_shape_conversion.md) 把骨架升级为全身形态（Phase 0 接口 → 1 半径场 → 2 theta 截面 → 3 时序一致）；
 > - **约束导向控制**：[16](16_constraint_oriented_control.md) 用前向模型作可微黑箱，给定避障点/任务约束反求动作序列（**迟滞感知**，区别于 hu2025 静态关节求逆）。
 >
-> 即「**骨架预测 → 全身形态 → 约束导向控制**」。实物数据采集已打通（[11 §最小验证平台](11_sim_to_real_transfer.md) + 采集程序 `docs/ref/Main UI-plc/`）。
+> 即「**稀疏观测 OpenLoop 骨架预测 → 全身形态 → 路径依赖 IK / 约束导向控制 → 组合应用**」。机制—任务—应用三层验证方案见 [实验主方案](../experiments/openloop_sparse_observation_validation_plan.md)。实物数据采集已打通（[11 §最小验证平台](11_sim_to_real_transfer.md) + `real_capture/`）。
 >
 > **实物免标定 2D 工作流已落地并训练验证**：1-DOF 双段臂 + 单相机 + 免标定，2D 图像骨架 `[col,row,0]` 作 state，NDI 末端作度量验证。GT 模型（`gt_transition exp_20260709_5`）末端误差 mean 0.77mm / median 0.57mm，已到 NDI 仿射标定底（0.74mm）；骨架+常数半径 r=14 即得形态 IoU 0.91（vs repaired mask），说明形态≈骨架+管、NN 空间小。详见 [docs/research/2026-07-10-real-data-2d-workflow.md](../research/2026-07-10-real-data-2d-workflow.md)。
 

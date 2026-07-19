@@ -103,7 +103,7 @@
 
 ## 6. 后续方向
 
-16 个研究方向在 [`../directions/`](../directions/)(`directions_overview.md` 索引)。当前焦点:
+17 个研究方向在 [`../directions/`](../directions/)(`directions_overview.md` 索引)。当前焦点:
 
 - **部署目标 = open_loop(方向15)**: 形状控制需"给定动作→预测形状"的规划能力, open_loop 是部署形态; gt(方向14)退为训练基础+精度上界(NDI 0.77mm)。[[open-loop-deployment-target]]
 - **方向 16(逆运动学形状控制, 新进展)**: 方向1 视野认证(`eval_horizon.py`, open_loop drift 1.7×, K_max~50-120步) + 方向2 可微逆规划(`scripts/control/inverse_plan.py`, reach 3.07px / 0.38× do-nothing)已验证。详见 [`../directions/16_constraint_oriented_control.md`](../directions/16_constraint_oriented_control.md)。
