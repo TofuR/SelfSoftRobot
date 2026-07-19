@@ -41,7 +41,13 @@ def load_image_views(view_dirs, undistort=None, max_frames=None):
         undistort: 可选 callable(img)->img。
         max_frames: 最多取前 N 帧。
     """
-    files = [sorted(glob.glob(os.path.join(d, "*"))) for d in view_dirs]
+    extensions = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+    files = [[path for path in sorted(glob.glob(os.path.join(d, "*")))
+              if os.path.splitext(path)[1].lower() in extensions]
+             for d in view_dirs]
+    if any(not paths for paths in files):
+        empty = [view_dirs[i] for i, paths in enumerate(files) if not paths]
+        raise FileNotFoundError(f"没有可读图像视角目录：{empty}")
     n = min(len(f) for f in files) if files else 0
     if max_frames:
         n = min(n, max_frames)
@@ -51,7 +57,7 @@ def load_image_views(view_dirs, undistort=None, max_frames=None):
         for i in range(n):
             img = cv2.imread(files[v][i]) if cv2 else None
             if img is None:
-                continue
+                raise ValueError(f"无法读取图像：{files[v][i]}")
             if undistort is not None:
                 img = undistort(img)
             frames.append(img)

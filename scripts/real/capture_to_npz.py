@@ -125,6 +125,11 @@ def main():
         images = load_video_views(args.videos, undistort, args.max_frames)
     V, N = images.shape[:2]
     print(f"    {V} 视角 × {N} 帧  {images.shape[2]}x{images.shape[3]}")
+    if cp.shape[0] != V:
+        sys.exit(f"相机标定数量与图像视角数量不一致：camera_params={cp.shape[0]}，images={V}；"
+                 "请使用同一批相机生成的标定文件。")
+    if len(view_names) != V:
+        view_names = [f"cam{i}" for i in range(V)]
 
     print(f">>> 分割 ({args.method}) → 2D 骨架（复用 skeleton_2d）...")
     color_bounds = None

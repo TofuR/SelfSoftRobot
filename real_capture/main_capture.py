@@ -5,9 +5,9 @@
   - 连接 Modbus（2 组 × 3 通道 = 6 路电流型比例阀，0–500kPa）；
   - 6 通道目标/min/max 控制（**单通道模式**：把其余 5 路 min=max=0 即只动 1 路，向后兼容）；
   - 连接 NDI Aurora 电磁导航，实时末端 x/y/z + 轨迹；
-  - 相机实时预览（RealSense，可 mock）；
+  - 相机实时预览（1–8 台 RealSense，可 mock，支持序列号选择和单路/平铺预览）；
   - 动作门控采集：动作每 `action_interval`（默认 0.2s）下发一次，等 `settle`（默认 0.19s）
-    软臂稳定后抓一帧 + NDI 末端，三者同索引落盘；
+    软臂稳定后抓全部相机帧 + NDI 末端，同一拍分别落盘到 cam0...camN；
   - 后处理：生成 tip.npz + 调 capture_to_npz 出训练用 .npz / 导出汇总 CSV；
   - 设置持久化（real_capture_config.ini，跨机器不踩绝对路径坑）；
   - **mock 任意组合**：--mock-cam / --mock-valve / --mock-ndi 单选或混选；--mock = 三个全开。
@@ -101,23 +101,31 @@ class CaptureWindow(QMainWindow):
 
     def __init__(self, mock_cam=False, mock_valve=False, mock_ndi=False,
                  group1="COM3", group2="COM46", ndi_port="COM9", baudrate=9600,
-                 slave_addr=1, fps=30, ndi_count=2):
+                 slave_addr=1, fps=30, ndi_count=2, camera_count=1,
+                 camera_serials=""):
         super().__init__()
         self.mock_cam = bool(mock_cam)
         self.mock_valve = bool(mock_valve)
         self.mock_ndi = bool(mock_ndi)
         self.ndi_count = max(1, int(ndi_count))
+        self.camera_count = max(1, int(camera_count))
+        self.camera_serials = []
+        self.camera_serials_text = str(camera_serials or "")
         self.fps = int(fps)
         self.project_root = _detect_project_root()
         self._cfg_path = os.path.join(SCRIPT_DIR, "real_capture_config.ini")
         self._npz_proc = None
+        self._hardware_started = False
+        self._latest_preview_frames = []
+        self._camera_preview_labels = []
 
         self.setWindowTitle("六通道阀 · NDI · 相机  同步采集  ·  "
                             + ("MOCK" if (mock_cam or mock_valve or mock_ndi) else "HARDWARE"))
         self.resize(1380, 880)
 
         # ---- 硬件/核心（每个组件按需 mock，可任意组合）----
-        self.cam = RealSenseCam(mock=mock_cam, fps=fps)
+        self.cams = self._make_cameras()
+        self.cam = self.cams[0]  # 兼容旧代码
 
         if mock_ndi:
             from hardware_threads import MockNdiThread
@@ -133,7 +141,7 @@ class CaptureWindow(QMainWindow):
             from valve_control import ValveController
             self.controller = ValveController({1: group1, 2: group2}, baudrate, slave_addr)
 
-        self.core = ValveRecorder(self.cam, self.ndi, self.controller)
+        self.core = ValveRecorder(self.cam, self.ndi, self.controller, cams=self.cams)
         self.core.set_ndi_count(self.ndi_count)
 
         # ---- 数据缓存（曲线）----
@@ -160,6 +168,7 @@ class CaptureWindow(QMainWindow):
         self._connect_core()
         self.log_signal.connect(self._log)
         self._load_config()
+        self._apply_camera_config()
         self._on_active_changed()                # 按 restored 主通道：缓存→显示→锁定→曲线显隐
 
         # CLI 覆盖（仅端口类参数）
@@ -168,7 +177,9 @@ class CaptureWindow(QMainWindow):
         self.sb_baud.setValue(int(baudrate)); self.sb_slave.setValue(int(slave_addr))
 
         # 相机立即开（预览）；mock 阀两组都连，方便直接验证 six-channel/all 模式
-        self.cam.start()
+        for camera in self.cams:
+            camera.start()
+        self._hardware_started = True
         if mock_valve:
             self.controller.connect_group(1)
             self.controller.connect_group(2)
@@ -176,12 +187,37 @@ class CaptureWindow(QMainWindow):
             self.ndi.start()
             self._sync_ndi_button()
 
-        mocked = [n for n, m in (("相机", mock_cam), ("阀/Modbus", mock_valve), ("NDI", mock_ndi)) if m]
+        mocked = [n for n, m in ((f"相机×{len(self.cams)}", mock_cam),
+                                 ("阀/Modbus", mock_valve), ("NDI", mock_ndi)) if m]
         if mocked:
             self._log(f"就绪。MOCK 组件：{' + '.join(mocked)}（这些用假数据，其余用真硬件）")
         else:
             self._log("就绪。（全部真硬件，需先连接 Modbus / NDI）")
         self._log("单通道用法：把不用的 5 路 min=max=0，只给目标通道设范围。")
+
+    def _parse_camera_serials(self, text=None):
+        raw = self.camera_serials_text if text is None else text
+        return [part.strip() for part in str(raw).split(",")
+                if part.strip() and part.strip().lower() != "auto"]
+
+    def _make_cameras(self):
+        serials = self._parse_camera_serials()
+        if self.mock_cam:
+            serials = [None] * self.camera_count
+        elif not serials:
+            serials = RealSenseCam.list_devices()[:self.camera_count]
+        serials = serials[:self.camera_count]
+        if len(serials) < self.camera_count:
+            if self.camera_count == 1:
+                serials.append(None)
+            else:
+                # 多相机不能让多个 pipeline 都打开默认设备；缺失设备用无效序列号
+                # 占位并明确报错，避免静默采集重复视角。
+                serials.extend(f"__missing_camera_{i}__"
+                               for i in range(len(serials), self.camera_count))
+        self.camera_serials = serials
+        return [RealSenseCam(mock=self.mock_cam, fps=self.fps, serial=serial)
+                for serial in serials]
 
     # ===================== UI 构建 =====================
     def _build_ui(self):
@@ -264,6 +300,24 @@ class CaptureWindow(QMainWindow):
         g.addWidget(self.lbl_ndi, 1, 0, 1, 5)
         ll.addWidget(gb)
 
+        # ---- 多相机 ----
+        gb = QGroupBox("相机（RealSense，多视角同步）")
+        g = QGridLayout(gb)
+        g.addWidget(QLabel("相机数"), 0, 0)
+        self.sb_camera_count = QSpinBox(); self.sb_camera_count.setRange(1, 8)
+        self.sb_camera_count.setValue(self.camera_count)
+        g.addWidget(self.sb_camera_count, 0, 1)
+        g.addWidget(QLabel("序列号（逗号分隔，空=自动）"), 0, 2)
+        self.le_camera_serials = QLineEdit(self.camera_serials_text)
+        g.addWidget(self.le_camera_serials, 0, 3)
+        self.btn_camera_apply = QPushButton("应用/重连")
+        self.btn_camera_apply.clicked.connect(self._apply_camera_config)
+        g.addWidget(self.btn_camera_apply, 0, 4)
+        self.lbl_camera = QLabel("相机预览：cam0")
+        self.lbl_camera.setStyleSheet("color:#334E68")
+        g.addWidget(self.lbl_camera, 1, 0, 1, 5)
+        ll.addWidget(gb)
+
         # ---- 采集 ----
         gb = QGroupBox("数据采集（动作门控）")
         g = QGridLayout(gb)
@@ -302,7 +356,7 @@ class CaptureWindow(QMainWindow):
         g = QGridLayout(gb)
         g.addWidget(QLabel("camera_params(npz)"), 0, 0); self.le_camparam = QLineEdit("config/real_camera_params.npz"); g.addWidget(self.le_camparam, 0, 1, 1, 2)
         g.addWidget(QLabel("灰度阈值"), 1, 0); self.sb_thresh = QDoubleSpinBox(); self.sb_thresh.setRange(0, 255); self.sb_thresh.setDecimals(0); self.sb_thresh.setValue(60); g.addWidget(self.sb_thresh, 1, 1)
-        self.cb_planar = QCheckBox("单相机--planar-lift"); self.cb_planar.setChecked(True); g.addWidget(self.cb_planar, 1, 2)
+        self.cb_planar = QCheckBox("单相机 planar-lift（多相机自动三角化）"); self.cb_planar.setChecked(True); g.addWidget(self.cb_planar, 1, 2)
         self.btn_npz = QPushButton("⚡ 生成 npz（tip.npz + capture_to_npz）"); self.btn_npz.clicked.connect(self._on_gen_npz); g.addWidget(self.btn_npz, 2, 0, 1, 3)
         self.btn_summary = QPushButton("📋 导出汇总 CSV（按帧对齐 6路气压+NDI）"); self.btn_summary.clicked.connect(self._on_summary); g.addWidget(self.btn_summary, 3, 0, 1, 3)
         ll.addWidget(gb)
@@ -311,10 +365,22 @@ class CaptureWindow(QMainWindow):
         # ---------- 右：可视化 ----------
         right = QWidget()
         rl = QVBoxLayout(right)
-        self.preview = QLabel("相机预览"); self.preview.setAlignment(Qt.AlignCenter)
-        self.preview.setMinimumHeight(220); self.preview.setStyleSheet("background:#222;color:#aaa")
-        self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        rl.addWidget(self.preview, 3)
+        preview_toolbar = QHBoxLayout()
+        preview_toolbar.addWidget(QLabel("预览布局"))
+        self.cb_camera_view = QComboBox()
+        self.cb_camera_view.currentIndexChanged.connect(self._on_camera_view_changed)
+        preview_toolbar.addWidget(self.cb_camera_view)
+        preview_toolbar.addStretch(1)
+        rl.addLayout(preview_toolbar)
+        self.preview_container = QWidget()
+        self.preview_container.setMinimumHeight(220)
+        self.preview_container.setStyleSheet("background:#222;color:#aaa")
+        self.preview_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.preview_grid = QGridLayout(self.preview_container)
+        self.preview_grid.setContentsMargins(2, 2, 2, 2)
+        self.preview_grid.setSpacing(3)
+        rl.addWidget(self.preview_container, 3)
+        self._rebuild_camera_preview(self.camera_count)
         self.p_plot = pg.PlotWidget(
             title="6 路气压 (kPa)",
             axisItems={"left": _CleanAxis(orientation="left"),
@@ -344,7 +410,8 @@ class CaptureWindow(QMainWindow):
     # ===================== 信号接线 =====================
     def _connect_core(self):
         self.core.log.connect(self._log)
-        self.core.preview_frame.connect(self._on_preview)
+        self.core.preview_frames.connect(self._on_preview_frames)
+        self.core.preview_frame_updated.connect(self._on_preview_frame_updated)
         self.core.pressure_status.connect(self._on_pressure)
         self.core.ndi_status.connect(self._on_ndi)
         self.core.connection_changed.connect(self._on_conn)
@@ -352,6 +419,131 @@ class CaptureWindow(QMainWindow):
         self.core.recording_started.connect(self._on_rec_started)
         self.core.recording_status.connect(self._on_rec_status)
         self.core.recording_stopped.connect(self._on_rec_stopped)
+
+    def _rebuild_camera_preview(self, count):
+        """在固定预览容器内重建相机格子；容器尺寸不随相机数量改变。"""
+        while self.preview_grid.count():
+            item = self.preview_grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self._camera_preview_labels = []
+        self.cb_camera_view.blockSignals(True)
+        self.cb_camera_view.clear()
+        self.cb_camera_view.addItem("平铺全部")
+        self.cb_camera_view.addItems([f"cam{i}" for i in range(max(1, int(count)))])
+        self.cb_camera_view.blockSignals(False)
+        for i in range(max(1, int(count))):
+            label = QLabel(f"cam{i} 等待图像")
+            label.setAlignment(Qt.AlignCenter)
+            label.setStyleSheet("background:#222;color:#aaa;border:1px solid #555")
+            self._camera_preview_labels.append(label)
+        self._layout_camera_preview()
+
+    def _layout_camera_preview(self):
+        for label in self._camera_preview_labels:
+            label.hide()
+        if not self._camera_preview_labels:
+            return
+        selected = self.cb_camera_view.currentIndex()
+        if selected <= 0:
+            count = len(self._camera_preview_labels)
+            columns = max(1, int(np.ceil(np.sqrt(count))))
+            rows = int(np.ceil(count / columns))
+            for i, label in enumerate(self._camera_preview_labels):
+                self.preview_grid.addWidget(label, i // columns, i % columns)
+                label.show()
+            for row in range(rows):
+                self.preview_grid.setRowStretch(row, 1)
+            for col in range(columns):
+                self.preview_grid.setColumnStretch(col, 1)
+            self.lbl_camera.setText(f"相机预览：平铺全部（{count} 路）")
+        else:
+            i = min(selected - 1, len(self._camera_preview_labels) - 1)
+            self.preview_grid.addWidget(self._camera_preview_labels[i], 0, 0)
+            self.preview_grid.setRowStretch(0, 1)
+            self.preview_grid.setColumnStretch(0, 1)
+            self._camera_preview_labels[i].show()
+            self.lbl_camera.setText(f"相机预览：cam{i}")
+        self._refresh_camera_preview()
+
+    def _on_camera_view_changed(self, _index):
+        self._layout_camera_preview()
+
+    def _set_camera_label(self, label, frame, index):
+        if frame is None:
+            label.setText(f"cam{index} 等待图像")
+            label.setPixmap(QPixmap())
+            return
+        try:
+            rgb = np.ascontiguousarray(frame[:, :, ::-1])
+            h, w = rgb.shape[:2]
+            qimg = QImage(rgb.data, w, h, w * 3, QImage.Format_RGB888).copy()
+            pix = QPixmap.fromImage(qimg).scaled(max(1, label.width() - 4),
+                                                  max(1, label.height() - 4),
+                                                  Qt.KeepAspectRatio,
+                                                  Qt.FastTransformation)
+            label.setPixmap(pix)
+        except Exception as exc:
+            label.setText(f"cam{index} 预览失败: {exc}")
+
+    def _refresh_camera_preview(self):
+        for i, label in enumerate(self._camera_preview_labels):
+            frame = (self._latest_preview_frames[i]
+                     if i < len(self._latest_preview_frames) else None)
+            self._set_camera_label(label, frame, i)
+
+    def _on_preview_frames(self, frames):
+        self._latest_preview_frames = list(frames)
+        self._refresh_camera_preview()
+
+    def _on_preview_frame_updated(self, index, frame):
+        if index < 0 or index >= len(self._camera_preview_labels):
+            return
+        while len(self._latest_preview_frames) < len(self._camera_preview_labels):
+            self._latest_preview_frames.append(None)
+        self._latest_preview_frames[index] = frame
+        selected = self.cb_camera_view.currentIndex()
+        if selected <= 0 or selected == index + 1:
+            self._set_camera_label(self._camera_preview_labels[index], frame, index)
+
+    def _apply_camera_config(self):
+        """应用相机数量/序列号；录制中由 recorder 拒绝，避免样本视角变化。"""
+        if not hasattr(self, "sb_camera_count"):
+            return False
+        count = max(1, int(self.sb_camera_count.value()))
+        serial_text = self.le_camera_serials.text().strip()
+        self.camera_count = count
+        self.camera_serials_text = serial_text
+        old_cams = list(getattr(self, "cams", []))
+        if getattr(self.core, "recording", False):
+            self._log("⚠ 录制中不能修改相机，请先停止采集。")
+            return False
+        for camera in old_cams:
+            try:
+                if camera.isRunning():
+                    camera.stop()
+            except Exception as exc:
+                self._log(f"⚠ 关闭旧相机失败: {exc}")
+        self.cams = self._make_cameras()
+        self.cam = self.cams[0]
+        self.core.set_cameras(self.cams)
+        self._latest_preview_frames = [None] * len(self.cams)
+        self._rebuild_camera_preview(len(self.cams))
+        if hasattr(self, "log_box"):
+            available = [s for s in self.camera_serials
+                         if s and not str(s).startswith("__missing_camera_")]
+            if not self.mock_cam and count > len(available):
+                self._log(f"⚠ 请求 {count} 台相机，但只发现/配置 {len(available)} 个序列号；"
+                          "请检查设备连接和序列号。")
+            self._log(f"相机配置已应用：{len(self.cams)} 台，序列号="
+                      f"{available or ['自动']}。")
+        # 点击应用时立即启动新线程；初始化阶段由 __init__ 统一启动。
+        if getattr(self, "_hardware_started", False):
+            for camera in self.cams:
+                camera.start()
+        return True
 
     # ===================== 配置持久化（跨机器安全）=====================
     def _load_config(self):
@@ -363,6 +555,10 @@ class CaptureWindow(QMainWindow):
             self.le_g1.setText(c.get("group1", self.le_g1.text()))
             self.le_g2.setText(c.get("group2", self.le_g2.text()))
             self.le_ndi.setText(c.get("ndi_port", self.le_ndi.text()))
+            self.camera_count = max(1, int(c.get("camera_count", self.camera_count)))
+            self.sb_camera_count.setValue(self.camera_count)
+            self.camera_serials_text = c.get("camera_serials", self.camera_serials_text)
+            self.le_camera_serials.setText(self.camera_serials_text)
             self.ndi_count = max(1, int(c.get("ndi_count", self.ndi_count)))
             self.sb_ndi_count.setValue(self.ndi_count)
             self.core.set_ndi_count(self.ndi_count)
@@ -410,6 +606,8 @@ class CaptureWindow(QMainWindow):
             cp["capture"] = {
                 "group1": self.le_g1.text(), "group2": self.le_g2.text(),
                 "ndi_port": self.le_ndi.text(),
+                "camera_count": str(self.sb_camera_count.value()),
+                "camera_serials": self.le_camera_serials.text(),
                 "ndi_count": str(self.sb_ndi_count.value()),
                 "baudrate": str(int(self.sb_baud.value())), "slave_addr": str(int(self.sb_slave.value())),
                 "seq_dir": self.le_seq.text(), "mode": str(self.cb_mode.currentIndex()),
@@ -439,14 +637,13 @@ class CaptureWindow(QMainWindow):
         self.log_box.appendPlainText(text)
 
     def _on_preview(self, img: np.ndarray):
-        if not self.preview.isVisible():
-            return
-        rgb = np.ascontiguousarray(img[:, :, ::-1])   # BGR -> RGB
-        h, w = rgb.shape[:2]
-        qimg = QImage(rgb.data, w, h, w * 3, QImage.Format_RGB888).copy()
-        pix = QPixmap.fromImage(qimg).scaled(self.preview.width() - 4, self.preview.height() - 4,
-                                             Qt.KeepAspectRatio, Qt.FastTransformation)
-        self.preview.setPixmap(pix)
+        """兼容旧的单帧预览信号。新界面使用 _on_preview_frames。"""
+        self._on_preview_frames([img])
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_camera_preview_labels"):
+            self._refresh_camera_preview()
 
     def _on_pressure(self, p6: list):
         p6 = list(p6)[:N_CHAN] + [0.0] * (N_CHAN - len(p6))
@@ -796,11 +993,17 @@ class CaptureWindow(QMainWindow):
 
     def _on_gen_npz(self):
         seq = self._seq_abspath()
-        cam0 = os.path.join(seq, "cam0")
+        view_dirs = []
+        for i in range(8):
+            camera_dir = os.path.join(seq, f"cam{i}")
+            if not os.path.isdir(camera_dir):
+                break
+            view_dirs.append(camera_dir)
         act = os.path.join(seq, "actions6.csv")
         ft = os.path.join(seq, "frame_times.txt")
-        if not os.path.isdir(cam0):
-            self._log(f"找不到帧目录 {cam0}，先采集或改保存目录。"); return
+        if not view_dirs:
+            self._log(f"找不到相机帧目录 {os.path.join(seq, 'cam0')}，先采集或改保存目录。")
+            return
         for need, path in (("actions6.csv", act), ("frame_times.txt", ft)):
             if not os.path.isfile(path):
                 self._log(f"找不到 {need}（{path}）。"); return
@@ -819,13 +1022,15 @@ class CaptureWindow(QMainWindow):
         if not os.path.isabs(cam_param):
             cam_param = os.path.join(self.project_root, cam_param)
         out_npz = os.path.join(os.path.dirname(seq), os.path.basename(seq) + ".npz")
-        cmd = [sys.executable, script, "--view-dirs", cam0, "--camera-params", cam_param,
+        cmd = [sys.executable, script, "--view-dirs", *view_dirs, "--camera-params", cam_param,
                "--method", "backlight", "--gray-thresh", str(int(self.sb_thresh.value())),
                "--dt", f"{1.0 / self.fps:.4f}",
                "--actions", act, "--actions-has-timestamps", "--frame-times", ft,
                "--clean-nan", "--out", out_npz]
-        if self.cb_planar.isChecked():
+        if self.cb_planar.isChecked() and len(view_dirs) == 1:
             cmd.append("--planar-lift")
+        elif self.cb_planar.isChecked() and len(view_dirs) > 1:
+            self._log("多相机已自动使用三角化，忽略 planar-lift 选项。")
         if tip:
             cmd += ["--ndi-tip", tip]
         self._log("生成 npz：" + " ".join(cmd))
@@ -875,6 +1080,9 @@ def main():
     p.add_argument("--group2", default="COM56", help="Modbus 组2 串口")
     p.add_argument("--ndi", default="COM1", dest="ndi_port", help="NDI 串口")
     p.add_argument("--ndi-count", type=int, default=2, help="NDI 探头数量")
+    p.add_argument("--camera-count", type=int, default=None, help="RealSense 相机数量（GUI 可修改）")
+    p.add_argument("--camera-serials", default=None,
+                   help="RealSense 序列号，逗号分隔；留空自动选择")
     p.add_argument("--baudrate", type=int, default=9600)
     p.add_argument("--slave", type=int, default=1, dest="slave_addr")
     p.add_argument("--fps", type=int, default=30)
@@ -888,7 +1096,15 @@ def main():
     win = CaptureWindow(mock_cam=mock_cam, mock_valve=mock_valve, mock_ndi=mock_ndi,
                         group1=args.group1, group2=args.group2, ndi_port=args.ndi_port,
                         baudrate=args.baudrate, slave_addr=args.slave_addr, fps=args.fps,
-                        ndi_count=args.ndi_count)
+                        ndi_count=args.ndi_count,
+                        camera_count=args.camera_count or 1,
+                        camera_serials=args.camera_serials or "")
+    if args.camera_count is not None or args.camera_serials is not None:
+        if args.camera_count is not None:
+            win.sb_camera_count.setValue(max(1, args.camera_count))
+        if args.camera_serials is not None:
+            win.le_camera_serials.setText(args.camera_serials)
+        win._apply_camera_config()
     win.show()
     sys.exit(app.exec_())
 

@@ -18,12 +18,12 @@
 
 输出（每个序列目录，对齐 capture_to_npz schema）
 -------------------------------------------------
-  cam0/00000.png ...      零填充帧（cv2 缺失则跳过，frame_times 同步少写）
+  cam0/00000.png ...      每个相机一个目录（cv2 缺失则跳过，frame_times 同步少写）
   frame_times.txt         每帧一行 相对秒           (--frame-times)
   actions6.csv            t_sec, c0..c5             (--actions --actions-has-timestamps)
   ndi.csv                 t_sec + 每个探头 11 列位姿/质量
   commands.csv            命令时间、ACK、最终六通道命令、通信状态
-  samples.csv             抓帧时间、frame_age、各 NDI age/quality
+  samples.csv             抓帧时间、总体/逐相机 frame_age、各 NDI age/quality
   meta.json               运行元信息
   summary.csv             (可选) 按帧对齐汇总
 """
@@ -38,7 +38,7 @@ import time
 from datetime import datetime
 
 import numpy as np
-from PyQt5.QtCore import QObject, QThread, QTimer, pyqtSignal, pyqtSlot
+from PyQt5.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal, pyqtSlot
 
 try:
     import cv2
@@ -64,13 +64,21 @@ class SaveThread(QThread):
         self._running = True
 
     def save(self, path: str, img: np.ndarray):
+        return self.save_many([(path, img)])
+
+    def save_many(self, items):
+        """把同一拍的多路图像作为一个队列项入队，避免只写入部分视角。"""
         if cv2 is None:
             return False
         try:
-            self._q.put_nowait((path, img))
+            self._q.put_nowait(list(items))
             return True
         except queue.Full:
             return False
+
+    def set_max_pending(self, max_pending):
+        """调整批次队列容量；只在未录制时由相机数量变化触发。"""
+        self._q.maxsize = max(1, int(max_pending))
 
     def run(self):
         if cv2 is None:
@@ -84,20 +92,21 @@ class SaveThread(QThread):
                 continue
             if item is None:
                 break
-            path, img = item
-            try:
-                cv2.imwrite(path, img)
-            except Exception as e:  # pragma: no cover
-                print(f"[save] {path}: {e}")
+            for path, img in item:
+                try:
+                    cv2.imwrite(path, img)
+                except Exception as e:  # pragma: no cover
+                    print(f"[save] {path}: {e}")
         while True:  # 排空残余帧
             try:
-                path, img = self._q.get_nowait()
+                items = self._q.get_nowait()
             except queue.Empty:
                 break
-            try:
-                cv2.imwrite(path, img)
-            except Exception:
-                pass
+            for path, img in items:
+                try:
+                    cv2.imwrite(path, img)
+                except Exception:
+                    pass
 
     def stop(self):
         self._running = False
@@ -122,6 +131,8 @@ class ValveRecorder(QObject):
     # ---- 给 GUI 的信号 ----
     log = pyqtSignal(str)
     preview_frame = pyqtSignal(np.ndarray)
+    preview_frames = pyqtSignal(list)                    # 多相机最新帧列表
+    preview_frame_updated = pyqtSignal(int, np.ndarray)  # 单路更新，避免 GUI 重绘全部视角
     pressure_status = pyqtSignal(list)                 # 6vec kPa（最新下发）
     ndi_status = pyqtSignal(list)                      # 11 维位姿（最新）
     recording_started = pyqtSignal(str)
@@ -130,17 +141,23 @@ class ValveRecorder(QObject):
     connection_changed = pyqtSignal(bool, str)
     group_connection_changed = pyqtSignal(int, bool)     # (group_id, connected) 透传给 GUI
 
-    def __init__(self, cam, ndi, controller, parent=None):
+    def __init__(self, cam, ndi, controller, parent=None, cams=None):
         super().__init__(parent)
-        self.cam = cam
+        self.cams = list(cams) if cams is not None else [cam]
+        if not self.cams:
+            raise ValueError("至少需要一个相机线程")
+        self.cam = self.cams[0]  # 兼容旧调用方
         self.ndi = ndi
         self.controller = controller
-        self.save_thread = SaveThread(self)
+        self.save_thread = SaveThread(self, max_pending=max(2, 8 // len(self.cams)))
         self.save_thread.start()
 
         # 最新值缓存（GUI 线程独占读写 → 无锁）
         self._latest_frame = None
         self._frame_t = 0.0
+        self._latest_frames = [None] * len(self.cams)
+        self._frame_ts = [0.0] * len(self.cams)
+        self._camera_slots = []
         self._latest_ndi = [float("nan")] * 11
         self._ndi_t = 0.0
 
@@ -148,7 +165,8 @@ class ValveRecorder(QObject):
         self.recording = False
         self.t0 = 0.0
         self.seq_dir = ""
-        self._cam_dir = ""
+        self._cam_dir = ""          # cam0 兼容别的脚本
+        self._cam_dirs = []
         self._f_frame = None
         self._f_act6 = None
         self._f_ndi = None
@@ -180,7 +198,7 @@ class ValveRecorder(QObject):
         self._clock.timeout.connect(self._on_tick)
 
         # 生产者 -> 本对象（跨线程 queued → 跑在本对象所在线程）
-        cam.frame_ready.connect(self._on_cam)
+        self._connect_cameras(self.cams)
         ndi.ndi_data.connect(self._on_ndi)
         if hasattr(controller, "action_logged"):
             controller.action_logged.connect(self._on_action)
@@ -192,6 +210,37 @@ class ValveRecorder(QObject):
             controller.log.connect(self.log)
         if hasattr(controller, "communication_result"):
             controller.communication_result.connect(self._on_comm_result)
+
+    def _connect_cameras(self, cams):
+        self._camera_slots = []
+        for index, camera in enumerate(cams):
+            slot = lambda image, t, i=index: self._on_cam(i, image, t)
+            camera.frame_ready.connect(slot, Qt.QueuedConnection)
+            self._camera_slots.append(slot)
+
+    def set_cameras(self, cams):
+        """录制前替换相机线程集合；录制中禁止变更，避免帧索引失配。"""
+        if self.recording:
+            self.log.emit("⚠ 录制中不能修改相机数量，请先停止采集。")
+            return False
+        cams = list(cams)
+        if not cams:
+            raise ValueError("至少需要一个相机线程")
+        for camera, slot in zip(self.cams, self._camera_slots):
+            try:
+                camera.frame_ready.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass
+        self.cams = cams
+        self.cam = cams[0]
+        self._latest_frames = [None] * len(cams)
+        self._frame_ts = [0.0] * len(cams)
+        self._latest_frame = None
+        self._frame_t = 0.0
+        self.save_thread.set_max_pending(max(2, 8 // len(cams)))
+        self._connect_cameras(cams)
+        self.preview_frames.emit(list(self._latest_frames))
+        return True
 
     def set_ndi_count(self, count: int):
         """设置 NDI 探头数；每个探头固定 11 列，缺失探头写 NaN。"""
@@ -231,8 +280,11 @@ class ValveRecorder(QObject):
             return
         seq_dir = os.path.abspath(seq_dir)
         os.makedirs(seq_dir, exist_ok=True)
-        self._cam_dir = os.path.join(seq_dir, "cam0")
-        os.makedirs(self._cam_dir, exist_ok=True)
+        self._cam_dirs = [os.path.join(seq_dir, f"cam{i}")
+                          for i in range(len(self.cams))]
+        for camera_dir in self._cam_dirs:
+            os.makedirs(camera_dir, exist_ok=True)
+        self._cam_dir = self._cam_dirs[0]
         self.seq_dir = seq_dir
         self.t0 = time.monotonic()
         self._frame_idx = 0
@@ -286,6 +338,7 @@ class ValveRecorder(QObject):
         self._sample_writer = csv.writer(self._f_sample)
         self._sample_writer.writerow(
             ["frame_idx", "command_id", "t_grab", "frame_age"]
+            + [f"frame_age{i}" for i in range(len(self.cams))]
             + [f"ndi{i}_age" for i in range(self._ndi_count)]
             + [f"ndi{i}_quality" for i in range(self._ndi_count)])
 
@@ -299,6 +352,8 @@ class ValveRecorder(QObject):
             "lo6": lo,
             "hi6": hi,
             "active_channel": self._active_channel,
+            "camera_count": len(self.cams),
+            "camera_serials": [getattr(camera, "serial", None) for camera in self.cams],
             "ndi_count": self._ndi_count,
             "random_seed": random_seed,
             "pre_generate_steps": int(pre_generate_steps),
@@ -386,26 +441,32 @@ class ValveRecorder(QObject):
         t_grab = max(0.0, now_abs - self.t0)
         idx = self._frame_idx
 
-        # ---- 图像 ----
-        frame = self._latest_frame
-        frame_age = max(0.0, now_abs - self._frame_t) if self._frame_t > 0 else float("inf")
-        if cv2 is None or frame is None or frame_age > self._max_frame_age:
+        # ---- 多相机图像：一拍要么完整写入所有视角，要么整拍丢弃 ----
+        frames = list(self._latest_frames)
+        frame_ages = [max(0.0, now_abs - t) if t > 0 else float("inf")
+                      for t in self._frame_ts]
+        bad_cameras = [i for i, (frame, age) in enumerate(zip(frames, frame_ages))
+                       if frame is None or age > self._max_frame_age]
+        if cv2 is None or bad_cameras:
             if not self._warned_no_frame:
                 self._warned_no_frame = True
-                self.log.emit(f"⚠ 当前帧无效/过期（age={frame_age:.3f}s），本拍不写入训练样本。")
+                self.log.emit(f"⚠ 相机帧无效/过期（camera={bad_cameras}，"
+                              f"age={[round(a, 3) for a in frame_ages]}），"
+                              "本拍不写入训练样本。")
             return
-        if cv2 is not None and frame is not None:
-            path = os.path.join(self._cam_dir, f"{idx:05d}.png")
-            if not self.save_thread.save(path, frame):
-                self.log.emit("⚠ 图像写入队列已满，本拍丢弃以避免内存增长。")
-                return
-            try:
-                self._f_frame.write(f"{t_grab:.6f}\n")
-                self._f_frame.flush()
-            except Exception as e:
-                self.log.emit(f"frame_times 写失败，安全停止: {e}")
-                self.stop_recording()
-                return
+        image_items = [(os.path.join(self._cam_dirs[i], f"{idx:05d}.png"), frame)
+                       for i, frame in enumerate(frames)]
+        if not self.save_thread.save_many(image_items):
+            self.log.emit("⚠ 图像写入队列已满，本拍所有视角一起丢弃以避免内存增长。")
+            return
+        frame_age = max(frame_ages)
+        try:
+            self._f_frame.write(f"{t_grab:.6f}\n")
+            self._f_frame.flush()
+        except Exception as e:
+            self.log.emit(f"frame_times 写失败，安全停止: {e}")
+            self.stop_recording()
+            return
         # ---- 动作 + NDI（同索引、同时刻 t_grab 落盘）----
         ndi = list(self._latest_ndi)
         try:
@@ -423,6 +484,7 @@ class ValveRecorder(QObject):
                 ndi_quality.append(q)
             self._sample_writer.writerow(
                 [idx, command_id, f"{t_grab:.6f}", f"{frame_age:.6f}"]
+                + ["nan" if not math.isfinite(x) else f"{x:.6f}" for x in frame_ages]
                 + ["nan" if not math.isfinite(x) else f"{x:.6f}" for x in ndi_ages]
                 + ["nan" if not isinstance(x, (int, float)) or not math.isfinite(float(x)) else f"{float(x):.6f}"
                    for x in ndi_quality])
@@ -501,11 +563,17 @@ class ValveRecorder(QObject):
         self.log.emit(f"停止录制，共 {frames} 拍（帧）-> {self.seq_dir}")
 
     # ---------------- 生产者槽（更新缓存 + 推预览）----------------
-    @pyqtSlot(np.ndarray, float)
-    def _on_cam(self, img: np.ndarray, t_abs: float):
-        self._latest_frame = img
-        self._frame_t = float(t_abs)
-        self.preview_frame.emit(img)
+    @pyqtSlot(int, np.ndarray, float)
+    def _on_cam(self, index: int, img: np.ndarray, t_abs: float):
+        if index < 0 or index >= len(self._latest_frames):
+            return
+        self._latest_frames[index] = img
+        self._frame_ts[index] = float(t_abs)
+        if index == 0:
+            self._latest_frame = img
+            self._frame_t = float(t_abs)
+            self.preview_frame.emit(img)  # 兼容旧的单相机预览订阅者
+        self.preview_frame_updated.emit(index, img)
 
     @pyqtSlot(list, float)
     def _on_ndi(self, pose: list, t_abs: float):
@@ -527,13 +595,13 @@ class ValveRecorder(QObject):
                 self.controller.wait_idle(1.0)
             self.controller.close()
 
-        steps = (
-            ("stop_recording", self.stop_recording),
-            ("cam.stop", self.cam.stop),
+        steps = [("stop_recording", self.stop_recording)]
+        steps.extend((f"cam{i}.stop", camera.stop) for i, camera in enumerate(self.cams))
+        steps.extend([
             ("ndi", lambda: (self.ndi.stop(), self.ndi.wait(3000))),
             ("controller.zero+close", zero_and_close),
             ("save_thread", lambda: (self.save_thread.stop(), self.save_thread.wait(5000))),
-        )
+        ])
         for label, fn in steps:
             try:
                 fn()
@@ -594,6 +662,14 @@ def export_summary_csv(seq_dir: str, out_path: str | None = None) -> str:
         ft = ft.reshape(1)
     act = _load_num_csv(os.path.join(seq_dir, "actions6.csv"))
     ndi = _load_num_csv(os.path.join(seq_dir, "ndi.csv"))
+    try:
+        with open(os.path.join(seq_dir, "meta.json"), encoding="utf-8") as f:
+            camera_count = int(json.load(f).get("camera_count", 1))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        camera_count = 1
+        while os.path.isdir(os.path.join(seq_dir, f"cam{camera_count}")):
+            camera_count += 1
+    camera_count = max(1, camera_count)
     n = len(ft)
     if out_path is None:
         out_path = os.path.join(seq_dir, "summary.csv")
@@ -603,8 +679,10 @@ def export_summary_csv(seq_dir: str, out_path: str | None = None) -> str:
         ndi_header = []
         for j in range(n_ndi):
             ndi_header += [f"ndi{j}_x", f"ndi{j}_y", f"ndi{j}_z", f"ndi{j}_quality"]
+        image_header = (["image"] if camera_count == 1 else
+                        [f"image{j}" for j in range(camera_count)])
         w.writerow(["frame_idx", "t_s", "p0", "p1", "p2", "p3", "p4", "p5"]
-                   + ndi_header + ["image"])
+                   + ndi_header + image_header)
         for i in range(n):
             row = [i, f"{ft[i]:.6f}"]
             row += [f"{act[i, 1 + c]:.4f}" if i < len(act) and act.shape[1] > 1 + c else ""
@@ -613,6 +691,9 @@ def export_summary_csv(seq_dir: str, out_path: str | None = None) -> str:
                 base = 1 + j * 11
                 for col in (base, base + 1, base + 2, base + 10):
                     row.append(f"{ndi[i, col]:.4f}" if i < len(ndi) and ndi.shape[1] > col else "")
-            row.append(f"cam0/{i:05d}.png")
+            if camera_count == 1:
+                row.append(f"cam0/{i:05d}.png")
+            else:
+                row.extend(f"cam{j}/{i:05d}.png" for j in range(camera_count))
             w.writerow(row)
     return out_path

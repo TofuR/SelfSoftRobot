@@ -10,8 +10,8 @@
 `real_capture/` 是一套**自包含**的实物采集程序：
 
 - 用 `modbus_manager.py` 控制 **6 通道电流型气压阀**（2 组 Modbus RTU × 3 路，0–500 kPa，4–20 mA）；
-- 同步采集 **NDI Aurora 末端位姿** + **RealSense 图像**；
-- **动作门控**落盘：动作每 0.2 s 下发一次，等 0.19 s 软臂稳定后抓一帧 + NDI 末端，三者同索引；
+- 同步采集 **NDI Aurora 末端位姿** + **一台或多台 RealSense 图像**；
+- **动作门控**落盘：动作每 0.2 s 下发一次，等 0.19 s 软臂稳定后抓全部相机帧 + NDI 末端，同一拍分别写入 `camN/`；
 - 输出直接对接 `scripts/real/capture_to_npz.py`（→ 仿真 schema `.npz`，可训练）。
 
 ---
@@ -104,6 +104,10 @@ python main_capture.py --mock-ndi --group1 /dev/ttyUSB0 --group2 /dev/ttyUSB1
 
 # 3) 真机全用（两组 Modbus + NDI + 相机）
 python main_capture.py --group1 /dev/ttyUSB0 --group2 /dev/ttyUSB1 --ndi /dev/ttyUSB2
+
+# 4) 多相机：序列号按设备管理器/RealSense Viewer 查询，逗号分隔
+python main_capture.py --camera-count 2 --camera-serials 123456789,987654321 \
+                       --group1 /dev/ttyUSB0 --group2 /dev/ttyUSB1 --ndi /dev/ttyUSB2
 ```
 
 `--mock` = `--mock-cam --mock-valve --mock-ndi`，三个可任意组合混选。
@@ -129,10 +133,11 @@ GUI「主通道」下拉有 `ch0..ch5` + `全部 (all)`——**这是同一个�
 
 1. 「Modbus 连接」填组1/组2 串口 + 波特/从站 → 点「**组1 连接**」（默认只连组1 即可控制 ch0-2）；需要 ch3-5 再点「**组2 连接**」。**再点一次同一按钮 = 断开该组**（安全释放串口，不必关程序）。
 2. 「主通道」选 `ch0`（单通道起步）→ 确认 min/max（默认 `0–200`）。未连的组对应的通道会自动灰锁。
-3. （可选）点「**连接 NDI**」（再点 = 断开，安全释放 Aurora）；相机自动预览。
-4. 填「保存目录」、选「模式」（手动 / 随机游走 / 往返扫描 / Replay）、「动作间隔」`0.2` s、「稳定等待」`0.19` s。
-5. 「▶ 开始采集」→ 采够后「■ 停止采集」。
-6. 后处理：「⚡ 生成 npz」或「📋 导出汇总 CSV」。
+3. 在「**相机**」分组选择相机数量和序列号；空序列号表示自动选择当前设备。点击「应用/重连」后，右侧可选择单路预览或平铺全部视角。
+4. （可选）点「**连接 NDI**」（再点 = 断开，安全释放 Aurora）。
+5. 填「保存目录」、选「模式」（手动 / 随机游走 / 往返扫描 / Replay）、「动作间隔」`0.2` s、「稳定等待」`0.19` s。
+6. 「▶ 开始采集」→ 采够后「■ 停止采集」。
+7. 后处理：「⚡ 生成 npz」或「📋 导出汇总 CSV」。多相机会自动传入全部 `camN` 目录并使用三角化。
 
 ---
 
@@ -140,13 +145,13 @@ GUI「主通道」下拉有 `ch0..ch5` + `全部 (all)`——**这是同一个�
 
 | 文件 | 内容 | 下游用途 |
 |---|---|---|
-| `cam0/00000.png ...` | 零填充帧 | `--view-dirs` |
+| `cam0/00000.png ... camN/00000.png` | 每个相机一个目录；同一编号为同步拍 | `--view-dirs` |
 | `frame_times.txt` | 每帧一行 相对秒 | `--frame-times` |
 | `actions6.csv` | `t_sec, c0..c5`（**首行表头**） | `--actions --actions-has-timestamps` |
 | `ndi.csv` | `t_sec + ndi0_* ... ndiN_*`（首行表头；失锁写 `nan`） | → `tip.npz` → `--ndi-tip` |
 | `commands.csv` | 命令时间、ACK、最终命令、分组通信状态 | 通信 QC / 复现 |
-| `samples.csv` | `t_grab`、`frame_age`、各 NDI age/quality | 数据质量筛选 |
-| `meta.json` / `summary.csv` | 运行元信息 / 按帧对齐汇总 | 人眼核对 |
+| `samples.csv` | `t_grab`、总体/逐相机 `frame_age`、各 NDI age/quality | 数据质量筛选 |
+| `meta.json` / `summary.csv` | 运行元信息（含相机数量/序列号）/ 按帧对齐汇总 | 人眼核对 |
 
 ---
 
