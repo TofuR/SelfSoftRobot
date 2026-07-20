@@ -43,6 +43,7 @@
 | 文档 | 说明 |
 |---|---|
 | [`experiments/openloop_sparse_observation_validation_plan.md`](experiments/openloop_sparse_observation_validation_plan.md) | **当前论文实验主方案**：机制层物理记忆与 H–K 可行域，任务层路径依赖 IK/不可见轨迹，应用层不透明通道稀疏观测巡检 |
+| [`experiments/real_robot_validation_workbench_todo.md`](experiments/real_robot_validation_workbench_todo.md) | **实机验证界面 TODO**：模型/场景/规划/安全执行/同步评价的通用工作台与任务插件 |
 | `experiments/experiment_analysis.md` | 全部实验结果分析 |
 | `experiments/improvement_proposals.md` | 改进方案记录 |
 | `experiments/results_evaluation.md` | 评估结果 |

@@ -4,6 +4,7 @@
 > 主线模型：`OpenLoopTransitionModel`
 > 核心场景：观测一次软臂形态，随后在遮挡或低观测频率下，仅根据动作序列开环预测一段时间
 > 关联实现：`scripts/evaluation/eval_horizon.py`、`scripts/control/inverse_plan.py`、`scripts/evaluation/viz_control.py`
+> 实机落地：[`real_robot_validation_workbench_todo.md`](real_robot_validation_workbench_todo.md)
 
 ---
 

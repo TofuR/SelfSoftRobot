@@ -1,0 +1,9 @@
+{
+  "mock": true,
+  "group1_port": "COM3",
+  "group2_port": "COM46",
+  "ndi_port": "COM9",
+  "camera_serials": [],
+  "ndi_count": 2,
+  "note": "Copy to hardware.json on the PC and edit locally. Do not commit machine ports."
+}

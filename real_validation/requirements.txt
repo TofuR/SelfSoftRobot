@@ -1,0 +1,5 @@
+# Mock/离线工作台
+numpy>=1.20
+torch>=2.0
+PyQt5>=5.15
+pyqtgraph>=0.13
