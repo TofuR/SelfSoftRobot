@@ -85,6 +85,10 @@
 | **B11** | `checkpoints/current/best_model.pt` 不存在,GUI 默认路径指向空文件 | `checkpoints/current/` 只有 config.json | 开箱即崩 |
 | **B12** | `SessionState.REANCHOR` 已定义但**无代码进入**;`ObservationPolicy.require_allowed` 无调用点 | `session.py:22,36-41` | 滚动重锚定不可用;观测隔离只是审计不是强制 |
 | **B13** | `tip_fix` 的三个门控是**静默跳过**,不产生"tip 未修"的可观测信号 | `src/utils/skeleton_2d.py:31-45` | 在线时 node0 可能落在 cap 角落而调用方无从得知 |
+| **B14** | **碰撞门静默变盲**:`predicted_min_obstacle_clearance` 只遍历 `obstacle_circle`,而 `obstacle_aabb`/`obstacle_polygon`/`obstacle_mask` **今天就在白名单里、今天就能构造成功** | `openloop_planner.py:265-272` 只 loop circle;`preflight.py:64-67` 的 `predicted_collision` 完全依赖该值 | preflight **直接放行侵入 AABB 的轨迹**。现存洞,非未来洞 |
+| **B15** | **模型加载失败不清 runtime**:`ModelRuntime` 抛错后 `self.runtime` 保持旧值,`model_summary` 永远停在"正在后台加载模型……" | `main_validation.py:318` 直连 `_error`(对比 462/528 行的 planning/execution 都有专用槽) | 操作员看到新 checkpoint 路径、以为换了模型,实际后续 Plan 用**旧 runtime**;而 preflight 比对 `plan.model_hash` vs `descriptor.checkpoint_hash` **两边都是旧的所以照样放行**。**真正的问题不是崩溃,是这个安全洞** |
+| **B16** | `set_scene`/`set_anchor`/`set_safety` **完全没有状态守卫**(与 `configure_model:112-113` 不对称) | `session.py:123-142` | 执行中改 scene → `self.plan = None` + `save_snapshot()` → `experiment.json` 被写成 `"plan": null` 而命令正在下发 → **执行记录与实际下发计划脱钩 = 溯源腐败** |
+| **B17** | `step_budget_px` 的语义基于 `delta_scale_max=1.0`,但前向真正的系数是 `clamp(self.delta_scale, max=1.0)`,而 `delta_scale` 是**可学参数(初值 0.1,存在 checkpoint 里)** | `inverse_plan.py:188-191` docstring 与 `--step_budget_px 4.0` 默认;`model_state_transition.py:171-175` | **高估约 10× → auto_k 选的 K 小 10× → 步数不够,到不了目标**。移植 auto_k 时必须从 `delta_scale` 现算 |
 
 ### 2.6 模型侧的在线约束(不可协商的物理事实)
 
@@ -190,6 +194,7 @@ real_capture/                     → 完全不动
   "train_dt_s": 0.203125,
   "train_dt_std_s": 0.011,
   "mask_source": "white_on_blue",
+  "mask_source_provenance": "path_suffix",
   "segment_params": {"sat": 100, "val": 100, "diff": 25, "dil": 35,
                      "open_k": 5, "close_k": 15,
                      "min_area_frac": 0.003, "min_h_frac": 0.15},
@@ -198,24 +203,56 @@ real_capture/                     → 完全不动
   "reference_frame_sha256": "<hex>",
   "mask_area_median_px": 8562,
   "registration_residual_max_px": 2.0,
-  "k_safe_table": {"3.0mm": 41, "5.0mm": 51, "10.0mm": 124},
+  "k_safe_table_px": {"5px": 51, "10px": 124, "20px": 250},
   "train_sequences": ["seq_YYYYmmdd_HHMMSS"],
   "n_nodes": 15, "window_size": 40, "z_dim": 16, "episode_len": 40
 }
 ```
 
+**字段权威来源与 provenance 纪律**(经对仓库实际产物核对,2026-07-28 修正):
+
+| 字段 | 权威来源 | 纪律 |
+|---|---|---|
+| `action_scale_kpa` | `raw/<seq>/meta.json` 的 `hi6[ch]`,**经 `masks_to_transition_npz.py:52-76 action_max_per_channel()`** | 该函数有 fallback(hi6 缺失/为 0 → 数据 max),**必须复用它而不是自己读 hi6**,并记 `action_scale_provenance` |
+| `train_dt_measured_s` / `_std_s` | 生产者对 `frame_times.txt` 现算 `np.diff` | **禁止硬写 `0.203125`** —— 仓库无任何文件记录该数。标称值取 `meta.json` 的 `action_interval_s`(=0.2) |
+| `k_safe_table_px` | `<exp>/eval_horizon/horizon_summary.json` 的 `Kmax_px_{5,10,20}` | **键是 px 不是 mm**。实测 `Kmax_px_3=1`、`5→51`、`10→124`、`20→250`。要 mm 键须先让 `eval_real_quant.py` 把 `fit_affine_px_to_mm` 的 A 与残差落成 `calibration/px_to_mm.json`(现在只 print 不落盘) |
+| `mask_source` | 只能从 `config.json` 的 `data_dirs.sequence` **路径后缀**推断(`_sam2`→sam2 / `_rep`→masks_repaired / 无→white_on_blue) | 必须写 `mask_source_provenance: "path_suffix"`;**不能当硬指纹做在线门控** |
+| `segment_params` / `mask_area_median_px` | `derived/<seq>/segment_meta.json`,**且仅当 `mask_source == "white_on_blue"`** | 对 sam2 / masks_repaired **必须 null**。`sam2/masks/<seq>_full/` 下没有任何统计 json;仓库里"面积中位数"有 4 个互相矛盾的值(8562 / 6718 / 6323–7099 / 运行时重算),阈值倍数有 3 套 —— 随手挑一个会变成第 5 套约定 |
+| `camera` / `reference_frame*` / px→mm 仿射 | **不存在,必须 null** | `seq_20260627_163921/meta.json` 是旧格式,`camera_serials` 是 `recorder.py:356` 之后才加的字段 |
+
+**生产者**:新增 `scripts/utils/build_deploy_manifest.py`(与同目录 `build_control_report.py` 同类:读 train_log 产物 → 写部署工件)。3 源 join(checkpoint / config.json / raw meta+frame_times / horizon_summary),**必须在服务器上跑**(PC 上没有 `real_capture/data/raw`)。不要塞进 `masks_to_transition_npz.py`(拿不到 checkpoint)或 `trainer_unified.py`(训练时 checkpoint hash 与 horizon 认证都还不存在)。
+
+⚠️ **`exp_20260714_8` 不是部署主线**(它训在 SAM2 mask 上,而在线只能跑 white_on_blue)。部署主线由 P2 按 §8 协议重采重训产出;P1 只把它当 manifest 生产者的冒烟对象。
+
 ### 4.2 `ModelDescriptor` 新增字段
 
 ```python
-action_scale_kpa: tuple[float, ...]   # 每模型维的 kPa 上界
-train_dt_s: float                     # 训练采样周期实测均值
-train_dt_std_s: float
-mask_source: str                      # 在线只允许匹配的源
-segment_params: dict
-camera_fingerprint: dict              # serial / width / height / fps
-reference_frame_hash: str
-k_safe_table: dict[str, int]          # 容差 → 步数;k_safe 由选定容差决定
+action_scale_kpa: tuple[float, ...] | None = None  # 每模型维的 kPa 上界;len == action_dim
+channel_map: tuple[int, ...] | None = None
+train_dt_nominal_s: float | None = None            # meta.json 的 action_interval_s
+train_dt_measured_s: float | None = None           # 生产者对 frame_times.txt 现算
+train_dt_std_s: float | None = None
+mask_source: str | None = None                     # 在线只允许匹配的源
+segment_params: dict | None = None                 # 仅 white_on_blue 有;其余 None
+camera_fingerprint: dict | None = None             # serial / width / height / fps
+reference_frame_hash: str | None = None
+k_safe_table_px: dict[str, int] | None = None      # "5px"/"10px"/"20px" → 步数
+provenance: dict[str, str] = {}                    # 每个字段的来源标签
 ```
+
+**降级三档(P1 没有 manifest 时的行为)**
+
+| 档 | 字段 | 行为 |
+|---|---|---|
+| A 安全默认,不阻断 | `registration_residual_max_px=2.0`、dt 容差 | 策略常量非数据 |
+| B 从 config.json 推,标 `provenance="config_json"` | `n_nodes`/`window_size`/`z_dim`/`episode_len`/`action_dim`/`k_train`/`train_sequences`/`mask_source` | 可推 |
+| C 必须 None 且**阻断** | `action_scale_kpa`/`channel_map`/`train_dt_*`/`k_safe_table_px` → **阻断规划+执行**;`camera_fingerprint`/`reference_frame_hash`/`segment_params` → **只阻断执行** | 见下 |
+
+**fail-closed 裁决(2026-07-28)**:`action_scale_kpa` 缺失**必须阻断规划**,不能用 `or 1.0` 回退。理由:`safety.pressure_max6` 是 kPa(0–150),`norm_factor ≈ 1.0`(因为 npz 里的 actions 已被 `masks_to_transition_npz.py:286` 除过 hi6 归到 [0,1]),`physical / norm` 把 0–150 原样喂进训练域为 [0,1] 的模型 —— **这是活的 OOD bug**。回退 1.0 会把它固化成"默认正确",且错误单位下产出的 plan 会被存档、被 replay,变成假工件。
+**绝不允许用 `SafetyPolicy.pressure_max6` 当 fallback**(那是安全上限,不是训练域上界)。
+P1 自测的显式人工通道:GUI Setup 页加 `action_scale_kpa` 与 `channel_map` 输入框(默认空),填了就以 `provenance="operator"` 记入 descriptor 与 `ActionPlan.metadata` 供审计。
+
+**`preflight.py:62-63` 的 k_safe 门必须反转为 fail-closed**:现在 `if model.k_safe is not None` 才检查,即 `k_safe=None` **静默放行任意 horizon**;需补 `k_safe_uncertified` 分支。
 
 ### 4.3 `ScenePrimitive` 新增真正的消费者
 
@@ -402,7 +439,10 @@ runs/run_YYYYmmdd_HHMMSS/
 | T1 | **parity**:固定 50 张 mask,`real_validation.perception.skeleton` vs 迁移前 `src/utils/skeleton_2d.py` 的行为快照 | 逐点 px 差 == 0;`segmentation` 逐像素 == 0 |
 | T2 | **单位往返** | `kPa → model → kPa` 误差 < 1e-6;且 `safety.max=150 kPa` 时模型输入 ≤ 1.0(**直接锁 B1**) |
 | T3 | **坐标往返** | `camera_pixel → model → camera_pixel` 误差 < 阈值(接上已有 `PlanarTransform.roundtrip_error`) |
-| T4 | **CLI/GUI 一致性** | 同 anchor / scene / seed 下 `inverse_plan.py` 与工作台 planner 结果一致(前提:先统一 B4 的障碍聚合与损失定义) |
+| T4a | **共享目标核逐位一致**(阻断,hermetic,float64 + `torch.equal`) | 4 个损失项 + 障碍项定义逐位一致;障碍项对 K 不变;K=1 不 NaN;**z 通道永不进 loss** |
+| T4b | **CLI/GUI 小规模一致**(阻断,CPU,K=3/n_iter=5) | `atol=1e-6` 比动作序列 + `best_init` 相同;前置断言两侧 `norm_factor` 相等 |
+| T4c | 真 checkpoint 端到端(**非阻断**,标 slow) | 末态误差差值 < 0.5 px。**不在 CUDA 上断言逐位相同**(cuDNN GRU backward 非确定 + TF32) |
+| T9 | **import 卫生**(子进程断言,避免被已 import 的 torch 污染成假阴性) | `import real_validation` / `import real_validation.perception` / `from real_validation.perception.skeleton import ...` 三种情形下,`torch`/`PyQt5`/`pyqtgraph`/`cv2`/`scipy`/`matplotlib` **均未被加载** |
 | T5 | **Mock 错误注入** | ACK timeout / queue full / 串口错 / 坏帧 / 配准漂移 / warmup 未满 → 全部安全转移并归零 |
 | T6 | **回放确定性** | run 目录离线 replay 重算指标 == 在线记录 |
 | T7 | **rollout 等价** | `runtime/rollout.plan_rollout` 与 `src/` 侧 rollout 同输入逐元素相等 |
@@ -434,7 +474,11 @@ runs/run_YYYYmmdd_HHMMSS/
 | **M0** | **感知迁移**(`src/data/real/segmentation.py` + `src/utils/skeleton_2d.py` → `real_validation/perception/`,`src/` 改薄壳,修 B13 暴露 tip_fix 标志)+ T1 parity 测试 + 命令行感知探针(无 GUI):抓帧 → 分割 → 骨架 → 叠加图 + 配准残差 + 逐算子耗时 | T1 全绿;叠加图、残差数字、逐算子耗时表 |
 | **M1** | 按 §8 协议重采集 + 生成 npz + `deploy_manifest.json` | 新 seq;离群帧率 < 1%;门控通过率报告 |
 | **M2** | 重训 gt + open_loop + 视野认证 | `k_safe_table`(容差→步数);error-by-k 曲线 |
-| **M3** | 契约与单位修复(B1–B5、B7–B11)+ T2/T3/T4/T7/T8 测试 | 测试全绿;CLI/GUI 同输入同结果;规划耗时基准 |
+| **M3** | 契约与单位修复(B1–B5、B7–B11、**B14–B17**)+ T2/T3/T4a/T4b/T7/T8 测试 | 测试全绿;**共享目标核在 CLI 与 GUI 之间逐位一致**(见下);规划耗时基准 |
+
+> **T4 的可实现范围(2026-07-28 修正)**:原表述"CLI/GUI 同输入同结果"**不可实现,也不该实现**。两者决策变量空间根本不同 —— 工作台在 kPa 空间做**图内可微**的 clamp+速率递推投影,CLI 在归一化空间做**图外** `clamp_` 且无速率限制;`Adam lr=0.05` 与 `clip_grad_norm_(1.0)` 都是有单位量,同一 lr 的相对步长差 ~150×。统一它只能靠删掉工作台的速率投影,而那是唯一保证计划可执行、能过 preflight 的机制。
+> 因此 T4 拆三段:**T4a**(阻断,hermetic,`torch.equal` 逐位)—— 共享目标核的 4 个损失项 + 障碍项定义逐位一致、障碍项对 K 不变、K=1 不 NaN、**z 通道永不进 loss**(`pc_scale[2]=1e-6`,任何非零 z 会被放大 1e6);**T4b**(阻断,CPU,K=3/n_iter=5)—— `atol=1e-6` 比动作序列 + `best_init` 相同,并前置断言两侧 `norm_factor` 相等(CLI 走 `model_loader.py:73` 会在找不到 `action_norm_factor.txt` 时**静默回落 1.0**,不断言就可能"权重相同、norm_factor 不同"下假通过);**T4c**(非阻断,标 slow)—— 真 checkpoint,只断言末态误差差值 < 0.5 px。
+> 障碍聚合统一为 **mean-over-(K,N)**(工作台口径)。判据不是随便挑:`auto_k` 会让 K 随 gap 变化,CLI 现在的 sum-over-K 使同一 `w_obs` 的避障压强随 K 线性漂移,**与 auto_k 直接冲突**。代价:`docs/reports/2026-07-14/15` 中含障碍的 planner 数字与新实现不可比(该报告本来就含不可复现的随机重启分量 —— CLI 全文没有任何 `torch.manual_seed`)。
 | **M4** | `camera_view` + `scene_editor` + 实时锚定 + warmup | 点目标 → 规划 → 预测骨架动画;Mock 执行通过 |
 | **M5** | 真机安全执行 + 同步隐藏评价(jitter、observation policy、录制、metrics 接线、B6/B12) | 低压小幅末端到达真机成功 + prediction-to-execution gap 曲线 |
 | **M6** | 全身形态目标 + 非圆障碍 + REANCHOR 滚动窗口 | 给目标形态 + 真实障碍 → 真机执行 → 全身误差与最小间距报告 |
