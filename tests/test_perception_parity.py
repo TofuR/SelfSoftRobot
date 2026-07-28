@@ -232,6 +232,113 @@ class TipFixObservabilityTest(unittest.TestCase):
         self.assertTrue(np.array_equal(bare, with_info))
 
 
+def _legacy_clean(mask):
+    import cv2
+    k = np.ones((5, 5), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
+    n, lbl, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+    if n <= 1:
+        return mask
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    keep = 1 + int(np.argmax(areas))
+    return (lbl == keep).astype(np.uint8)
+
+
+def _legacy_segment_white_on_blue(bgr, bg_gray, sat=100, val=120, diff=25, dil=35,
+                                  open_k=5, close_k=15,
+                                  min_area_frac=0.003, min_h_frac=0.15):
+    import cv2
+    from scipy.ndimage import binary_fill_holes
+    H, W = bgr.shape[:2]
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    white = ((hsv[:, :, 1] < sat) & (hsv[:, :, 2] > val)).astype(np.uint8)
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    moved = (cv2.absdiff(gray, bg_gray) > diff).astype(np.uint8)
+    moved = cv2.dilate(moved, np.ones((dil, dil), np.uint8)) if dil > 1 else moved
+    m = (white & moved).astype(np.uint8)
+    if open_k > 1:
+        m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((open_k, open_k), np.uint8))
+    if close_k > 1:
+        m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((close_k, close_k), np.uint8))
+    m = binary_fill_holes(m > 0).astype(np.uint8)
+    n, lbl, stats, _ = cv2.connectedComponentsWithStats(m, 8)
+    out = np.zeros((H, W), np.uint8)
+    if n > 1:
+        cands = [(int(stats[i, cv2.CC_STAT_AREA]), i) for i in range(1, n)
+                 if stats[i, cv2.CC_STAT_AREA] >= min_area_frac * H * W
+                 and stats[i, cv2.CC_STAT_HEIGHT] >= min_h_frac * H]
+        if cands:
+            cands.sort(reverse=True)
+            out[lbl == cands[0][1]] = 1
+    return out
+
+
+def synthetic_bgr_scene():
+    """合成 (bgr, bg_gray)：蓝墙背景 + 白半透明弯臂 + 一条白细管干扰。"""
+    import cv2
+    rng = np.random.default_rng(20260728)
+    H, W = 160, 120
+    bg = np.zeros((H, W, 3), np.uint8)
+    bg[:, :, 0] = 180
+    bg[:, :, 1] = 70
+    bg[:, :, 2] = 40
+    bg = np.clip(bg.astype(np.int16) + rng.integers(-4, 5, bg.shape), 0, 255).astype(np.uint8)
+    bg_gray = cv2.cvtColor(bg, cv2.COLOR_BGR2GRAY)
+
+    frame = bg.copy()
+    for row in range(24, 150):
+        left = 52 + int(round(0.05 * (row - 24) ** 1.3 / 10.0))
+        frame[row, left:left + 11] = (235, 235, 238)
+    frame[10:150, 100:103] = (240, 240, 240)   # 白细管干扰
+    return frame, bg_gray
+
+
+class SegmentationParityTest(unittest.TestCase):
+    def test_white_on_blue_matches_frozen_reference(self):
+        from real_validation.perception.segmentation import segment_white_on_blue
+        bgr, bg_gray = synthetic_bgr_scene()
+        for val in (100, 120):   # 100=批产实际参数, 120=代码默认
+            expected = _legacy_segment_white_on_blue(bgr, bg_gray, val=val)
+            actual = segment_white_on_blue(bgr, bg_gray, val=val)
+            self.assertTrue(np.array_equal(actual, expected), f"val={val}")
+            self.assertEqual(actual.dtype, np.uint8)
+
+    def test_clean_matches_frozen_reference(self):
+        from real_validation.perception.segmentation import _clean
+        rng = np.random.default_rng(7)
+        mask = (rng.random((80, 60)) > 0.75).astype(np.uint8)
+        mask[20:60, 25:35] = 1
+        self.assertTrue(np.array_equal(_clean(mask.copy()), _legacy_clean(mask.copy())))
+
+    def test_masks_to_skeletons_uses_canonical_skeleton(self):
+        from real_validation.perception.segmentation import masks_to_skeletons_2d
+        from real_validation.perception.skeleton import batch_extract_skeleton_2d
+        bent = dict(synthetic_masks())["bent_tube"]
+        masks = bent[None, None, :, :]
+        out = masks_to_skeletons_2d(masks, n_points=15, tip_fix=True)
+        self.assertEqual(out.shape, (1, 1, 15, 2))
+        self.assertTrue(np.array_equal(
+            out[0], batch_extract_skeleton_2d(masks[0], 15, tip_fix=True)))
+
+    def test_masks_to_skeletons_default_tip_fix_stays_true(self):
+        """与 extract_skeleton_2d 的 False 相反 —— 两个默认值都要原样保留。"""
+        import inspect
+
+        from real_validation.perception.segmentation import masks_to_skeletons_2d
+        default = inspect.signature(masks_to_skeletons_2d).parameters["tip_fix"].default
+        self.assertIs(default, True)
+
+    def test_shim_reexports_same_objects(self):
+        import src.data.real.segmentation as shim
+        from real_validation.perception import segmentation as canonical
+        for name in ("_clean", "segment_backlight", "segment_bg_subtract",
+                     "segment_color", "build_median_background",
+                     "segment_white_on_blue", "segment_views",
+                     "masks_to_skeletons_2d"):
+            self.assertIs(getattr(shim, name), getattr(canonical, name), name)
+
+
 REAL_MASKS = REPO / "real_capture/data/derived/seq_20260627_163921/masks"
 
 
