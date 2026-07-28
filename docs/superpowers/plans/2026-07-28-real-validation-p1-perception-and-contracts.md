@@ -340,7 +340,6 @@ import numpy as np
   - 计算 2D 投影骨架 loss（Phase 1 监督信号）
 """
 
-import numpy as np
 import torch
 
 from real_validation.perception.skeleton import (  # noqa: F401  薄壳 re-export
@@ -357,6 +356,10 @@ __all__ = [
     "compute_2d_skeleton_loss",
 ]
 ```
+
+> ⚠️ **原来的 `import numpy as np` 必须删掉** —— 掏空三个骨架函数后,留在本文件的
+> `project_3d_to_2d` 与 `compute_2d_skeleton_loss` **只用 torch**(`torch.tensor` /
+> `torch.norm` / `torch.linalg.cross` / `torch.stack`),numpy 变成未使用 import。
 
 - [ ] **Step 6: 运行 parity 测试确认通过**
 
@@ -781,20 +784,16 @@ __all__ = [
 ]
 ```
 
-- [ ] **Step 5: 补依赖**
-
-在 `real_validation/requirements.txt` 末尾追加:
-```
-opencv-python>=4.5
-scipy>=1.7
-```
-
-- [ ] **Step 6: 运行测试确认通过**
+- [ ] **Step 5: 运行测试确认通过**
 
 Run: `cd /Data5/ddf/projects/SelfSoftRobot && python -m unittest tests.test_perception_parity -v`
 Expected: 全部 PASS
 
-- [ ] **Step 7: 确认既有调用点未被破坏**
+> 依赖声明(`opencv-python` / `scipy`)由 **Task 4 独占** —— 本任务不动任何
+> `requirements.txt`。测试能跑是因为根 `requirements.txt:20` 已有
+> `opencv-python==4.11.0.86` 且环境里已装 scipy;requirements 文件是声明,不是安装步骤。
+
+- [ ] **Step 6: 确认既有调用点未被破坏**
 
 Run:
 ```bash
@@ -805,16 +804,16 @@ python scripts/real/segment_batch.py --help > /dev/null && echo "segment_batch -
 ```
 Expected: grep 命中的名字都在 `__all__` 内;两条命令均成功。
 
-- [ ] **Step 8: 运行全部测试**
+- [ ] **Step 7: 运行全部测试**
 
 Run: `cd /Data5/ddf/projects/SelfSoftRobot && python -m unittest tests.test_real_validation_core tests.test_perception_parity -v`
-Expected: 全部 OK
+Expected: 全部 OK(核心 20 个 + parity)
 
-- [ ] **Step 9: 询问用户后提交**
+- [ ] **Step 8: 询问用户后提交**
 
 ```bash
 git add real_validation/perception/segmentation.py src/data/real/segmentation.py \
-        real_validation/requirements.txt tests/test_perception_parity.py
+        tests/test_perception_parity.py
 git commit -m "refactor(perception): 分割迁为唯一实现 + src 薄壳 + parity 测试"
 ```
 
@@ -943,12 +942,12 @@ opencv-python>=4.5
 scipy>=1.7
 ```
 
-把 Task 3 Step 5 加进 `real_validation/requirements.txt` 的两行**移除**,改在文件末尾加一行注释:
+在 `real_validation/requirements.txt` 末尾加一行注释(Task 3 已不再动本文件,故此处只是新增):
 ```
 # 在线感知另见 requirements-perception.txt（opencv-python / scipy）
 ```
 
-根 `requirements.txt`:在 `opencv-python==4.11.0.86` 附近补一行(scipy 现在是隐式依赖 —— `perception/segmentation.py` 的 `binary_fill_holes`、`scripts/real/repair_masks.py:27` 都在用):
+根 `requirements.txt`:在 `opencv-python==4.11.0.86` 附近补一行 —— scipy 现在是**隐式**依赖(`perception/segmentation.py` 的 `binary_fill_holes`、`scripts/real/repair_masks.py:27` 都在用,但根 requirements 没声明):
 ```
 scipy>=1.7
 ```

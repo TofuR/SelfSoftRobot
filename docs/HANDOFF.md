@@ -3,7 +3,14 @@
 > **你是新接手 SelfSoftRobot 的 AI agent?先读这一篇。**
 > 目标:5 分钟建立正确心智模型 + 知道"当前在哪/别破坏什么/怎么跑最新东西"。
 > 这份文档面向 AI agent,**与现有人向文档互补、不重复**——人向深度参考见文末导航索引。
-> 最后更新:2026-07-15 · 分支 `feat/real-data-transition`
+> 最后更新:2026-07-28 · 分支 `feat/real-data-transition`
+
+> **⚠️ 2026-07-28 三条决策(读本文其余部分前先看这里,因为它们改了两条前提)**
+> 1. **方法收敛**:只留 `open_loop_transition`(部署主线)+ `gt_transition`(论文消融)。C-MSTNF / MS-SCNF / SDF / SkeletonSDF / FlowMatch / SpatialSequence 的实验日志已归档到 `train_log/_archive/`(1.27 G);**代码暂不动**。清单:[`docs/archived/2026-07-28_archive_manifest.md`](archived/2026-07-28_archive_manifest.md)。
+> 2. **3D 多自由度**:后续 6 通道全部气压驱动,状态来源改为**双/多相机标定 + 三角化** → **§7.2 不变量 #7"免标定"已反转**(详见该处)。方向 06 与 08 升为 ★★★ 主线。
+> 3. **mask 源**:训练继续用 SAM2,**在线改跑 SAM2 前向流式**。已知缺口:前向流式 vs 训练用的双向分块仍有差异(在线没有"启发式修复的干净锚帧"这个来源);GPU 单帧延迟未实测。
+>
+> 本文其余部分描述的 2D 免标定路线**仍然有效**(它是 3D 之前的基线),但不再是终点。
 
 ---
 
@@ -218,7 +225,15 @@ python scripts/evaluation/eval_real_quant.py \
 
 | # | 不变量 | 后果 |
 |---|--------|------|
-| 7 | **免标定**:state = 图像像素骨架 `[col,row,0]`,z 恒 0。无相机矩阵/内参/三角化。`capture_to_npz.py`/`inspect_capture.py`/`calibrate_cameras.py` 是**遗留标定路线**,别用于路线 B。 | 引入投影 → 破坏整条 calibration-free 论点。 |
+| 7 | ~~**免标定**:state = 图像像素骨架 `[col,row,0]`,z 恒 0。无相机矩阵/内参/三角化。`capture_to_npz.py`/`inspect_capture.py`/`calibrate_cameras.py` 是**遗留标定路线**,别用于路线 B。~~ **⚠️ 2026-07-28 已反转,见下方** | ~~引入投影 → 破坏整条 calibration-free 论点。~~ |
+
+> **⚠️ 不变量 #7 已于 2026-07-28 反转。** 决定后续 6 个通道全部气压驱动进入 3D(理由:1-DOF 平面运动下"到达目标 + 避障"命题本身不成立,**只有 3D 冗余自由度才有零空间**),而**单目免标定不可能恢复深度**,故状态来源改为**双/多相机标定 + 三角化**。
+>
+> 因此 `scripts/real/calibrate_cameras.py`、`scripts/real/capture_to_npz.py --view-dirs`、`src/utils/camera_system.py`、`src/data/real/triangulation.py`、`src/data/dataset_multiview*.py` 从"遗留"变为**主线基础设施**。
+>
+> 连带失效:`pc_scale[2] = 1e-6` 的退化保护(真 3D 数据下 z 有真实量程 —— **旧 checkpoint 的 buffer 是 1e-6,不能与 3D 数据混用**);"障碍是平面近似"的诚实边界可升级为真 3D;`docs/papers/related_work_draft.md` §2.7 的"免标定"差异化论点要重写。
+>
+> **过渡期说明**:现有 `exp_20260714_7/8` 与本文件其余部分描述的 2D 免标定路线**仍然有效**(它是 3D 之前的基线),只是不再是终点。完整决策记录见 [`docs/archived/2026-07-28_archive_manifest.md`](archived/2026-07-28_archive_manifest.md) §3。
 | 8 | **action 归一到 [0,1] 不是 [-1,1]**(气动单向,ch0 只充气 0→150kPa;映射到 [-1,1] 会把"静止"和"全反向"塌成同一点)。上界优先用 `meta.json hi6[ch]`(操作极限)而非数据 max。 | 用 [-1,1] → OOD 负值预测。 |
 | 9 | **节点误差只用 `[:2]`(col,row 平面)**;反归一 `px = norm*pc_scale + pc_center`。整体形态误差只能算 px;末端误差 px + mm(mm 经 NDI↔GT node0 px 最小二乘 2D 仿射)。 | 混用 px/mm → 量纲错。 |
 | 10 | **tip_fix 默认开且必须开**:修末端 node0 落 mask 尖角(根因是逐行质心对倾斜 cap 做**水平**切片→落在角不是中点;修法是沿局部轴**垂直**切片)。 | 关掉 → 末端偏 ~6px,34% 帧受影响。别换通用骨架化(medial_axis 7.50px vs tip_fix 0.80px)。 |
