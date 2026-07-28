@@ -181,6 +181,57 @@ class SkeletonParityTest(unittest.TestCase):
             self.assertTrue(callable(getattr(shim, name)))
 
 
+class TipFixObservabilityTest(unittest.TestCase):
+    """B13:tip_fix 的门控原先是静默跳过,在线质量门控需要"是否生效"信号。"""
+
+    def _info(self, mask, n_points=15, tip_fix=True):
+        from real_validation.perception.skeleton import extract_skeleton_2d
+        return extract_skeleton_2d(mask, n_points, tip_fix=tip_fix, return_info=True)
+
+    def test_applied_on_tilted_cap(self):
+        _, info = self._info(dict(synthetic_masks())["tilted_cap"])
+        self.assertTrue(info["tip_fix_requested"])
+        self.assertTrue(info["tip_fix_applied"])
+        self.assertEqual(info["tip_fix_reason"], "applied")
+
+    def test_skip_reason_too_few_points(self):
+        _, info = self._info(dict(synthetic_masks())["bent_tube"], n_points=4)
+        self.assertFalse(info["tip_fix_applied"])
+        self.assertEqual(info["tip_fix_reason"], "n_points_lt_5")
+
+    def test_skip_reason_too_few_foreground(self):
+        mask = np.zeros((40, 20), np.uint8)
+        mask[10:13, 8:11] = 1
+        self.assertLess(int(mask.sum()), 10)
+        _, info = self._info(mask)
+        self.assertFalse(info["tip_fix_applied"])
+        self.assertEqual(info["tip_fix_reason"], "foreground_lt_10")
+
+    def test_not_requested_reports_reason(self):
+        _, info = self._info(dict(synthetic_masks())["bent_tube"], tip_fix=False)
+        self.assertFalse(info["tip_fix_requested"])
+        self.assertFalse(info["tip_fix_applied"])
+        self.assertEqual(info["tip_fix_reason"], "not_requested")
+
+    def test_empty_mask_reports_zero_skeleton(self):
+        _, info = self._info(dict(synthetic_masks())["empty"])
+        self.assertEqual(info["tip_fix_reason"], "zero_skeleton")
+        self.assertEqual(info["n_valid_rows"], 0)
+
+    def test_return_info_false_keeps_legacy_return_type(self):
+        from real_validation.perception.skeleton import extract_skeleton_2d
+        result = extract_skeleton_2d(dict(synthetic_masks())["bent_tube"], 15, tip_fix=True)
+        self.assertIsInstance(result, np.ndarray)
+
+    def test_info_values_match_bare_result(self):
+        """return_info=True 的骨架必须与 return_info=False 逐位相同(同一计算)。"""
+        from real_validation.perception.skeleton import extract_skeleton_2d
+        mask = dict(synthetic_masks())["tilted_cap"]
+        bare = extract_skeleton_2d(mask, 15, tip_fix=True)
+        with_info, _ = extract_skeleton_2d(mask, 15, tip_fix=True, return_info=True)
+        self.assertTrue(np.array_equal(bare, with_info))
+
+
 REAL_MASKS = REPO / "real_capture/data/derived/seq_20260627_163921/masks"
 
 
