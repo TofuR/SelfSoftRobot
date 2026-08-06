@@ -219,7 +219,7 @@ Comments, docstrings, and variable names are a mix of English and Chinese. The p
 
 ## Key Conventions
 
-- **No formal test framework** — validation uses Jupyter notebooks (`notebooks/`) and evaluation scripts
+- **Tests**: `unittest`(无 pytest)。4 个测试文件:`tests/test_real_validation_core.py`(20 个契约测试)、`tests/test_perception_parity.py`(感知迁移冻结参考)、`tests/test_import_hygiene.py`(子进程断言 real_validation 包根 stdlib-only)、`tests/test_perception_{registration,quality,probe}.py`。运行:`python -m unittest discover -s tests -v`。此外仍用 `notebooks/` 与 `scripts/evaluation/` 做实验级验证
 - **Experiment logging**: Training outputs go to `train_log/<model_name>/exp_<date>_<n>/` with images, best model weights, and loss logs
 - **Config-driven**: `config/training.json` for all hyperparameters; CLI args in `src/config/args.py` can override defaults
 - **Two-phase training**: C-MSTNF/MS-SCNF/SkeletonSDF models train canonical/skeleton first, then deformation/SDF jointly

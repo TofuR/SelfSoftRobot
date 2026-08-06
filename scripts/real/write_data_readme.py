@@ -156,7 +156,7 @@ def main():
         f"- `real_capture/data/derived/{args.seq}/masks` — RAW (white_on_blue 分割, 有腐败)\n",
         f"- `real_capture/data/derived/{args.seq}/masks_repaired` — 启发式修复 (hand+static+actuated)\n",
         f"- `sam2/masks/{args.seq}_full` — SAM2 视频 (分块双向传播, 最干净; area std 1.7%)\n\n",
-        "## 骨架化(src/utils/skeleton_2d.py)\n",
+        "## 骨架化(real_validation/perception/skeleton.py;src/utils/skeleton_2d.py 为薄壳)\n",
         "逐行质心 + 弧长重采样 + **tip_fix**(末端垂直切片修 corner 偏移)。\n",
         "实测 7 法对比(SAM2 mask, n=31): tip_fix 末端误差 0.80px **最优**; medial_axis 7.50px **最差**\n",
         "(corner 问题=倾斜 cap 水平切片, 非细化伪影, medial_axis 治不了且抖 body)。故不换通用骨架化。\n\n",
