@@ -25,8 +25,14 @@ from real_validation.session import ExperimentSession, SessionState
 
 
 def fixtures():
-    model = ModelDescriptor("mock.pt", "abc", "state_transition", 1, 3, 2,
-                            k_train=4, k_safe=4)
+    model = ModelDescriptor(
+        "mock.pt", "abc", "state_transition", 1, 3, 2,
+        k_train=4, k_safe=4,
+        action_scale_kpa=(1.0,), channel_map=(0,),
+        train_dt_nominal_s=0.1, train_dt_measured_s=0.1, train_dt_std_s=0.0,
+        mask_source="white_on_blue", mask_source_provenance="test",
+        segment_params={"val": 100.0},
+        k_safe_table_px={"5px": 4}, registration_residual_max_px=2.0)
     anchor = Anchor(
         state=((0.0, 0.0), (1.0, 1.0), (2.0, 2.0)),
         action_history=((0.0,), (0.0,)), source="test")
@@ -89,6 +95,20 @@ class ValidationCoreTest(unittest.TestCase):
             self.assertEqual(session.state, SessionState.ARMED)
             snapshot = json.loads((session.run_dir / "experiment.json").read_text())
             self.assertEqual(snapshot["state"], "armed")
+
+    def test_scene_without_and_replace_primitive(self):
+        model, anchor, scene, safety, plan = fixtures()
+        obstacle = ScenePrimitive("obstacle_circle", "model", {"center": [1, 1], "r": 2})
+        scene2 = scene.with_primitive(obstacle)
+        self.assertEqual(len(scene2.primitives), 2)
+        removed = scene2.without_primitive(obstacle.primitive_id)
+        self.assertEqual(len(removed.primitives), 1)
+        # 删→加回同一原语,digest 不同(新 primitive_id + 新 revision):任何编辑都让旧 plan stale
+        added_back = removed.with_primitive(
+            ScenePrimitive("obstacle_circle", "model", {"center": [1, 1], "r": 2}))
+        self.assertNotEqual(added_back.digest, scene2.digest)
+        with self.assertRaises(KeyError):
+            scene2.without_primitive("nonexistent")
 
     def test_scene_change_invalidates_ready_plan(self):
         model, anchor, scene, safety, plan = fixtures()

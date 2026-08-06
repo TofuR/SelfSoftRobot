@@ -53,8 +53,16 @@ def anchor_from_npz(path: str | Path, frame_index: int, model: ModelDescriptor,
     if np.any(np.abs(scale) < 1e-12):
         raise ValueError("模型 pc_scale 含零")
     normalized = (state - center) / scale
+    prev_state = positions[frame_index - 1] if frame_index >= 1 else None
+    if prev_state is not None:
+        if prev_state.shape == (3, model.n_nodes):
+            prev_state = prev_state.T
+        prev_state = (prev_state - center) / scale
     return Anchor(
         state=tuple(tuple(float(value) for value in node) for node in normalized),
         action_history=tuple(tuple(float(value) for value in action) for action in history),
-        frame_id="model_normalized", state_space="model_normalized", action_units="kpa",
-        source=f"{source}#frame={frame_index}", quality=1.0)
+        prev_state=(None if prev_state is None
+                    else tuple(tuple(float(value) for value in node) for node in prev_state)),
+        frame_id="model_normalized", state_space="model_normalized",
+        action_units="model_normalized",   # B2:npz actions 已归一到 [0,1],不是 kPa
+        source=f"{source}#frame={frame_index}", quality={"kind": "offline_npz", "score": 1.0})

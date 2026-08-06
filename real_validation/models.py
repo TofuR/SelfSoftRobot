@@ -94,11 +94,13 @@ class ModelDescriptor:
 class Anchor:
     state: tuple[tuple[float, ...], ...]
     action_history: tuple[tuple[float, ...], ...]
+    prev_state: tuple[tuple[float, ...], ...] | None = None   # ★P1b:s_{t-2},速度项需要
     frame_id: str = "model"
+    frame_ref: str = ""                                       # ★P1b:隐藏评价流的帧引用
     timestamp: float = field(default_factory=time.time)
     anchor_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     source: str = "unknown"
-    quality: float | None = None
+    quality: dict[str, Any] = field(default_factory=dict)     # ★P1b:float → 标志集
     state_space: str = "model_normalized"
     action_units: str = "kpa"
 
@@ -113,14 +115,21 @@ class Anchor:
             raise ValueError("action_history 中不能有空动作")
         if any(not all(math.isfinite(v) for v in action) for action in history):
             raise ValueError("action_history 含 NaN/Inf")
+        if self.prev_state is not None:
+            prev = tuple(tuple(float(v) for v in node) for node in self.prev_state)
+            if not prev or any(len(node) not in (2, 3) for node in prev):
+                raise ValueError("anchor prev_state 必须是非空的 N×2 或 N×3 节点")
+            if any(not all(math.isfinite(v) for v in node) for node in prev):
+                raise ValueError("anchor prev_state 含 NaN/Inf")
+            object.__setattr__(self, "prev_state", prev)
         if self.state_space not in {"model", "model_normalized"}:
             raise ValueError("anchor state_space 必须是 model 或 model_normalized")
         if self.action_units not in {"kpa", "model_normalized"}:
             raise ValueError("anchor action_units 必须是 kpa 或 model_normalized")
         if any(not all(math.isfinite(v) for v in action) for action in history):
             raise ValueError("action_history 含 NaN/Inf")
-        if self.quality is not None and not math.isfinite(self.quality):
-            raise ValueError("anchor quality 必须为有限值")
+        if not isinstance(self.quality, dict):
+            raise ValueError("anchor quality 必须是 dict(标志集)")
         object.__setattr__(self, "state", state)
         object.__setattr__(self, "action_history", history)
 
@@ -133,6 +142,8 @@ class Anchor:
         data.pop("schema_version", None)
         data["state"] = tuple(tuple(row) for row in data["state"])
         data["action_history"] = tuple(tuple(row) for row in data["action_history"])
+        if data.get("prev_state") is not None:
+            data["prev_state"] = tuple(tuple(row) for row in data["prev_state"])
         return cls(**data)
 
 
@@ -178,6 +189,21 @@ class Scene:
         return Scene(name=self.name, primitives=self.primitives + (primitive,),
                      dimension=self.dimension)
 
+    def without_primitive(self, primitive_id: str) -> "Scene":
+        """按 primitive_id 移除一个原语(B7:原来只能追加,交互式编辑无法删除)。"""
+        kept = tuple(item for item in self.primitives if item.primitive_id != primitive_id)
+        if len(kept) == len(self.primitives):
+            raise KeyError(f"primitive_id 不存在: {primitive_id}")
+        return Scene(name=self.name, primitives=kept, dimension=self.dimension)
+
+    def replace_primitive(self, primitive_id: str, new_primitive: "ScenePrimitive") -> "Scene":
+        """按 primitive_id 替换一个原语。"""
+        replaced = tuple(new_primitive if item.primitive_id == primitive_id else item
+                         for item in self.primitives)
+        if replaced == self.primitives:
+            raise KeyError(f"primitive_id 不存在: {primitive_id}")
+        return Scene(name=self.name, primitives=replaced, dimension=self.dimension)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": SCHEMA_VERSION,
@@ -200,7 +226,7 @@ class Scene:
 @dataclass(frozen=True)
 class SafetyPolicy:
     pressure_min6: tuple[float, ...] = (0.0,) * N_HARDWARE_CHANNELS
-    pressure_max6: tuple[float, ...] = (200.0,) * N_HARDWARE_CHANNELS
+    pressure_max6: tuple[float, ...] = (150.0,) * N_HARDWARE_CHANNELS   # P1b:对齐训练上界(原 200)
     rise_rate6: tuple[float, ...] = (100.0,) * N_HARDWARE_CHANNELS
     fall_rate6: tuple[float, ...] = (100.0,) * N_HARDWARE_CHANNELS
     initial_action6: tuple[float, ...] = (0.0,) * N_HARDWARE_CHANNELS
