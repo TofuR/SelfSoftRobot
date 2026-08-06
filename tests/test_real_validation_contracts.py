@@ -151,5 +151,73 @@ class ContractRejectionTest(unittest.TestCase):
                            encoder_type=None, hidden_dim=None, n_scales=None)
 
 
+class PreflightNewGatesTest(unittest.TestCase):
+    """P1b:preflight 新门(dt_mismatch / k_safe_uncertified / unsupported_obstacle / action_scale_missing)。"""
+
+    def _base(self, **model_kw):
+        from real_validation.planner_service import build_plan
+        kwargs = {"k_safe": 4, **model_kw}   # 默认 k_safe=4;测试可覆盖为 None 测 uncertified
+        model = ModelDescriptor("m.pt", "abc", "state_transition", 1, 3, 2,
+                                k_train=4, action_scale_kpa=(1.0,), channel_map=(0,),
+                                train_dt_nominal_s=0.2, train_dt_measured_s=0.2031,
+                                train_dt_std_s=0.011, **kwargs)
+        anchor = Anchor(state=((0, 0), (1, 1), (2, 2)), action_history=((0,), (0,)))
+        scene = Scene("t", (ScenePrimitive("target_point", "model", {"xy": [2, 3]}),))
+        safety = SafetyPolicy(pressure_max6=(100,) * 6, rise_rate6=(100,) * 6,
+                              fall_rate6=(100,) * 6, ack_timeout_s=0.1)
+        plan = build_plan(model_actions=((10,), (20,)), channel_map=(0,),
+                          step_interval_s=0.2, model=model, anchor=anchor,
+                          scene=scene, safety=safety)
+        return plan, model, anchor, scene, safety
+
+    def test_dt_mismatch_is_detected(self):
+        from real_validation.preflight import validate_plan
+        plan, model, anchor, scene, safety = self._base()
+        bad = plan.__class__.from_dict({**plan.to_dict(), "step_interval_s": 0.3})
+        codes = {i.code for i in validate_plan(bad, model, anchor, scene, safety).issues}
+        self.assertIn("dt_mismatch", codes)
+
+    def test_dt_match_passes(self):
+        from real_validation.preflight import validate_plan
+        plan, model, anchor, scene, safety = self._base()
+        self.assertTrue(validate_plan(plan, model, anchor, scene, safety).ok)
+
+    def test_k_safe_uncertified_blocks(self):
+        from real_validation.preflight import validate_plan
+        plan, model, anchor, scene, safety = self._base(k_safe=None, k_safe_table_px=None)
+        codes = {i.code for i in validate_plan(plan, model, anchor, scene, safety).issues}
+        self.assertIn("k_safe_uncertified", codes)
+
+    def _plan_for(self, scene, model, anchor, safety, step_interval_s=0.2):
+        from real_validation.planner_service import build_plan
+        return build_plan(model_actions=((10,), (20,)), channel_map=(0,),
+                          step_interval_s=step_interval_s, model=model, anchor=anchor,
+                          scene=scene, safety=safety)
+
+    def test_unsupported_obstacle_blocks(self):
+        from real_validation.preflight import validate_plan
+        _, model, anchor, _, safety = self._base()
+        scene_with_poly = Scene("t", (
+            ScenePrimitive("target_point", "model", {"xy": [2, 3]}),
+            ScenePrimitive("obstacle_polygon", "model", {"points": [[1, 1], [2, 1], [2, 2]]}),
+        ))
+        plan = self._plan_for(scene_with_poly, model, anchor, safety)
+        codes = {i.code for i in validate_plan(plan, model, anchor, scene_with_poly, safety).issues}
+        self.assertIn("unsupported_obstacle", codes)
+
+    def test_supported_aabb_passes_when_planned(self):
+        """obstacle_aabb 在 planner 支持后不再是 unsupported(AABB SDF 已在 obstacles)。"""
+        from real_validation.preflight import validate_plan
+        _, model, anchor, _, safety = self._base()
+        scene_with_aabb = Scene("t", (
+            ScenePrimitive("target_point", "model", {"xy": [2, 3]}),
+            ScenePrimitive("obstacle_aabb", "model", {"min": [1, 1], "max": [2, 2]}),
+        ))
+        plan = self._plan_for(scene_with_aabb, model, anchor, safety)
+        # AABB 由 planner 支持 → preflight 不再因 unsupported_obstacle 阻断
+        codes = {i.code for i in validate_plan(plan, model, anchor, scene_with_aabb, safety).issues}
+        self.assertNotIn("unsupported_obstacle", codes)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -31,7 +31,8 @@ class PreflightResult:
 
 
 def validate_plan(plan: ActionPlan, model: ModelDescriptor, anchor: Anchor,
-                  scene: Scene, safety: SafetyPolicy) -> PreflightResult:
+                  scene: Scene, safety: SafetyPolicy, *,
+                  train_dt_s: float | None = None) -> PreflightResult:
     issues: list[PreflightIssue] = []
 
     def add(code: str, message: str, step=None, channel=None) -> None:
@@ -83,4 +84,23 @@ def validate_plan(plan: ActionPlan, model: ModelDescriptor, anchor: Anchor,
                 add("slew_rate", f"第 {step} 步 ch{channel} 压力变化超过 {rate:g} kPa/s",
                     step, channel)
         previous = action
+
+    # ---- P1b 新增:单位链 / 视野认证 / 时基 / 障碍覆盖的 fail-closed 门 ----
+    if model.action_scale_kpa is None:
+        add("action_scale_missing", "checkpoint 缺少 action_scale_kpa(deploy_manifest 缺失);"
+            "单位链不可知,阻断规划")
+    if model.k_safe is None and not (model.k_safe_table_px or {}):
+        add("k_safe_uncertified", "模型没有 K_safe 且无 k_safe_table_px 认证表;"
+            "无法门控视野,阻断任意 horizon")
+    ref_dt = train_dt_s or model.train_dt_measured_s or model.train_dt_nominal_s
+    if ref_dt is not None and ref_dt > 0:
+        if abs(plan.step_interval_s - ref_dt) / ref_dt >= 0.05:
+            add("dt_mismatch", f"step_interval_s={plan.step_interval_s} 与训练 Δt={ref_dt}"
+                f" 偏差 ≥5%;动力学时基不一致")
+    obstacle_kinds = {item.kind for item in scene.primitives if item.kind.startswith("obstacle_")}
+    supported = {"obstacle_circle", "obstacle_aabb"}
+    unsupported = obstacle_kinds - supported
+    if unsupported:
+        add("unsupported_obstacle", f"scene 含 planner 未支持的障碍类型: {sorted(unsupported)};"
+            f"碰撞门无法覆盖,阻断")
     return PreflightResult(tuple(issues))
