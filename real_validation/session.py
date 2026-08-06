@@ -121,6 +121,7 @@ class ExperimentSession:
         self.save_snapshot()
 
     def set_anchor(self, anchor: Anchor) -> None:
+        self._guard_editable("anchor")
         self.anchor = anchor
         self.plan = None
         self._record("anchor_changed", anchor_id=anchor.anchor_id)
@@ -128,6 +129,7 @@ class ExperimentSession:
         self.save_snapshot()
 
     def set_scene(self, scene: Scene) -> None:
+        self._guard_editable("scene")
         self.scene = scene
         self.plan = None
         self._record("scene_changed", scene_digest=scene.digest)
@@ -135,10 +137,28 @@ class ExperimentSession:
         self.save_snapshot()
 
     def set_safety(self, safety: SafetyPolicy) -> None:
+        self._guard_editable("safety")
         self.safety = safety
         self.plan = None
         self._record("safety_changed", safety_digest=safety.digest)
         self._return_to_idle_if_ready("safety changed")
+        self.save_snapshot()
+
+    def _guard_editable(self, field_name: str) -> None:
+        """B16:执行中禁止改 scene/anchor/safety —— 否则 experiment.json 的 plan 被清空
+        而命令正在下发,执行记录与实际下发计划脱钩(溯源腐败)。"""
+        if self.state not in {SessionState.IDLE, SessionState.READY}:
+            raise RuntimeError(f"只能在 idle/ready 状态修改 {field_name},当前 {self.state.value}")
+
+    def invalidate_model(self, reason: str = "") -> None:
+        """B15:清除模型 descriptor(加载失败时调用),防操作员误用旧 runtime。"""
+        if self.state not in {SessionState.IDLE, SessionState.READY}:
+            raise RuntimeError("只能在 idle/ready 状态清除模型")
+        self.model = None
+        self.anchor = None
+        self.plan = None
+        self._record("model_invalidated", reason=reason)
+        self._return_to_idle_if_ready(reason or "model invalidated")
         self.save_snapshot()
 
     def begin_planning(self) -> None:

@@ -122,6 +122,30 @@ class ValidationCoreTest(unittest.TestCase):
             self.assertIsNone(session.plan)
             self.assertEqual(session.state, SessionState.IDLE)
 
+    def test_scene_set_in_executing_is_blocked(self):
+        model, anchor, scene, safety, plan = fixtures()
+        with tempfile.TemporaryDirectory() as temporary:
+            session = ExperimentSession.create(temporary)
+            session.configure_model(model); session.set_anchor(anchor)
+            session.set_scene(scene); session.set_safety(safety)
+            session.accept_plan(plan)
+            session.arm()
+            session.transition(SessionState.EXECUTING, "test")
+            with self.assertRaises(RuntimeError):
+                session.set_scene(scene)          # 执行中禁止改 scene(B16)
+            with self.assertRaises(RuntimeError):
+                session.set_anchor(anchor)
+
+    def test_invalidate_model_clears_descriptor(self):
+        model, anchor, scene, safety, plan = fixtures()
+        with tempfile.TemporaryDirectory() as temporary:
+            session = ExperimentSession.create(temporary)
+            session.configure_model(model); session.set_anchor(anchor)
+            session.invalidate_model("load failed")
+            self.assertIsNone(session.model)
+            self.assertIsNone(session.anchor)
+            self.assertIsNone(session.plan)
+
     def test_replay_session_cannot_arm(self):
         model, anchor, scene, safety, plan = fixtures()
         with tempfile.TemporaryDirectory() as temporary:

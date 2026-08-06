@@ -49,12 +49,15 @@ class _ModelLoadThread(QThread):
         self.k_safe = k_safe
 
     def run(self) -> None:
+        from .model_runtime import ModelLoadError
         try:
             runtime = ModelRuntime(self.checkpoint, self.data_dir or None, self.device,
                                    k_safe=self.k_safe)
             self.loaded.emit(runtime)
+        except (ModelLoadError, FileNotFoundError, ValueError) as error:
+            self.failed.emit(str(error))               # 可操作提示,不弹 traceback
         except Exception:
-            self.failed.emit(traceback.format_exc())
+            self.failed.emit(traceback.format_exc())   # 真 bug 才给 traceback
 
 
 class _ExecutionThread(QThread):
@@ -315,8 +318,21 @@ class ValidationWindow(QMainWindow):
         self._model_thread = _ModelLoadThread(
             checkpoint, self.data_dir.text().strip(), self.device.currentText(), k_safe)
         self._model_thread.loaded.connect(self._model_loaded)
-        self._model_thread.failed.connect(self._error)
+        self._model_thread.failed.connect(self._model_load_failed)
         self._model_thread.start()
+
+    def _model_load_failed(self, message: str) -> None:
+        # B15:加载失败必须清 runtime,否则操作员看到新 checkpoint 路径、以为换了模型,
+        # 实际后续 Plan 用旧 runtime;preflight 比对的两个 hash 都是旧的照样放行。
+        self.runtime = None
+        self.model_summary.setPlainText("模型未加载")
+        if self.session is not None and self.session.model is not None:
+            try:
+                self.session.invalidate_model("model reload failed")
+            except RuntimeError as error:
+                self._log(f"WARN: 无法清除旧模型 descriptor: {error}")
+        self._error(message)
+        self._refresh()
 
     def _model_loaded(self, runtime: ModelRuntime) -> None:
         self.runtime = runtime
@@ -328,7 +344,19 @@ class ValidationWindow(QMainWindow):
             f"action_dim={descriptor.action_dim}\n"
             f"nodes={descriptor.n_nodes}\nH={descriptor.history_steps}\n"
             f"K_train={descriptor.k_train}\nK_safe={descriptor.k_safe}\n"
+            f"train_dt={descriptor.train_dt_measured_s or descriptor.train_dt_nominal_s}\n"
+            f"action_scale_kpa={descriptor.action_scale_kpa}\n"
             f"sha256={descriptor.checkpoint_hash}")
+        # B5:plan_dt 默认取训练实测 Δt(不再硬编码 0.2)
+        ref_dt = descriptor.train_dt_measured_s or descriptor.train_dt_nominal_s
+        if ref_dt:
+            self.plan_dt.setValue(float(ref_dt))
+        # B9:K_safe 从 k_safe_table_px 自动读(按 10px 容差),不再手填
+        if descriptor.k_safe_table_px:
+            k = (descriptor.k_safe_table_px.get("10px")
+                 or descriptor.k_safe_table_px.get("5px"))
+            if k:
+                self.k_safe.setValue(int(k))
         self._refresh()
 
     def _apply_safety(self) -> None:
@@ -588,6 +616,13 @@ class ValidationWindow(QMainWindow):
         self.execute_button.setEnabled(bool(self.session and self.session.state == SessionState.ARMED))
         self.pause_button.setEnabled(bool(self.session and self.session.state == SessionState.EXECUTING))
         self.resume_button.setEnabled(bool(self.session and self.session.state == SessionState.PAUSED))
+        # B8:执行中锁页 1/2/3(否则执行中改 scene 会清空 experiment.json 的 plan,
+        # 执行记录与实际下发计划脱钩 = 溯源腐败)
+        executing = bool(self.session and self.session.state in {
+            SessionState.EXECUTING, SessionState.PAUSED, SessionState.ARMED})
+        self.tabs.setTabEnabled(0, not executing)
+        self.tabs.setTabEnabled(1, not executing)
+        self.tabs.setTabEnabled(2, not executing)
 
     def _log(self, message: str) -> None:
         self.execution_log.appendPlainText(message)

@@ -46,6 +46,10 @@ def _nearby_manifest(checkpoint: Path) -> dict[str, Any] | None:
     return None
 
 
+class ModelLoadError(RuntimeError):
+    """预期内的操作员级加载错误(路径/配置/契约),不应向 UI 抛 traceback。"""
+
+
 class ModelRuntime:
     """持有模型及其不可变部署元数据；切换 checkpoint 时创建新实例。"""
 
@@ -53,7 +57,11 @@ class ModelRuntime:
                  device: str = "cpu", k_safe: int | None = None):
         checkpoint_path = Path(checkpoint).resolve()
         if not checkpoint_path.is_file():
-            raise FileNotFoundError(checkpoint_path)
+            raise ModelLoadError(
+                f"checkpoint 不存在:{checkpoint_path}\n"
+                f"请从服务器复制 train_log/<tag>/<exp>/phase_*/model/best_model.pt 到 "
+                f"{checkpoint_path.parent}/,并同时复制该实验的 config.json 与 "
+                f"deploy_manifest.json(见 real_validation/checkpoints/README.md)。")
         info = load_openloop_model(str(checkpoint_path), device=device)
         config = _nearby_config(checkpoint_path)
         model = info["model"]
