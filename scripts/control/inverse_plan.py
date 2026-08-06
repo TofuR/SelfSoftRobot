@@ -111,14 +111,14 @@ def rollout_eval(model, buffer_t, t_start, K, window_size, s_init):
 def obstacle_loss(preds_norm, pc_center, pc_scale, obs_list):
     """避障惩罚: preds (K,N,3) 归一化 → px, 对每个 keep-out 圆(cxcy,r)罚穿透。
     obs_list: [(cx, cy, r_px), ...] in px (col,row)。
+
+    ⚠️ 聚合口径 2026-07-28 从"对 k 求和"改为 mean-over-(K,N)(与工作台统一):
+       同一 w_obs 的避障压强不再随 K 线性漂移,与 --auto_k 兼容。
+       docs/reports/2026-07-14/15 中含障碍的 planner 数字与本实现不可比
+       (该报告本来就含不可复现的随机重启分量 —— CLI 无 torch.manual_seed)。
     """
-    p = preds_norm * pc_scale + pc_center   # (K,N,3)
-    loss = preds_norm.new_zeros(())
-    for k in range(p.shape[0]):
-        for (cx, cy, r) in obs_list:
-            d = torch.sqrt((p[k, :, 0] - cx) ** 2 + (p[k, :, 1] - cy) ** 2)  # (N,)
-            loss = loss + torch.relu(r - d).pow(2).mean()
-    return loss
+    from real_validation.obstacles import cli_obstacle_loss
+    return cli_obstacle_loss(preds_norm, pc_center, pc_scale, obs_list)
 
 
 def optimize_plan(model, history_t, s_init, s_target, K, window_size, a_lo, a_hi,
