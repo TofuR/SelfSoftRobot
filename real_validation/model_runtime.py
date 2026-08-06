@@ -28,6 +28,24 @@ def _nearby_config(checkpoint: Path) -> dict[str, Any]:
     return {}
 
 
+def _nearby_manifest(checkpoint: Path) -> dict[str, Any] | None:
+    """向上 6 层找 deploy_manifest.json;缺失/损坏返回 None(字段留 None,由 preflight 阻断)。"""
+    current = checkpoint.parent
+    for _ in range(6):
+        candidate = current / "deploy_manifest.json"
+        if candidate.is_file():
+            try:
+                with candidate.open("r", encoding="utf-8") as stream:
+                    value = json.load(stream)
+                return value if isinstance(value, dict) else None
+            except (OSError, ValueError):
+                return None
+        if current.parent == current:
+            break
+        current = current.parent
+    return None
+
+
 class ModelRuntime:
     """持有模型及其不可变部署元数据；切换 checkpoint 时创建新实例。"""
 
@@ -48,6 +66,15 @@ class ModelRuntime:
         self.model = model
         self.info = info
         self.device = device
+        manifest_raw = _nearby_manifest(checkpoint_path)
+        manifest = None
+        if manifest_raw:
+            from .deploy_manifest import DeployManifest
+            try:
+                manifest = DeployManifest.from_dict(manifest_raw)
+            except ValueError:
+                manifest = None   # manifest 残缺 → 字段留 None,由 preflight 阻断规划
+        self.manifest = manifest
         self.descriptor = ModelDescriptor(
             checkpoint=str(checkpoint_path),
             checkpoint_hash=file_sha256(checkpoint_path),
@@ -60,6 +87,19 @@ class ModelRuntime:
             k_safe=int(k_safe) if k_safe is not None else None,
             data_dir=str(Path(data_dir).resolve()) if data_dir else None,
             normalization={"action_norm_factor": float(info["norm_factor"])},
+            action_scale_kpa=manifest.action_scale_kpa if manifest else None,
+            channel_map=manifest.channel_map if manifest else None,
+            train_dt_nominal_s=manifest.train_dt_nominal_s if manifest else None,
+            train_dt_measured_s=manifest.train_dt_measured_s if manifest else None,
+            train_dt_std_s=manifest.train_dt_std_s if manifest else None,
+            mask_source=manifest.mask_source if manifest else None,
+            mask_source_provenance=manifest.mask_source_provenance if manifest else None,
+            segment_params=manifest.segment_params if manifest else None,
+            camera_fingerprint=manifest.camera if manifest else None,
+            reference_frame_hash=manifest.reference_frame_sha256 if manifest else None,
+            k_safe_table_px=manifest.k_safe_table_px if manifest else None,
+            registration_residual_max_px=manifest.registration_residual_max_px
+                if manifest else 2.0,
         )
 
     def eval(self) -> None:

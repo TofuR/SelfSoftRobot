@@ -44,6 +44,20 @@ class ModelDescriptor:
     k_safe: int | None = None
     data_dir: str | None = None
     normalization: dict[str, Any] = field(default_factory=dict)
+    # ---- P1b 新增(全部带默认值;缺 manifest 时为 None,由 preflight/planner 阻断) ----
+    action_scale_kpa: tuple[float, ...] | None = None
+    channel_map: tuple[int, ...] | None = None
+    train_dt_nominal_s: float | None = None
+    train_dt_measured_s: float | None = None
+    train_dt_std_s: float | None = None
+    mask_source: str | None = None
+    mask_source_provenance: str | None = None
+    segment_params: dict[str, Any] | None = None
+    camera_fingerprint: dict[str, Any] | None = None
+    reference_frame_hash: str | None = None
+    k_safe_table_px: dict[str, int] | None = None
+    registration_residual_max_px: float = 2.0
+    provenance: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.action_dim not in (1, 3, 6):
@@ -52,6 +66,19 @@ class ModelDescriptor:
             raise ValueError("n_nodes 与 history_steps 必须为正数")
         if self.k_safe is not None and self.k_safe <= 0:
             raise ValueError("k_safe 必须为正数")
+        if self.action_scale_kpa is not None:
+            values = tuple(float(v) for v in self.action_scale_kpa)
+            if len(values) != self.action_dim:
+                raise ValueError("action_scale_kpa 长度必须等于 action_dim")
+            if any(v <= 0 or not math.isfinite(v) for v in values):
+                raise ValueError("action_scale_kpa 必须全为正有限值")
+            object.__setattr__(self, "action_scale_kpa", values)
+        if self.channel_map is not None:
+            mapping = tuple(int(v) for v in self.channel_map)
+            if len(mapping) != self.action_dim or len(set(mapping)) != len(mapping) \
+                    or any(v < 0 or v >= 6 for v in mapping):
+                raise ValueError("channel_map 必须是不重复的 0..5 通道,长度等于 action_dim")
+            object.__setattr__(self, "channel_map", mapping)
 
     def to_dict(self) -> dict[str, Any]:
         return {"schema_version": SCHEMA_VERSION, **asdict(self)}
