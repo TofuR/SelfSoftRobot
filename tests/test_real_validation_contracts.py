@@ -219,5 +219,76 @@ class PreflightNewGatesTest(unittest.TestCase):
         self.assertNotIn("unsupported_obstacle", codes)
 
 
+class RolloutEquivalenceTest(unittest.TestCase):
+    """T7:runtime/rollout.plan_rollout 与 src 侧 rollout 同输入逐元素相等(CPU)。"""
+
+    def test_rollout_matches_reference_implementation(self):
+        from real_validation.runtime.rollout import plan_rollout as wb_rollout
+        from real_validation.runtime.model import OpenLoopTransitionModel
+
+        torch.manual_seed(0)
+        model = OpenLoopTransitionModel(1, 3, hidden_dim=8, window_size=4,
+                                        n_orders=2, z_dim=4).eval()
+        buffer = torch.randn(10, 1)
+        start_index = 5
+        horizon = 3
+        s_init = torch.randn(1, 3, 3)
+
+        def reference(buffer_t, t_start, K, window_size, s):
+            s_prev = s
+            aw0 = buffer_t[t_start - window_size + 1:t_start + 1].unsqueeze(0)
+            if aw0.shape[1] < window_size:
+                pad = torch.zeros((1, window_size - aw0.shape[1], 1))
+                aw0 = torch.cat([pad, aw0], 1)
+            z = model.init_z_from_action(aw0)
+            preds = []
+            for k in range(1, K + 1):
+                aw = buffer_t[t_start + k - window_size + 1:t_start + k + 1].unsqueeze(0)
+                if aw.shape[1] < window_size:
+                    pad = torch.zeros((1, window_size - aw.shape[1], 1))
+                    aw = torch.cat([pad, aw], 1)
+                out = model(aw, s, s_prev, z)
+                s_pred = out["skeleton"]
+                z = out["latent_z"]
+                preds.append(s_pred.squeeze(0))
+                s_prev, s = s, s_pred
+            return torch.stack(preds, 0)
+
+        with torch.no_grad():
+            expected = reference(buffer, start_index, horizon, 4, s_init)
+            got = wb_rollout(model, buffer, start_index, horizon, 4, s_init)
+        self.assertTrue(torch.allclose(got, expected, atol=1e-6, rtol=1e-6))
+
+
+class AutoKTest(unittest.TestCase):
+    """B17:step_budget 从学到的 delta_scale 现算;select_k_by_gap 纯函数。"""
+
+    def test_select_k_by_gap_clamps(self):
+        from real_validation.planning.auto_k import select_k_by_gap
+        self.assertEqual(select_k_by_gap(10.0, 4.0, 4, 40), 4)   # ceil(10/4)=3 < k_min → clamp 到 4
+        self.assertEqual(select_k_by_gap(200.0, 4.0, 4, 40), 40)  # ceil(50) > k_max → 40
+        self.assertEqual(select_k_by_gap(16.0, 4.0, 4, 40), 4)
+        with self.assertRaises(ValueError):
+            select_k_by_gap(10.0, 4.0, 40, 4)                     # k_min > k_max
+
+    def test_step_budget_uses_learned_delta_scale(self):
+        """delta_scale 初值 0.1 → budget ≈ 0.1×pc_scale,不是 1.0×pc_scale(B17)。"""
+        from real_validation.planning.auto_k import step_budget_px
+        from real_validation.runtime.model import OpenLoopTransitionModel
+        model = OpenLoopTransitionModel(1, 3, hidden_dim=8, window_size=4,
+                                        n_orders=2, z_dim=4)
+        model.pc_scale.data = torch.tensor([[1.0, 1.0, 1.0]])   # 归一化 → px
+        self.assertAlmostEqual(model.delta_scale.item(), 0.1)     # 可学参数初值 0.1
+        budget = step_budget_px(model)
+        self.assertAlmostEqual(budget, 0.1, places=6)             # 0.1×1.0,不是 1.0
+        model.delta_scale.data.fill_(0.7)
+        self.assertAlmostEqual(step_budget_px(model), 0.7, places=6)
+
+    def test_gap_point_subtracts_radius(self):
+        from real_validation.planning.auto_k import gap_px_point
+        self.assertEqual(gap_px_point((10.0, 10.0), (13.0, 10.0), 2.0), 1.0)
+        self.assertEqual(gap_px_point((10.0, 10.0), (11.0, 10.0), 2.0), 0.0)  # 圆内
+
+
 if __name__ == "__main__":
     unittest.main()

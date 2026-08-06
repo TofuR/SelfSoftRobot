@@ -35,12 +35,46 @@ class FractionalMemory(nn.Module):
             values.append(values[-1] * (index - 1 - alpha) / index)
         return torch.cat(values)
 
+    def build_weight_cache(self, length: int, device=None, dtype=None) -> None:
+        """规划期预计算 GL 权重为常量。alpha 冻结 → 对动作梯度逐位不变(B10)。
+
+        cache key:(length, device, dtype, n_orders, raw_alphas._version, raw_alphas.data_ptr)。
+        失效条件:_version 递增(任何对 alpha 的 in-place 改动)/ data_ptr 变化 / length/device/dtype 变化。
+        禁止:缓存后二次归一化(引入 ~1e-8 相对误差)、把 order_weights 折进缓存
+        (它是 Parameter,改变乘法结合顺序浮点下不相等)、把 4 次 einsum 合成一次
+        (改变 reduction 顺序)。不能用 register_buffer(会进 state_dict,撞 loader 的
+        严格校验)—— 用普通属性。
+        """
+        self._cached_weights = {}
+        self._cache_key = (int(length), str(device), str(dtype),
+                           int(self.n_orders), int(self.raw_alphas._version),
+                           int(self.raw_alphas.data_ptr()))
+        alpha = self.alphas.detach()
+        for index in range(self.n_orders):
+            weights = self._weights(alpha[index], length)
+            weights = weights / (weights.abs().sum() + 1e-8)
+            self._cached_weights[index] = weights.detach()
+
+    def invalidate_weight_cache(self) -> None:
+        self._cached_weights = {}
+        self._cache_key = None
+
     def forward(self, action_window):
         _, length, _ = action_window.shape
         features = []
         for index in range(self.n_orders):
-            weights = self._weights(self.alphas[index], length)
-            weights = weights / (weights.abs().sum() + 1e-8)
+            cached = getattr(self, "_cached_weights", None)
+            key = getattr(self, "_cache_key", None)
+            valid = (cached and key and key ==
+                     (int(length), str(action_window.device), str(action_window.dtype),
+                      int(self.n_orders), int(self.raw_alphas._version),
+                      int(self.raw_alphas.data_ptr())))
+            if valid:
+                weights = cached[index].to(device=action_window.device,
+                                           dtype=action_window.dtype)
+            else:
+                weights = self._weights(self.alphas[index], length)
+                weights = weights / (weights.abs().sum() + 1e-8)
             value = torch.einsum("k,bkd->bd", weights, action_window)
             features.append(value * self.order_weights[index])
         current = action_window[:, -1, :]
