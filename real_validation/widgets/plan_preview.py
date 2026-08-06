@@ -7,7 +7,8 @@ from pathlib import Path
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPen
-from PyQt5.QtWidgets import QGraphicsEllipseItem, QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import (QGraphicsEllipseItem, QGraphicsRectItem,
+                             QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget)
 
 
 class PlanPreviewWidget(QWidget):
@@ -85,6 +86,24 @@ class PlanPreviewWidget(QWidget):
                                             2 * radius, 2 * radius)
                 item.setPen(QPen(Qt.red if primitive.kind == "target_circle" else Qt.darkYellow,
                                  2, Qt.DashLine))
+            elif primitive.kind == "obstacle_aabb":
+                lo = primitive.geometry.get("min")
+                hi = primitive.geometry.get("max")
+                if not lo or not hi:
+                    continue
+                margin = float(primitive.safety_margin)
+                item = QGraphicsRectItem(lo[0] - margin, lo[1] - margin,
+                                         (hi[0] - lo[0]) + 2 * margin,
+                                         (hi[1] - lo[1]) + 2 * margin)
+                item.setPen(QPen(Qt.darkYellow, 2, Qt.DashLine))
+            elif primitive.kind == "target_skeleton":
+                nodes = primitive.geometry.get("nodes")
+                if not nodes:
+                    continue
+                xs = [n[0] for n in nodes]
+                ys = [n[1] for n in nodes]
+                item = pg.ScatterPlotItem(xs, ys, symbol="x", size=8,
+                                          pen=pg.mkPen("#E53E3E", width=2))
             else:
                 continue
             self.shape_plot.addItem(item); self._scene_items.append(item)

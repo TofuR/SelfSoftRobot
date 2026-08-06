@@ -260,6 +260,25 @@ class RolloutEquivalenceTest(unittest.TestCase):
         self.assertTrue(torch.allclose(got, expected, atol=1e-6, rtol=1e-6))
 
 
+class CliGuiConsistencyTest(unittest.TestCase):
+    """T4b:共享目标核在 CLI 与 GUI 之间逐位一致。
+
+    前置:两侧 norm_factor 必须相等 —— CLI 走 model_loader,找不到 action_norm_factor.txt
+    时会静默回落 1.0(model_loader.py:73),不断言就可能"权重相同、norm_factor 不同"假通过。
+    """
+
+    def test_shared_objective_matches_across_call_sites(self):
+        from real_validation.obstacles import cli_obstacle_loss, obstacle_term
+        torch.manual_seed(3)
+        preds = torch.randn(4, 15, 3, dtype=torch.float64)
+        center = torch.zeros(3, dtype=torch.float64)
+        scale = torch.ones(3, dtype=torch.float64)
+        obstacles = [(10.0, 10.0, 2.0)]
+        via_cli = cli_obstacle_loss(preds, center, scale, obstacles)
+        via_shared = obstacle_term(preds, center, scale, obstacles, reduce="mean")
+        self.assertTrue(torch.equal(via_cli, via_shared))
+
+
 class AutoKTest(unittest.TestCase):
     """B17:step_budget 从学到的 delta_scale 现算;select_k_by_gap 纯函数。"""
 

@@ -51,13 +51,28 @@ def _scene_metrics(observed: np.ndarray, scene: Scene, tip_node: int) -> dict:
     for item in scene.primitives:
         if not item.kind.startswith("obstacle_"):
             continue
-        if item.kind != "obstacle_circle" or item.frame_id != "model":
+        if item.frame_id != "model":
             raise ValueError(f"scene metrics 尚不支持 {item.kind}@{item.frame_id}")
-        center = item.geometry.get("center", item.geometry.get("xy"))
-        radius = float(item.geometry.get("radius", item.geometry.get("r", 0.0)))
-        radius += float(item.safety_margin)
-        distance = np.linalg.norm(xy - np.asarray(center, dtype=np.float64), axis=2)
-        clearances.append(distance - radius)
+        if item.kind == "obstacle_circle":
+            center = item.geometry.get("center", item.geometry.get("xy"))
+            radius = float(item.geometry.get("radius", item.geometry.get("r", 0.0)))
+            radius += float(item.safety_margin)
+            distance = np.linalg.norm(xy - np.asarray(center, dtype=np.float64), axis=2)
+            clearances.append(distance - radius)
+        elif item.kind == "obstacle_aabb":
+            lo = np.asarray(item.geometry.get("min"), dtype=np.float64)
+            hi = np.asarray(item.geometry.get("max"), dtype=np.float64)
+            margin = float(item.safety_margin)
+            lo -= margin
+            hi += margin
+            # AABB 2D 有符号距离(盒外正 / 盒内负)
+            cx = np.maximum(lo[0] - xy[..., 0], xy[..., 0] - hi[0])
+            cy = np.maximum(lo[1] - xy[..., 1], xy[..., 1] - hi[1])
+            outside = np.sqrt(np.maximum(cx, 0) ** 2 + np.maximum(cy, 0) ** 2)
+            inside = np.minimum(np.maximum(cx, cy), 0.0)
+            clearances.append(outside + inside)
+        else:
+            raise ValueError(f"scene metrics 尚不支持 {item.kind}")
     result = {}
     if clearances:
         clearance = np.stack(clearances, axis=0)
@@ -65,16 +80,23 @@ def _scene_metrics(observed: np.ndarray, scene: Scene, tip_node: int) -> dict:
         result["collision"] = bool(np.any(clearance < 0))
 
     targets = [item for item in scene.primitives if item.kind.startswith("target_")]
-    if len(targets) == 1 and targets[0].kind in {"target_point", "target_circle"}:
+    if len(targets) == 1:
         target = targets[0]
         if target.frame_id != "model":
             raise ValueError("任务成功评价要求 target 已转换到 model 坐标")
-        center = target.geometry.get("xy", target.geometry.get("center"))
-        radius = float(target.geometry.get("radius", target.geometry.get("r", 0.0)))
-        terminal_distance = float(np.linalg.norm(
-            xy[-1, tip_node] - np.asarray(center, dtype=np.float64)))
-        result["terminal_target_distance"] = terminal_distance
-        result["target_success"] = bool(terminal_distance <= radius)
+        if target.kind in {"target_point", "target_circle"}:
+            center = target.geometry.get("xy", target.geometry.get("center"))
+            radius = float(target.geometry.get("radius", target.geometry.get("r", 0.0)))
+            terminal_distance = float(np.linalg.norm(
+                xy[-1, tip_node] - np.asarray(center, dtype=np.float64)))
+            result["terminal_target_distance"] = terminal_distance
+            result["target_success"] = bool(terminal_distance <= radius)
+        elif target.kind == "target_skeleton":
+            nodes = np.asarray(target.geometry.get("nodes"), dtype=np.float64)
+            tolerance = float(target.geometry.get("tolerance_px", 0.0))
+            dists = np.linalg.norm(xy[-1] - nodes[:, :2], axis=1)
+            result["terminal_skeleton_mne"] = float(dists.mean())
+            result["target_success"] = bool(dists.mean() <= tolerance)
     return result
 
 
