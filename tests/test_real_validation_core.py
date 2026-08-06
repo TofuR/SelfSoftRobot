@@ -296,6 +296,57 @@ class ValidationCoreTest(unittest.TestCase):
             self.assertTrue(validate_plan(plan, model, anchor, scene, safety).ok)
             self.assertTrue((Path(temporary) / plan.predicted_states_path).is_file())
 
+    def test_openloop_planner_repeat_warmstart_is_kpa_space(self):
+        """锁 I1:restart-0 repeat warm-start 必须落在 kPa 空间(_project_actions 用 kPa 投影)。
+
+        action_scale_kpa=50, norm=1, 模型单位 history[-1]=0.8 → seed_last=40 kPa。
+        常量输出模型使 raw 无梯度,physical = 从 initial=0 向 seed_last 的 slew 限制爬升。
+        旧式 seed_last = history[-1]*norm = 0.8(名义 kPa) → 首步≈0.8;修复后首步 = rise*dt = 10。
+        """
+        import torch
+
+        class ConstModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.dummy = torch.nn.Parameter(torch.zeros(()))
+                self.register_buffer("pc_center", torch.zeros(3))
+                self.register_buffer("pc_scale", torch.ones(3))
+
+            def init_z_from_action(self, action_window):
+                return action_window.new_zeros((action_window.shape[0], 1))
+
+            def forward(self, action_window, state, state_previous, latent):
+                del action_window, state_previous
+                return {"skeleton": state.new_ones(state.shape) * 0.5,
+                        "latent_z": latent}
+
+        model = ModelDescriptor(
+            "mock.pt", "abc", "state_transition", 1, 3, 2,
+            k_train=4, k_safe=4,
+            action_scale_kpa=(50.0,), channel_map=(0,),
+            train_dt_nominal_s=0.1, train_dt_measured_s=0.1, train_dt_std_s=0.0)
+        anchor = Anchor(state=((0.0, 0.0), (1.0, 1.0), (2.0, 2.0)),
+                        action_history=((0.5,), (0.8,)), action_units="model_normalized")
+        scene = Scene("planner", (ScenePrimitive(
+            "target_point", "model_normalized", {"xy": [0.2, 0.0], "node": 0}),))
+        safety = SafetyPolicy(
+            pressure_max6=(150.0,) * 6,
+            rise_rate6=(100.0,) * 6, fall_rate6=(100.0,) * 6,
+            ack_timeout_s=0.1)
+        runtime = type("Runtime", (), {
+            "descriptor": model, "model": ConstModel(), "info": {"norm_factor": 1.0},
+        })()
+        with tempfile.TemporaryDirectory() as temporary:
+            plan = OpenLoopShootingPlanner(runtime).plan(
+                anchor=anchor, scene=scene, safety=safety, channel_map=(0,),
+                step_interval_s=0.1, output_dir=temporary,
+                config=ShootingConfig(horizon=2, n_iter=2, n_restarts=1,
+                                      learning_rate=1e-6))
+            # seed_last=40 kPa,从 initial=0 起步,slew=100 kPa/s × 0.1s = 10 → 首步≈10 kPa;
+            # 旧 bug(0.8 名义 kPa)会让首步≈0.8 → 断言 5 kPa 以上区分两者
+            self.assertGreater(plan.actions6[0][0], 5.0)
+            self.assertGreater(plan.actions6[1][0], 5.0)
+
     def test_standalone_runtime_loads_local_checkpoint(self):
         import torch
         with tempfile.TemporaryDirectory() as temporary:

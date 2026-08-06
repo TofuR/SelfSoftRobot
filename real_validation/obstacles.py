@@ -52,7 +52,7 @@ def obstacle_term(preds, pc_center, pc_scale, obstacles, reduce: str = "mean"):
             physical[:, :, :2] - physical.new_tensor((cx, cy)), dim=2)
         total = total + torch.relu(radius - distance).square().mean()
     if reduce == "mean":
-        return total / preds.shape[0]
+        return total
     if reduce == "sum":
         return total
     raise ValueError(f"未知 reduce: {reduce}")
@@ -84,7 +84,7 @@ def obstacle_term_ext(preds, pc_center, pc_scale, obstacles, reduce: str = "mean
         else:
             raise ValueError(f"未知障碍类型: {kind}")
     if reduce == "mean":
-        return total / preds.shape[0]
+        return total
     if reduce == "sum":
         return total
     raise ValueError(f"未知 reduce: {reduce}")

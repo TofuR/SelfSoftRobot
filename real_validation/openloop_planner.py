@@ -169,7 +169,7 @@ class OpenLoopShootingPlanner:
              channel_map: tuple[int, ...], step_interval_s: float,
              output_dir: str | Path, config: ShootingConfig = ShootingConfig(),
              cancel_event: threading.Event | None = None):
-        from .units import kPa_to_model
+        from .units import kPa_to_model, model_to_kPa
         from .obstacles import obstacle_term_ext
 
         descriptor: ModelDescriptor = self.runtime.descriptor
@@ -247,7 +247,13 @@ class OpenLoopShootingPlanner:
         rise = torch.tensor(safety.rise_rate6, device=device)[mapped]
         fall = torch.tensor(safety.fall_rate6, device=device)[mapped]
         initial = torch.tensor(safety.initial_action6, device=device)[mapped]
-        seed_last = history[-1] * norm
+        # 修 I1:history 在 kpa 分支已换成模型单位(训练域 [0,1]),repeat warm-start 的 raw
+        # 是 kPa 空间(_project_actions 用 kPa 的 lo/hi 投影,physical 存为 plan 按 kPa 校验)。
+        # 旧式 history[-1]*norm 仍在模型域(≈0..1),repeat 退化成 zero;须 ×scale 回 kPa。
+        seed_last = torch.as_tensor(
+            model_to_kPa(history[-1:], action_scale_kpa=action_scale_kpa,
+                         action_norm_factor=norm),
+            dtype=torch.float32, device=device).reshape(-1)
 
         torch.manual_seed(config.random_seed)
         if str(device).startswith("cuda"):

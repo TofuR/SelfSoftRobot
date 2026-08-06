@@ -126,8 +126,6 @@ class Anchor:
             raise ValueError("anchor state_space 必须是 model 或 model_normalized")
         if self.action_units not in {"kpa", "model_normalized"}:
             raise ValueError("anchor action_units 必须是 kpa 或 model_normalized")
-        if any(not all(math.isfinite(v) for v in action) for action in history):
-            raise ValueError("action_history 含 NaN/Inf")
         if not isinstance(self.quality, dict):
             raise ValueError("anchor quality 必须是 dict(标志集)")
         object.__setattr__(self, "state", state)

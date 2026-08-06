@@ -62,45 +62,48 @@ class SharedObjectiveParityTest(unittest.TestCase):
 
     def test_obstacle_term_is_mean_over_k_and_nodes(self):
         from real_validation.obstacles import obstacle_term
-        torch.manual_seed(0)
-        preds = torch.randn(4, 15, 3, dtype=torch.float64)      # (K,N,3) 归一化
+        # 全 0 落在障碍圆内 → 穿透非零(修 B4:障碍此前放太远,relu(r-d) 恒 0 空转)
+        preds = torch.zeros(4, 15, 3, dtype=torch.float64)      # (K,N,3) 归一化
         center = torch.zeros(3, dtype=torch.float64)
         scale = torch.ones(3, dtype=torch.float64)
-        obstacles = [(10.0, 10.0, 2.0), (20.0, 5.0, 1.5)]
+        obstacles = [(0.0, 0.0, 1.0), (0.0, 0.0, 2.0)]
         got = obstacle_term(preds, center, scale, obstacles)
-        # 手工引用实现:逐 k 逐 obs 对 (N,) 求均值再累加,最后 /K(即对 (K,N) 全均值)
+        # 手工引用实现:每个 obs 对 (K,N) 全均值求和(即 Σ_obs mean(K,N),不再 /K)
         expected = preds.new_zeros(())
-        for k in range(preds.shape[0]):
-            for (cx, cy, r) in obstacles:
-                d = torch.linalg.vector_norm(preds[k, :, :2] - preds.new_tensor((cx, cy)), dim=1)
-                expected = expected + torch.relu(r - d).square().mean()
-        expected = expected / preds.shape[0]
+        for (cx, cy, r) in obstacles:
+            d = torch.linalg.vector_norm(preds[:, :, :2] - preds.new_tensor((cx, cy)), dim=2)
+            expected = expected + torch.relu(r - d).square().mean()
         self.assertTrue(torch.equal(got, expected))
+        self.assertGreater(got.item(), 0.0)      # 非空转:障碍与数据确实重叠
 
     def test_obstacle_term_is_invariant_to_horizon(self):
-        """锁死口径选择:mean-over-(K,N) 使同一 w_obs 的避障压强不随 K 漂移(与 auto_k 兼容)。"""
+        """锁 B4:mean-over-(K,N) 使同一 w_obs 的避障压强不随 K 漂移(与 auto_k 兼容)。
+
+        全 0 穿透值(非零 loss);base(K=5)与 doubled(K=10)必须完全相等 ——
+        旧 double-divide 会给出 2 倍关系,此断言直接卡死。
+        """
         from real_validation.obstacles import obstacle_term
-        torch.manual_seed(1)
-        base = torch.randn(5, 15, 3, dtype=torch.float64)
+        base = torch.zeros(5, 15, 3, dtype=torch.float64)
         center = torch.zeros(3, dtype=torch.float64)
         scale = torch.ones(3, dtype=torch.float64)
-        obstacles = [(10.0, 10.0, 2.0)]
-        doubled = torch.cat([base, base], 0)
-        self.assertTrue(torch.allclose(
-            obstacle_term(base, center, scale, obstacles),
-            obstacle_term(doubled, center, scale, obstacles), rtol=0, atol=1e-12))
+        obstacles = [(0.0, 0.0, 1.0)]
+        doubled = torch.cat([base, base], 0)     # K=10
+        base_value = obstacle_term(base, center, scale, obstacles)
+        doubled_value = obstacle_term(doubled, center, scale, obstacles)
+        self.assertGreater(base_value.item(), 0.0)   # 穿透非零
+        self.assertTrue(torch.equal(base_value, doubled_value))
 
     def test_z_channel_never_enters_obstacle_loss(self):
         """pc_scale[2]=1e-6,任何非零 z 会被放大 1e6 —— 障碍 loss 必须只吃 [:2]。"""
         from real_validation.obstacles import obstacle_term
-        torch.manual_seed(2)
-        preds = torch.randn(3, 15, 3, dtype=torch.float64)
+        preds = torch.zeros(3, 15, 3, dtype=torch.float64)
         center = torch.zeros(3, dtype=torch.float64)
         scale = torch.ones(3, dtype=torch.float64)
-        obstacles = [(0.0, 0.0, 3.0)]
+        obstacles = [(0.0, 0.0, 1.0)]
         plain = obstacle_term(preds, center, scale, obstacles)
+        self.assertGreater(plain.item(), 0.0)    # 障碍重叠 → 非零基线
         noisy = preds.clone()
-        noisy[:, :, 2] += 1e3          # z 通道污染
+        noisy[:, :, 2] += 1e3                    # z 通道污染
         self.assertTrue(torch.equal(plain, obstacle_term(noisy, center, scale, obstacles)))
 
     def test_k_equals_one_is_finite(self):
@@ -269,13 +272,14 @@ class CliGuiConsistencyTest(unittest.TestCase):
 
     def test_shared_objective_matches_across_call_sites(self):
         from real_validation.obstacles import cli_obstacle_loss, obstacle_term
-        torch.manual_seed(3)
-        preds = torch.randn(4, 15, 3, dtype=torch.float64)
+        # 全 0 落在障碍圆内 → 非零 penalty,两个调用点必须逐位一致
+        preds = torch.zeros(4, 15, 3, dtype=torch.float64)
         center = torch.zeros(3, dtype=torch.float64)
         scale = torch.ones(3, dtype=torch.float64)
-        obstacles = [(10.0, 10.0, 2.0)]
+        obstacles = [(0.0, 0.0, 1.0)]
         via_cli = cli_obstacle_loss(preds, center, scale, obstacles)
         via_shared = obstacle_term(preds, center, scale, obstacles, reduce="mean")
+        self.assertGreater(via_cli.item(), 0.0)   # 非空转
         self.assertTrue(torch.equal(via_cli, via_shared))
 
 
