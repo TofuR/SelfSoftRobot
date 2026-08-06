@@ -59,6 +59,22 @@ class RegistrationTest(unittest.TestCase):
         # 关键：失败时绝不能报 0 位移，否则"配准通过"成为默认
         self.assertTrue(np.isnan(result.displacement_px))
 
+    def test_failure_homography_is_none_and_survives_round_trip(self):
+        from real_validation.perception.registration import (
+            estimate_registration, load_registration, save_registration)
+        blank = np.zeros((240, 320), np.uint8)
+        result = estimate_registration(blank, blank.copy())
+        self.assertFalse(result.ok)
+        # 失败时 homography 绝不能是单位阵，否则不查 ok 的消费者会静默应用恒等 warp
+        self.assertIsNone(result.homography)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "registration.json"
+            save_registration(result, path)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertIsNone(payload["homography"])
+            restored = load_registration(path)
+            self.assertIsNone(restored.homography)
+
     def test_round_trip_json(self):
         from real_validation.perception.registration import (
             estimate_registration, load_registration, save_registration)

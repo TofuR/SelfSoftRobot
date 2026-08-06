@@ -110,12 +110,27 @@ def grid(tiles, columns: int = 4):
 
 
 def run_probe(frames_bgr, background_gray, *, segment_params: dict, n_points: int,
-              thresholds: QualityThresholds, reference_gray=None) -> dict:
+              thresholds: QualityThresholds, reference_gray=None,
+              frame_age_s: float | None = None) -> dict:
     """对一批 BGR 帧跑完整在线链，返回 {timing, quality, overlay, registration}。"""
     timing = {"segment_ms": [], "skeleton_ms": [], "quality_ms": [], "total_ms": []}
     quality_records = []
     tiles = []
     previous_skeleton = None
+
+    # 位姿注册在 loop **之前**对首帧算一次（探测的是"live 像素 == 训练期像素"这个
+    # 恒等映射，首帧即可判定）。结果喂给每一帧的 quality 门控：ok 时传位移值，
+    # 失败时传 NaN —— assess_frame 据此加 registration_displaced 并 reject 整批。
+    registration = None
+    registration_displacement_px = None
+    if reference_gray is not None and frames_bgr:
+        import cv2
+        live_gray = cv2.cvtColor(frames_bgr[0], cv2.COLOR_BGR2GRAY)
+        registration = estimate_registration(
+            reference_gray, live_gray,
+            max_displacement_px=thresholds.max_registration_displacement_px)
+        registration_displacement_px = (
+            registration.displacement_px if registration.ok else float("nan"))
 
     for index, bgr in enumerate(frames_bgr):
         start = time.perf_counter()
@@ -129,7 +144,9 @@ def run_probe(frames_bgr, background_gray, *, segment_params: dict, n_points: in
 
         mark = time.perf_counter()
         quality = assess_frame(mask, skeleton, info, thresholds,
-                               prev_skeleton=previous_skeleton)
+                               prev_skeleton=previous_skeleton,
+                               frame_age_s=frame_age_s,
+                               registration_displacement_px=registration_displacement_px)
         timing["quality_ms"].append((time.perf_counter() - mark) * 1e3)
         timing["total_ms"].append((time.perf_counter() - start) * 1e3)
 
@@ -140,14 +157,6 @@ def run_probe(frames_bgr, background_gray, *, segment_params: dict, n_points: in
                                   f"#{index} {quality.verdict}"))
         if quality.verdict != "reject":
             previous_skeleton = skeleton
-
-    registration = None
-    if reference_gray is not None and frames_bgr:
-        import cv2
-        live_gray = cv2.cvtColor(frames_bgr[0], cv2.COLOR_BGR2GRAY)
-        registration = estimate_registration(
-            reference_gray, live_gray,
-            max_displacement_px=thresholds.max_registration_displacement_px)
 
     verdicts = [record["verdict"] for record in quality_records]
     return {
@@ -219,6 +228,9 @@ def main() -> int:
     parser.add_argument("--reference", help="位姿注册的基准灰度图；不给则跳过注册")
     parser.add_argument("--n-points", type=int, default=15)
     parser.add_argument("--frames", type=int, default=12)
+    parser.add_argument("--frame-age-s", type=float, default=None,
+                        help="每帧相对采集时刻的帧龄(秒)；不给则跳过 frame_age 判据，"
+                             "给且 > max_frame_age_s(默认 0.5) 时该帧判 reject")
     parser.add_argument("--area-median-px", type=float, default=None,
                         help="mask 面积中位数；不给则用本批帧自身的中位数（仅冒烟用，"
                              "正式验收必须从 manifest 提供）")
@@ -249,7 +261,8 @@ def main() -> int:
     thresholds = QualityThresholds(area_median)
     result = run_probe(frames, background, segment_params=segment_params,
                        n_points=args.n_points, thresholds=thresholds,
-                       reference_gray=reference)
+                       reference_gray=reference,
+                       frame_age_s=args.frame_age_s)
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

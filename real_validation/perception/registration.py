@@ -10,6 +10,8 @@ NDI 仿射全部绑死在采集时那个相机位姿上。相机一动，失效�
   displacement_px  H 作用到图像四角的最大位移 —— 位姿到底移了多远
 
 失败时 displacement_px 是 NaN，绝不是 0 —— 否则"配准通过"会成为默认值。
+同理失败时 homography 是 None，绝不是单位阵 —— 消费者必须查 `ok`，否则会把
+恒等 warp 当成有效位姿变换静默应用。
 """
 
 from __future__ import annotations
@@ -32,12 +34,9 @@ REG_TOO_FEW_MATCHES = "too_few_matches"
 REG_HOMOGRAPHY_FAILED = "homography_failed"
 REG_DISPLACED = "displaced"
 
-_IDENTITY = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
-
-
 @dataclass(frozen=True)
 class RegistrationResult:
-    homography: tuple[tuple[float, ...], ...]
+    homography: tuple[tuple[float, ...], ...] | None
     fit_residual_px: float
     displacement_px: float
     n_inliers: int
@@ -53,15 +52,17 @@ class RegistrationResult:
     def from_dict(cls, value: dict) -> "RegistrationResult":
         data = dict(value)
         data.pop("schema_version", None)
-        data["homography"] = tuple(tuple(float(v) for v in row)
-                                   for row in data["homography"])
+        homography = data["homography"]
+        data["homography"] = (None if homography is None
+                              else tuple(tuple(float(v) for v in row)
+                                         for row in homography))
         return cls(**data)
 
 
 def _failure(reason: str, n_matches: int = 0, n_inliers: int = 0,
              reference_sha256: str = "") -> RegistrationResult:
     return RegistrationResult(
-        homography=_IDENTITY, fit_residual_px=float("nan"),
+        homography=None, fit_residual_px=float("nan"),
         displacement_px=float("nan"), n_inliers=n_inliers, n_matches=n_matches,
         reference_sha256=reference_sha256, ok=False, reason=reason)
 

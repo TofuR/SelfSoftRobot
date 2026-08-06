@@ -434,7 +434,8 @@ runs/run_YYYYmmdd_HHMMSS/
 
 | 边界 | UI 要求 |
 |---|---|
-| 障碍是**图像平面近似**(NDI 实测平面外跨度 4.35 mm vs 平面内 24.2 mm,约 15–18%) | 障碍标签必须写 `planar approx, margin=X mm`;**禁止**显示"3D 无碰撞" || 阀无压力反馈 | 一律称 `command` / `applied command`;**禁止**写"实测气压" |
+| 障碍是**图像平面近似**(NDI 实测平面外跨度 4.35 mm vs 平面内 24.2 mm,约 15–18%) | 障碍标签必须写 `planar approx, margin=X mm`;**禁止**显示"3D 无碰撞" |
+| 阀无压力反馈 | 一律称 `command` / `applied command`;**禁止**写"实测气压" |
 | warmup 期间预测不可信 | 预览与执行按钮灰掉,显示剩余步数 / 秒数 |
 | 开环视野有限 | `k_since_observation / K_safe` 常驻显示;超限阻断自动执行 |
 | planner 可能钻模型盲区 | 执行后必须报 prediction-to-execution gap;超容差报"**不可达**",不硬称成功 |
