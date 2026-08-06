@@ -27,6 +27,12 @@ python -m pip install -r requirements.txt
 python -m pip install -r requirements-hardware.txt
 ```
 
+在线感知（分割 / 骨架 / 配准）另需：
+
+```bash
+python -m pip install -r requirements-perception.txt
+```
+
 把 checkpoint 和它所属实验的 `config.json` 放到 `checkpoints/current/`。当前
 `config.json` 占位已经对应服务器 `exp_20260714_8`，因此只需复制该实验的
 `best_model.pt`；更换其他模型时必须把二者一起更换。
@@ -40,10 +46,19 @@ python main_validation.py
 Windows 也可以双击 `run_gui.bat`。所有默认路径都由 `main_validation.py` 所在目录
 计算，不依赖启动时的工作目录。
 
-运行核心测试：
+## 自检
+
+本目录的单元测试住在仓库的 `tests/`（**不随本目录拷贝到 PC**）。在 PC 上只能做
+运行时自检：
 
 ```bash
-python -m unittest tests.test_real_validation_core
+python -c "import real_validation; print('contracts ok')"
+```
+
+完整测试（20 个契约测试 + 感知 parity + import 卫生）在仓库根运行：
+
+```bash
+python -m unittest tests.test_real_validation_core tests.test_perception_parity tests.test_import_hygiene -v
 ```
 
 当前 GUI 中的执行明确标记为 Mock。真阀连接面板、在线骨架提取和完整交互式 Scene
