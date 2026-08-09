@@ -20,6 +20,7 @@
 |---|---|
 | [`real_data/workflow.md`](real_data/workflow.md) | **免标定 2D 骨架→状态转移→NDI 验证** 完整流程(分割/修复/SAM2/骨架化/npz/clean/训练/评估) |
 | [`real_data/capture_setup.md`](real_data/capture_setup.md) | 硬件采集系统: 双段硅胶臂 + 6通道 Modbus 比例阀 + RealSense + NDI Aurora |
+| [`real_data/deployment.md`](real_data/deployment.md) | **实机部署指南**: 采集→数据前处理→训练→deploy_manifest→工作台闭环;含已知坑与诚实边界 |
 
 ## 研究方向 (`directions/`)
 | 文档 | 说明 |
