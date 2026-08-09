@@ -19,11 +19,7 @@ import os
 
 import numpy as np
 
-try:
-    import cv2
-except ImportError as exc:  # pragma: no cover
-    cv2 = None
-    _CV2_ERR = exc
+from ._compat import _CV2_ERR, cv2
 
 
 def _clean(mask):

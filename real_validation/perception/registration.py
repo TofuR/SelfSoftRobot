@@ -22,11 +22,7 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 
-try:
-    import cv2
-except ImportError as exc:  # pragma: no cover
-    cv2 = None
-    _CV2_ERR = exc
+from ._compat import _CV2_ERR, cv2
 
 REG_OK = "ok"
 REG_TOO_FEW_FEATURES = "too_few_features"
