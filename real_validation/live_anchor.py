@@ -51,23 +51,18 @@ def anchor_from_camera_frame(
     if not history or any(len(action) != len(history[0]) for action in history):
         raise ValueError("action_history 必须是 (H, action_dim) 且宽度一致")
 
-    # 归一化(与 offline_anchor 同款):(skeleton[:, :2] - pc_center[:2]) / pc_scale[:2]
-    try:
-        center = model.pc_center.detach().cpu().numpy().reshape(3)
-        scale = model.pc_scale.detach().cpu().numpy().reshape(3)
-    except (AttributeError, ValueError) as error:
-        raise ValueError("模型缺少可用 pc_center/pc_scale") from error
-    if np.any(np.abs(scale[:2]) < 1e-12):
-        raise ValueError("模型 pc_scale 平面尺度含零")
-    normalized = (skeleton[:, :2] - center[:2]) / scale[:2]
+    # 归一化(与 offline_anchor 同款;live 只取平面 [:2],pc_scale[2]=1e-6 退化)
+    from .anchor_utils import float_rows, model_normalization, normalize_rows
+    center, scale = model_normalization(model)
+    dims = slice(0, 2)
+    normalized = normalize_rows(skeleton, center, scale, dims=dims)
+    prev_norm = (None if prev_skeleton is None
+                 else normalize_rows(prev_skeleton, center, scale, dims=dims))
 
     anchor = Anchor(
-        state=tuple(tuple(float(v) for v in node) for node in normalized),
+        state=float_rows(normalized),
         action_history=history,
-        prev_state=(None if prev_skeleton is None
-                    else tuple(tuple(float(v) for v in node)
-                               for node in (np.asarray(prev_skeleton, dtype=np.float64)
-                                            - center[:2]) / scale[:2])),
+        prev_state=(None if prev_norm is None else float_rows(prev_norm)),
         frame_id="model_normalized",
         frame_ref=frame_ref,
         state_space=state_space,
