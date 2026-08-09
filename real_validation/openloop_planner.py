@@ -20,6 +20,7 @@ from .runtime import plan_rollout
 
 from .models import Anchor, ModelDescriptor, SafetyPolicy, Scene
 from .planner_service import build_plan
+from .units import kPa_to_model, model_to_kPa
 
 
 @dataclass(frozen=True)
@@ -161,6 +162,52 @@ def _project_actions(raw, lower, upper, rise, fall, initial, dt):
     return torch.stack(rows)
 
 
+def _forward_normalized(raw, model, history, k_effective, history_steps, state,
+                        lo, hi, rise, fall, initial, dt, scale_kpa, norm):
+    """物理动作 → 归一化模型输入 → rollout。返回 (physical_kPa, normalized, predictions)。
+
+    优化循环与 no_grad 终评共用(消除重复)。
+    """
+    physical = _project_actions(raw, lo, hi, rise, fall, initial, dt)
+    normalized = kPa_to_model(physical, action_scale_kpa=scale_kpa,
+                              action_norm_factor=norm)
+    predictions = plan_rollout(
+        model, torch.cat((history, normalized), dim=0), len(history) - 1,
+        k_effective, history_steps, state)
+    return physical, normalized, predictions
+
+
+def _skeleton_dists(predictions, target_nodes, scale, center):
+    """全身目标:preds (K,N,3) → 各节点到目标的 (K,N) 距离(px 空间)。"""
+    physical_nodes = predictions * scale[:3] + center[:3]
+    return torch.linalg.vector_norm(
+        physical_nodes[:, :, :2] - target_nodes[..., :2].unsqueeze(0), dim=2)
+
+
+def _resolve_k(config, descriptor, model, target, state, center, scale):
+    """固定 K 或 auto_k(step_budget 从学到的 delta_scale 现算)→ (k_effective, gap_px)。"""
+    if config.auto_k:
+        from .planning.auto_k import (gap_px_point, gap_px_skeleton,
+                                      select_k_by_gap, step_budget_px)
+        budget = step_budget_px(model)
+        if target["kind"] == "target_skeleton":
+            now_px = (state.squeeze(0).detach().cpu().numpy()
+                      * scale.detach().cpu().numpy() + center.detach().cpu().numpy())
+            gap = gap_px_skeleton(now_px, target["nodes"].cpu().numpy(),
+                                  target["tolerance"])
+        else:
+            tip_px = (state[0, target["node"], :2].detach().cpu().numpy()
+                      * scale[:2].cpu().numpy() + center[:2].cpu().numpy())
+            gap = gap_px_point(tip_px, target["point"].cpu().numpy(),
+                               target["radius"])
+        k = select_k_by_gap(gap, budget, config.k_min, config.k_max)
+        return min(k, descriptor.k_safe or k), gap
+    k = config.horizon
+    if descriptor.k_safe is not None and k > descriptor.k_safe:
+        raise ValueError(f"K={k} 超过 K_safe={descriptor.k_safe}")
+    return k, None
+
+
 class OpenLoopShootingPlanner:
     def __init__(self, runtime):
         self.runtime = runtime
@@ -169,7 +216,6 @@ class OpenLoopShootingPlanner:
              channel_map: tuple[int, ...], step_interval_s: float,
              output_dir: str | Path, config: ShootingConfig = ShootingConfig(),
              cancel_event: threading.Event | None = None):
-        from .units import kPa_to_model, model_to_kPa
         from .obstacles import obstacle_term_ext
 
         descriptor: ModelDescriptor = self.runtime.descriptor
@@ -218,28 +264,8 @@ class OpenLoopShootingPlanner:
         # model_normalized(npz 来源,offline_anchor 新标注)直接用:已是模型单位
 
         # ---- 变长 K(B17):step_budget 从学到的 delta_scale 现算 ----
-        if config.auto_k:
-            from .planning.auto_k import (gap_px_point, gap_px_skeleton,
-                                          select_k_by_gap, step_budget_px)
-            budget = step_budget_px(model)
-            if target["kind"] == "target_skeleton":
-                now_px = (state.squeeze(0).detach().cpu().numpy()
-                          * scale.detach().cpu().numpy() + center.detach().cpu().numpy())
-                gap = gap_px_skeleton(now_px, target["nodes"].cpu().numpy(),
-                                      target["tolerance"])
-            else:
-                tip_px = (state[0, target["node"], :2].detach().cpu().numpy()
-                          * scale[:2].cpu().numpy() + center[:2].cpu().numpy())
-                gap = gap_px_point(tip_px, target["point"].cpu().numpy(),
-                                   target["radius"])
-            k_effective = select_k_by_gap(gap, budget, config.k_min, config.k_max)
-            k_effective = min(k_effective, descriptor.k_safe or k_effective)
-            auto_k_gap_px = gap
-        else:
-            k_effective = config.horizon
-            auto_k_gap_px = None
-            if descriptor.k_safe is not None and k_effective > descriptor.k_safe:
-                raise ValueError(f"K={k_effective} 超过 K_safe={descriptor.k_safe}")
+        k_effective, auto_k_gap_px = _resolve_k(config, descriptor, model, target,
+                                                state, center, scale)
 
         mapped = torch.tensor(channel_map, dtype=torch.long, device=device)
         lo = torch.tensor(safety.pressure_min6, device=device)[mapped]
@@ -287,18 +313,12 @@ class OpenLoopShootingPlanner:
                     if cancel_event and cancel_event.is_set():
                         raise concurrent.futures.CancelledError("planner cancelled")
                     optimizer.zero_grad(set_to_none=True)
-                    physical = _project_actions(raw, lo, hi, rise, fall, initial,
-                                                step_interval_s)
-                    normalized = kPa_to_model(physical, action_scale_kpa=action_scale_kpa,
-                                              action_norm_factor=norm)
-                    buffer = torch.cat((history, normalized), dim=0)
-                    predictions = plan_rollout(model, buffer, len(history) - 1,
-                                               k_effective, descriptor.history_steps, state)
+                    physical, normalized, predictions = _forward_normalized(
+                        raw, model, history, k_effective, descriptor.history_steps, state,
+                        lo, hi, rise, fall, initial, step_interval_s,
+                        action_scale_kpa, norm)
                     if target["kind"] == "target_skeleton":
-                        physical_nodes = predictions * scale[:3] + center[:3]
-                        dists = torch.linalg.vector_norm(
-                            physical_nodes[:, :, :2] - target["nodes"][..., :2].unsqueeze(0),
-                            dim=2)   # (K,N)
+                        dists = _skeleton_dists(predictions, target["nodes"], scale, center)
                         weights = target["weights"]
                         if weights is not None:
                             w = torch.as_tensor(weights, dtype=torch.float32, device=device)
@@ -332,18 +352,12 @@ class OpenLoopShootingPlanner:
                     optimizer.step()
                     loss_curve.append(float(loss.detach().cpu()))
                 with torch.no_grad():
-                    physical = _project_actions(raw, lo, hi, rise, fall, initial,
-                                                step_interval_s)
-                    normalized = kPa_to_model(physical, action_scale_kpa=action_scale_kpa,
-                                              action_norm_factor=norm)
-                    predictions = plan_rollout(
-                        model, torch.cat((history, normalized), dim=0), len(history) - 1,
-                        k_effective, descriptor.history_steps, state)
+                    physical, normalized, predictions = _forward_normalized(
+                        raw, model, history, k_effective, descriptor.history_steps, state,
+                        lo, hi, rise, fall, initial, step_interval_s,
+                        action_scale_kpa, norm)
                     if target["kind"] == "target_skeleton":
-                        physical_nodes = predictions * scale[:3] + center[:3]
-                        dists = torch.linalg.vector_norm(
-                            physical_nodes[:, :, :2] - target["nodes"][..., :2].unsqueeze(0),
-                            dim=2)
+                        dists = _skeleton_dists(predictions, target["nodes"], scale, center)
                         final_distance = float(dists.mean().cpu())
                     else:
                         final_tip = predictions[-1, target["node"], :2]
