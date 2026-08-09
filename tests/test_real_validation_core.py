@@ -176,6 +176,29 @@ class ValidationCoreTest(unittest.TestCase):
             executor.execute(plan)
         self.assertEqual(transport.commands[-1], (0.0,) * 6)
 
+    def test_execution_csv_records_jitter(self):
+        import csv
+        *_, safety, plan = fixtures()
+        # 下发阻塞 → 后续命令错过 deadline → jitter_s 滞后
+        transport = MockCommandTransport(send_delay_s=0.15)
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "execution.csv"
+            PlanExecutor(transport, safety).execute(plan, output)
+            rows = list(csv.reader(output.open()))
+            header = rows[0]
+            self.assertIn("t_expected", header)
+            self.assertIn("jitter_s", header)
+            jitters = [float(r[header.index("jitter_s")]) for r in rows[1:]]
+            self.assertGreater(jitters[-1], 0.05)   # 末步被前一步阻塞拖滞后 > 0.05s
+
+    def test_zero_with_retry_hard_fails(self):
+        *_, safety, plan = fixtures()
+        transport = MockCommandTransport(fail_at=1, zero_always_fails=True)
+        executor = PlanExecutor(transport, safety)
+        with self.assertRaises(ExecutionError):
+            executor.execute(plan)
+        # 归零重试 3 次都失败 → 抛 ExecutionError(不能静默放过)
+
     def test_zero_pause_requires_replanning(self):
         *_, safety, _ = fixtures()
         executor = PlanExecutor(MockCommandTransport(), safety)

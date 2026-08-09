@@ -683,11 +683,16 @@ class ValidationWindow(QMainWindow):
         except Exception as error:
             self._error(str(error))
 
+    def _make_transport(self):
+        """执行 transport 工厂:离线 Mock;接实机时改返回 QtValveTransport(需活 controller)。"""
+        from .executor import MockCommandTransport
+        return MockCommandTransport()
+
     def _execute(self) -> None:
         if not self.session or self.session.state != SessionState.ARMED or not self.session.plan:
             self._error("计划必须先通过 Preflight 并 Arm")
             return
-        self.executor = PlanExecutor(MockCommandTransport(), self.session.safety)
+        self.executor = PlanExecutor(self._make_transport(), self.session.safety)
         self.session.transition(SessionState.EXECUTING, "mock execution")
         self._execution_thread = _ExecutionThread(
             self.executor, self.session.plan, self.session.run_dir / "execution.csv")
@@ -700,8 +705,21 @@ class ValidationWindow(QMainWindow):
     def _execution_done(self, receipts) -> None:
         assert self.session is not None
         self.session.transition(SessionState.COMPLETED, "all commands acked")
+        # P4:执行摘要 —— 命令安全 + jitter 统计(替代占位符)
+        from .metrics import evaluate_command_safety
+        actions6 = [tuple(r.applied6) for r in receipts]
+        safety_metrics = evaluate_command_safety(
+            actions6, self.session.plan.step_interval_s if self.session.plan else 0.1,
+            self.session.safety)
+        jitters = [getattr(r, "jitter_s", None) for r in receipts]
+        jitters = [j for j in jitters if j is not None]
+        jitter_summary = (f"jitter mean={sum(jitters) / len(jitters) * 1e3:.1f}ms "
+                          f"max={max(jitters) * 1e3:.1f}ms" if jitters else "jitter 无记录")
         self.results.setPlainText(
-            f"Mock 执行完成：{len(receipts)} 条命令\n{self.session.run_dir / 'execution.csv'}")
+            f"执行完成:{len(receipts)} 条命令\n"
+            f"压力越界:{safety_metrics['pressure_violation_count']}  "
+            f"速率越界:{safety_metrics['slew_violation_count']}\n"
+            f"{jitter_summary}\n{self.session.run_dir / 'execution.csv'}")
         self._refresh()
 
     def _execution_failed(self, error: str) -> None:
@@ -726,7 +744,7 @@ class ValidationWindow(QMainWindow):
             return
         if self.session.state == SessionState.ARMED and self.executor is None:
             self.session.transition(SessionState.ABORTING, "operator abort")
-            receipt = MockCommandTransport().zero(self.session.safety.ack_timeout_s)
+            receipt = self._make_transport().zero(self.session.safety.ack_timeout_s)
             self.session.transition(SessionState.ZEROED, receipt.status)
         elif self.executor:
             self.session.transition(SessionState.ABORTING, "operator abort")
@@ -737,7 +755,7 @@ class ValidationWindow(QMainWindow):
         if not self.session:
             return
         try:
-            transport = self.executor.transport if self.executor else MockCommandTransport()
+            transport = self.executor.transport if self.executor else self._make_transport()
             receipt = transport.zero(self.session.safety.ack_timeout_s)
             if receipt.status != "ack":
                 raise RuntimeError(receipt.status)

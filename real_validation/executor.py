@@ -9,7 +9,7 @@ from __future__ import annotations
 import csv
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable, Protocol, Sequence
 
@@ -24,6 +24,14 @@ class CommandReceipt:
     t_command: float
     t_ack: float | None
     status: str
+    t_expected: float | None = None   # ★P4:期望下发时刻(execute 的绝对时基 deadline)
+
+    @property
+    def jitter_s(self) -> float | None:
+        """实际下发时刻相对期望的偏差(负=提前,正=滞后)。ACK 等待超时会滞后。"""
+        if self.t_expected is None:
+            return None
+        return self.t_command - self.t_expected
 
 
 class CommandTransport(Protocol):
@@ -34,26 +42,36 @@ class CommandTransport(Protocol):
 
 
 class MockCommandTransport:
-    def __init__(self, fail_at: int | None = None, status: str = "timeout"):
+    def __init__(self, fail_at: int | None = None, status: str = "timeout",
+                 latency_s: float = 0.0, send_delay_s: float = 0.0,
+                 zero_always_fails: bool = False):
         self.fail_at = fail_at
         self.failure_status = status
+        self.latency_s = latency_s          # ACK 延迟(t_ack = now + latency)
+        self.send_delay_s = send_delay_s    # 下发本身阻塞(t_command 滞后 → jitter)
+        self.zero_always_fails = zero_always_fails   # 模拟归零也失败 → zero_with_retry 测试
         self.commands: list[tuple[float, ...]] = []
         self._counter = 0
 
     def send(self, action6: Sequence[float], required_groups: Sequence[int],
              timeout_s: float) -> CommandReceipt:
         del required_groups, timeout_s
+        if self.send_delay_s:
+            time.sleep(self.send_delay_s)   # 模拟下发阻塞 → 后续命令错过 deadline
         self._counter += 1
         action = tuple(float(value) for value in action6)
         self.commands.append(action)
         now = time.monotonic()
         failed = self.fail_at == self._counter
         return CommandReceipt(str(self._counter), action, action, now,
-                              None if failed else time.monotonic(),
+                              None if failed else now + self.latency_s,
                               self.failure_status if failed else "ack")
 
     def zero(self, timeout_s: float) -> CommandReceipt:
         del timeout_s
+        if self.zero_always_fails:
+            now = time.monotonic()
+            return CommandReceipt("zero", (0.0,) * 6, (0.0,) * 6, now, None, "timeout")
         return self.send((0.0,) * 6, (), 0.0)
 
 
@@ -95,6 +113,16 @@ class PlanExecutor:
         self._abort.set()
         self._resume.set()
 
+    def _zero_with_retry(self, retries: int = 3) -> CommandReceipt:
+        """归零失败重试 N 次;全败保持 ERROR(不能静默放过)。"""
+        last = None
+        for _ in range(max(1, retries)):
+            last = self.transport.zero(self.safety.ack_timeout_s)
+            if last.status == "ack":
+                return last
+        raise ExecutionError(
+            f"归零失败({retries} 次重试均未 ACK,末次 {last.status}):请人工介入/急停")
+
     def execute(self, plan: ActionPlan, output_csv: str | Path | None = None) -> list[CommandReceipt]:
         self._abort.clear()
         self._resume.set()
@@ -110,6 +138,8 @@ class PlanExecutor:
                     raise ExecutionError("operator_abort")
                 receipt = self.transport.send(action, self.safety.required_groups,
                                               self.safety.ack_timeout_s)
+                # 记录期望下发时刻(绝对时基)→ jitter 可归因
+                receipt = replace(receipt, t_expected=deadline)
                 self.receipts.append(receipt)
                 self._emit("command", {"step": step, "receipt": asdict(receipt)})
                 if receipt.status != "ack":
@@ -117,7 +147,7 @@ class PlanExecutor:
             self._emit("completed", {"steps": len(plan.actions6)})
             return list(self.receipts)
         except Exception as error:
-            zero_receipt = self.transport.zero(self.safety.ack_timeout_s)
+            zero_receipt = self._zero_with_retry()
             self.receipts.append(zero_receipt)
             self._emit("aborted_zeroed", {"error": str(error),
                                            "receipt": asdict(zero_receipt)})
@@ -149,10 +179,14 @@ class PlanExecutor:
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("w", newline="", encoding="utf-8") as stream:
             writer = csv.writer(stream)
-            writer.writerow(["command_id", "t_command", "t_ack", "status",
+            writer.writerow(["command_id", "t_command", "t_expected", "jitter_s",
+                             "t_ack", "status",
                              *[f"requested_c{i}" for i in range(6)],
                              *[f"applied_c{i}" for i in range(6)]])
             for item in self.receipts:
-                writer.writerow([item.command_id, item.t_command,
-                                 "" if item.t_ack is None else item.t_ack, item.status,
-                                 *item.requested6, *item.applied6])
+                writer.writerow([
+                    item.command_id, item.t_command,
+                    "" if item.t_expected is None else item.t_expected,
+                    "" if item.jitter_s is None else item.jitter_s,
+                    "" if item.t_ack is None else item.t_ack, item.status,
+                    *item.requested6, *item.applied6])
