@@ -70,6 +70,7 @@
 | [`04_experiments.md`](04_experiments.md) | 实验计划(Exp A–G):目标、资产、命令、go/no-go、时间线 |
 | [`05_outline.md`](05_outline.md) | ICRA 论文大纲 + 差异化表 + 需引用的关键文献(区分已核实/待核) |
 | [`06_multiview_self_calibration.md`](06_multiview_self_calibration.md) | **多视角自标定设计(L2/L3)**—— 多驱动 3D 升级如何保持"免标定":身体/场景自我标定 + 学习式免标定几何 |
+| [`icra_draft.md`](icra_draft.md) | **ICRA 论文中文草稿(脚手架版)**—— 结构完整、方法写实、结果留 `[待填]`;每节标明要跑的实验(Exp A–H) |
 
 ---
 
