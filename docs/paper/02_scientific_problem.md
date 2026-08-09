@@ -56,7 +56,7 @@ S_t = F[{a_0, a_1, ..., a_t}]     ← 依赖整段历史,不是 F(a_t)
 | **P4** 迟滞感知 + 开环逆动作序列规划 + **可信视野认证** | PARTIALLY-CLAIMED | 每件单独已发表;组合"显式迟滞 + 开环多步序列 + 认证视野"无人占;Thuruthel 2017 明确回避可达性验证 | ✅ 能(与 P3 组脊柱) |
 | **P1** 经验非马尔可夫性(全身,NDI,速率+路径) | PARTIALLY-CLAIMED | 前向路径依赖已量化(Chen 3.4%、Cho 9±6.5%);空缺 = 全身 + 速率 + NDI 统计严谨 + **IK 歧义集量化** | ⚠️ 只作动机/证据 |
 | **P2** 无记忆模型反转处失效 | **CLAIMED** | 无(Wang 2024、导管 2024、Ma 2022 已量化) | ❌ 不能 |
-| **P5** 全身避障 + 冗余 3D 臂 | **CLAIMED** | 头条级被 Yu/Kasaei/Hachen/Wong/Gandhi 占据;残余只有"免标定 2D 骨架 + 显式全身形状轨迹规划 + 自碰撞"这种配置级空缺 | ❌ 降为 demo |
+| **P5** 全身避障 + 冗余 3D 臂 | **CLAIMED** | 头条级被 Yu/Kasaei/Hachen/Wong/Gandhi 占据;残余只有"免标定 2D 骨架 + 显式全身形状轨迹规划 + 自碰撞"这种配置级空缺。**多驱动 3D 升级时**:用"身体自我标定 + 学习式免标定的多视角几何"(见 [`06_multiview_self_calibration.md`](06_multiview_self_calibration.md),L2/L3)可以把"无标定板 3D"做成更强的配置级差异化,3D 全身避障 demo 才成立 | ❌ 降为 demo |
 
 ### 两个批判 agent 的一致建议(写进策略)
 

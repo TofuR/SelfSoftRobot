@@ -20,7 +20,7 @@
 1. **(方法·P3)** 首次把 **Grünwald-Letnikov 分数阶幂律记忆核**作为**神经全身形态模型的时序编码器**(而非控制器/物理权重/优化器),物理接地于粘弹性弛豫谱;六路编码器系统消融 + 速率泛化实证。
 2. **(能力·P4)** 该记忆模型使**历史感知逆规划**良置:开环逆动作序列规划 + 认证信任视野(观测一次、预测 K 步、给出可信上限),并对比"无记忆模型规划的序列在真机不可达"。
 3. **(科学·P1-sharpened)** 定量化**迟滞下 IK 的歧义集**(逆映射前像集直径 / 临界记忆长度 T*),给出"IK 是函数还是泛函"的可测答案。
-4. **(实证·首次级)** 免标定单相机 2D 像素骨架作 state + NDI 6DOF mm 真值 + 全身形态在**显式速率/循环加载**下的定量评估。
+4. **(实证·首次级)** 免标定感知作 state(单目 = 2D 像素骨架;多驱动 3D 升级 = 身体自我标定 + 学习式免标定多视角几何,见 [`06_multiview_self_calibration.md`](06_multiview_self_calibration.md))+ NDI 6DOF mm 真值 + 全身形态在**显式速率/循环加载**下的定量评估。
 
 ---
 
@@ -29,7 +29,7 @@
 | 节 | 内容 | 对应资产 |
 |---|---|---|
 | **I. Intro** | 软臂全身形态预测是部署前提;现工作准静态回避迟滞;我们重构为"非马尔可夫系统辨识"。三句贡献。 | — |
-| **II. Related** | 四脉络(嵌入式传感 / 模型驱动 / 视觉自建模 / 迟滞与规划),每条引已核实文献,末段给空白交集。 | `docs/paper/01_landscape.md`;旧稿 `docs/papers/related_work_draft.md`(需按本文 §2 重写差异化段,删"免标定单相机"作卖点之外、补 P3/P4) |
+| **II. Related** | 四脉络(嵌入式传感 / 模型驱动 / 视觉自建模 / 迟滞与规划),每条引已核实文献,末段给空白交集。**自标定部分**须引经典自标定(Faugeras、Maybank & Luong、Pollefeys)作背景,并区分"自标定作为软体自建模管线组成部分 + 与自模型耦合"(见 [`06_multiview_self_calibration.md`](06_multiview_self_calibration.md) §6.2)。 | `docs/paper/01_landscape.md`;旧稿 `docs/papers/related_work_draft.md`(需按本文 §2 重写差异化段,删"免标定单相机"作卖点之外、补 P3/P4) |
 | **III. Method** | 3.1 免标定状态转移自模型 `s_t = F(s_{t-1}, a_t, history)`(含分数阶 GL 编码器 + 空间 GRU + 增量收缩);3.2 记忆核的物理接地(G L vs 实测弛豫谱);3.3 可信开环规划(视野认证 + 历史感知逆序列优化)。 | `src/models/model_state_transition.py`;`src/encoders/fractional_memory.py`;`real_validation/openloop_planner.py` |
 | **IV. Experiments** | E1 六路编码器消融(px + mm);E2 速率泛化;E3 物理接地(α 匹配);E4 歧义集/T*;E5 无记忆 vs 记忆规划质量;E6 信任视野;E7 实机 NDI gap。 | `docs/paper/04_experiments.md` |
 | **V. Conclusion** | 非马尔可夫自建模的物理极限;对未来"记忆核匹配材料谱"的指导。 | — |
@@ -46,7 +46,7 @@
 | Chen 2025 / Schäfke 2024(迟滞+RL/NMPC) | 闭环控制用记忆 | 开环自建模 + 信任视野;分数阶核(物理接地)而非通用 GRU |
 | Wang 2024 / Cho 2024(无记忆失效/路径依赖量化) | 已量化前向映射失败与路径依赖 | 我们把这些当动机/证据,并补**逆映射歧义集量化** |
 | Thuruthel 2017 / Krauss 2026(开环 shooting) | 开环规划但无显式迟滞/无认证视野 | 显式迟滞前向模型 + **认证可信视野** |
-| NJF Nature 2025 / SoftNeRF IROS 2024 | 单机器人自建模,需内参/度量 3D | 免标定 2D 像素骨架 + NDI mm 真值 |
+| NJF Nature 2025 / SoftNeRF IROS 2024 | 单机器人自建模,需内参/度量 3D | 免标定感知 + NDI mm 真值(单目 2D 像素骨架作基线;多驱动 3D 升级为**身体自我标定 + 学习式免标定几何**,见 [`06_multiview_self_calibration.md`](06_multiview_self_calibration.md)) |
 | Shao T-ASE 2025 / FBGNN 2026(分数阶+软体) | 分数阶在控制律/物理权重 | 分数阶在**编码器**(动作历史→形状的时序层) |
 
 ---

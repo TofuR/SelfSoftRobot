@@ -106,6 +106,25 @@ CUDA_VISIBLE_DEVICES=1 python scripts/training/train_transition.py --mode gt \
 - 全身:执行末帧骨架 vs 预测 → px(对比 `drift_by_k` 预测)
 - 避障 demo(若有 3D/冗余):最小净距 vs 障碍
 
+## Exp H — 多视角自标定验证(3D 升级,L2/L3)🔴(需硬件)
+
+> 设计见 [`06_multiview_self_calibration.md`](06_multiview_self_calibration.md)。这里列评估。
+
+**目标**:证明"身体自我标定 + 学习式免标定"达到可比传统标定的 3D mm 精度,且全程无标定板/流程。
+
+**H1 自标定精度**:
+- 用 L2 自标定外参三角化 → 3D 骨架;重投影误差(px) + 与 NDI 交叉的末端 mm 误差。
+- 对照:传统标定(L1)三角化的 3D → 同一序列同指标 → 证明 L2 可比。
+
+**H2 L2 vs L3 对照**:
+- L2(身体/场景自标定)vs L3(DUSt3R/MUSt3R 类)同序列同指标 → 两独立通道差异。
+- 结论决定部署用哪个 / 是否需要互证 fallback。
+
+**H3 3D 全身避障 demo(可选,恢复 P5)**:
+- 3D 冗余下"到达目标 + 全身避障"(零空间可用);预测最小净距 vs 执行后实测。
+
+**产出**:"免标定 vs 传统标定 3D 精度"对照表 + L2/L3 一致性 → 论文差异化 #3 的 3D 版证据。
+
 ---
 
 ## 汇总时间线
@@ -115,5 +134,6 @@ CUDA_VISIBLE_DEVICES=1 python scripts/training/train_transition.py --mode gt \
 | 第 1 周 | A 六路消融、B 手头两档、E window 对比 | 无(离线) | A 中 GL 长视野/速率胜 → 继续;否则重评 |
 | 第 2–3 周 | C 物理接地、D 歧义集、F 信任视野 | A/B 的 checkpoint | D 歧义集显著 → 泛函主张立 |
 | 第 4 周+ | G 实机 + B/C 新数据 | 硬件 | G 的 gap 报诚实值,超容差报"不可达" |
+| 3D 升级 | H 自标定验证(D1 脚本→D2 三角化→H1/H2)→ H3 3D 避障 demo | 多相机 + 自标定脚本 | H1 与 NDI/传统标定交叉达标 → 3D demo 才可信 |
 
 > **诚实边界贯穿**:所有"规划"结论在真机执行前都是模型内验证;投稿前需真机闭环 + 近期文献再核(速率定量评估的"首次"声称)。

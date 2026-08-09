@@ -97,6 +97,26 @@ CUDA_VISIBLE_DEVICES=1 python scripts/training/train_transition.py --mode gt \
 
 在 P2 采集中加入"阶跃 + 保持"序列(给不同气压阶跃,NDI 记录弛豫),直接出 A3 的实测 α。
 
+### C3. 多视角 3D 采集(多驱动升级,见 06)
+
+多驱动控制需要度量 3D。采集协议升级:2–3 个固定相机同时拍 + 激励覆盖 3D 弯曲(三腔协同,保证外参可观测)。**加量具参考**(臂物理总长 / 支架上两已知间距标记),供 L2 自标定定尺度。详见 `06_multiview_self_calibration.md` §3.2/§3.5。
+
+---
+
+## D. 3D 多视角自标定实现(接硬件,🟡/🔴)
+
+> 完整设计见 [`06_multiview_self_calibration.md`](06_multiview_self_calibration.md)。这里只列落地任务。
+
+| 任务 | 内容 | 对应 |
+|---|---|---|
+| **D1 自标定脚本** | `scripts/real/self_calibrate_multiview.py`:静态场景特征 → 本质矩阵(配近似 K)→ 尺度(臂长/标记)→ BA 精修外参 | 新写;可复用 `perception/registration.py` 的参考帧思路 |
+| **D2 三角化升级** | `src/data/real/triangulation.py` 从 **planar lift** 升级为真多视角最小二乘三角化(≥2 视角) | 升级现有 |
+| **D3 3D state 接入模型** | 状态转移模型 state `(N,2)`→`(N,3)`;`pc_center/pc_scale` 已是 3D buffer,架构基本不变 | 小改 |
+| **D4 模型在环(进阶)** | 相机位姿作为可优化参数注入 rollout,与隐藏状态联合优化(自模型成为标定约束) | 可选,论文卖点 |
+| **D5 精度验证** | 自标定 mm 与 NDI 交叉;L2 vs L3(DUSt3R/MUSt3R)对照 | 见 `04_experiments.md` Exp H |
+
+> ⚠️ 优先顺序:L2 静态场景自标定(独立于模型,先做)→ L3 学习式作对照 → 模型在环(L2 进阶,依赖自模型够好)。
+
 ---
 
 ## 四、优先级与执行顺序(go/no-go 逻辑)
@@ -115,6 +135,7 @@ CUDA_VISIBLE_DEVICES=1 python scripts/training/train_transition.py --mode gt \
 第 4 周+(需要硬件)
   C1/C2 多速率+阶跃采集 → 重训 gt/open_loop → 真机执行 → prediction-to-execution gap
   (可选)B1-b 序列级训练让 z 成真记忆;P5 demo 延后
+  (多驱动 3D 升级)D1 自标定脚本 → D2 三角化升级 → D5 与 NDI 交叉验证 → 达标后跑 3D 全身避障 demo
 ```
 
 > **风险闸门**:A1 若 GL 全面不敌 GRU → 重评 P3(可能把论文改为"系统消融 + 物理接地记忆在特定 regime 的价值",仍可写,但降一档);A4 若歧义集很小 → "泛函"主张弱化,回落到"记忆提升开环规划精度"的工程叙事。
