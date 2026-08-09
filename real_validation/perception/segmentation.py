@@ -62,17 +62,18 @@ def segment_color(bgr, lower_hsv, upper_hsv):
 
 # -------------------------------- 'white_on_blue' 实物硅胶臂专用
 def build_median_background(cam_dir, n_bg=500):
-    """从图像目录均匀采样 n_bg 帧灰度 → per-pixel median = 静态背景。
+    """从图像目录均匀采样 n_bg 帧灰度 → per-pixel median = 静态背景(核心委托 background)。
 
     机器人移动占每像素 <50% 时间 → 中值趋近真实静态背景（蓝墙+座+静态管），
     无需单独拍无臂背景。返回 (bg_gray, frame_paths)。
     """
+    from .background import build_median_background_from_frames
     fs = sorted(glob.glob(os.path.join(cam_dir, "*.png")))
     if not fs:
         raise FileNotFoundError(f"无帧: {cam_dir}")
     idx = np.linspace(0, len(fs) - 1, min(n_bg, len(fs))).astype(int)
-    stack = np.stack([cv2.imread(fs[i], cv2.IMREAD_GRAYSCALE) for i in idx])
-    return np.median(stack, axis=0).astype(np.uint8), fs
+    frames = np.stack([cv2.imread(fs[i], cv2.IMREAD_GRAYSCALE) for i in idx])
+    return build_median_background_from_frames(frames, n_bg=len(idx)), fs
 
 
 def segment_white_on_blue(bgr, bg_gray, sat=100, val=120, diff=25, dil=35,
