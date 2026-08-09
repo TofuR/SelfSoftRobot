@@ -101,6 +101,25 @@ class _PlanningThread(QThread):
             self.failed.emit(f"{type(error).__name__}: {error}")
 
 
+class _CameraThread(QThread):
+    frame_ready = pyqtSignal(object)
+
+    def run(self) -> None:
+        # 合成弯曲剪影臂(离线演示;真机换 RealSenseCam)
+        import time
+
+        import numpy as np
+        while not self.isInterruptionRequested():
+            frame = np.zeros((240, 320, 3), np.uint8)
+            frame[:, :, 0] = 180; frame[:, :, 1] = 70; frame[:, :, 2] = 40
+            phase = int(time.time() * 2) % 12
+            for row in range(30, 220):
+                left = 150 + int(8 * np.sin(phase / 2.0)) + int((row - 30) ** 1.2 / 12.0)
+                frame[row, left:left + 11] = (235, 235, 238)
+            self.frame_ready.emit(frame)
+            self.msleep(200)
+
+
 class ValidationWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -166,7 +185,7 @@ class ValidationWindow(QMainWindow):
         for channel in range(6):
             self.safety_table.setVerticalHeaderItem(channel, QTableWidgetItem(f"ch{channel}"))
             row = []
-            for column, default in enumerate((0.0, 200.0, 100.0, 100.0, 0.0)):
+            for column, default in enumerate((0.0, 150.0, 100.0, 100.0, 0.0)):
                 cell = QDoubleSpinBox(); cell.setRange(0, 500); cell.setDecimals(1)
                 cell.setValue(default); self.safety_table.setCellWidget(channel, column, cell)
                 row.append(cell)
@@ -269,25 +288,6 @@ class ValidationWindow(QMainWindow):
         self._refresh()
 
     def _start_camera(self) -> None:
-        from PyQt5.QtCore import QThread, pyqtSignal
-
-        class _CameraThread(QThread):
-            frame_ready = pyqtSignal(object)
-
-            def run(self) -> None:
-                # 合成弯曲剪影臂(离线演示;真机换 RealSenseCam)
-                import numpy as np
-                rng = np.random.default_rng(7)
-                while not self.isInterruptionRequested():
-                    frame = np.zeros((240, 320, 3), np.uint8)
-                    frame[:, :, 0] = 180; frame[:, :, 1] = 70; frame[:, :, 2] = 40
-                    phase = int(__import__("time").time() * 2) % 12
-                    for row in range(30, 220):
-                        left = 150 + int(8 * np.sin(phase / 2.0)) + int((row - 30) ** 1.2 / 12.0)
-                        frame[row, left:left + 11] = (235, 235, 238)
-                    self.frame_ready.emit(frame)
-                    self.msleep(200)
-
         self._camera_thread = _CameraThread(self)
         self._camera_thread.frame_ready.connect(self._on_camera_frame)
         self._camera_thread.start()
@@ -301,12 +301,8 @@ class ValidationWindow(QMainWindow):
         if self.runtime is not None:
             from .perception.segmentation import segment_white_on_blue
             from .perception.skeleton import extract_skeleton_2d
-            bg = None
-            segment_params = {}
-            if self.runtime.manifest and self.runtime.manifest.segment_params:
-                segment_params = self.runtime.manifest.segment_params
-            mask = segment_white_on_blue(bgr, bg) if bg is not None else \
-                segment_white_on_blue(bgr, self._gray(bgr))
+            # Mock 场景:背景 = 帧自身灰度近似(真机用 manifest.segment_params + 无臂静态背景)
+            mask = segment_white_on_blue(bgr, self._gray(bgr))
             skeleton, _ = extract_skeleton_2d(mask, self.runtime.descriptor.n_nodes,
                                               tip_fix=True, return_info=True)
             self.camera_view.set_skeleton(skeleton)
