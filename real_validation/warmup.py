@@ -54,14 +54,8 @@ def warmup_actions(action_dim: int, history_steps: int, *, lo=0.0, hi=1.0,
 def expand_to_6ch(actions_model, channel_map) -> np.ndarray:
     """(H, action_dim) 模型动作 → (H, 6) applied 命令。
 
-    warmup 下发必须经 channel_map 展开成 6 通道(未映射通道 0),与 executor/
-    ActionHistoryBuffer.append_applied6 的输入一致。
+    委托 planner_service.expand_model_actions(共享 6 通道展开逻辑,含 channel_map
+    唯一性/范围校验)。
     """
-    actions_model = np.asarray(actions_model, dtype=np.float64)
-    h, a = actions_model.shape
-    if len(channel_map) != a:
-        raise ValueError("channel_map 长度必须等于动作维度")
-    expanded = np.zeros((h, 6), dtype=np.float64)
-    for i, ch in enumerate(channel_map):
-        expanded[:, ch] = actions_model[:, i]
-    return expanded
+    from .planner_service import expand_model_actions
+    return np.asarray(expand_model_actions(actions_model, channel_map), dtype=np.float64)
