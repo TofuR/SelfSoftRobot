@@ -19,7 +19,7 @@ if __package__ in (None, ""):  # 支持复制目录后直接 ``python main_valid
 from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QTabWidget,
+    QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter, QTabWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -31,7 +31,7 @@ from .openloop_planner import OpenLoopShootingPlanner, ShootingConfig
 from .offline_anchor import anchor_from_npz
 from .plan_io import write_actions6_csv
 from .session import ExperimentSession, SessionState
-from .widgets import PlanPreviewWidget
+from .widgets import CameraViewWidget, PlanPreviewWidget, SceneEditorPanel
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -210,10 +210,151 @@ class ValidationWindow(QMainWindow):
         obstacle_button = QPushButton("添加圆障碍"); obstacle_button.clicked.connect(self._add_obstacle)
         obstacle_row.addWidget(obstacle_button); target_form.addRow("障碍 x / y / 半径 (model)", obstacle_row)
         root.addLayout(target_form)
-        self.scene_summary = QPlainTextEdit(); self.scene_summary.setReadOnly(True)
-        self.scene_summary.setPlaceholderText("后续在这里接入多相机画面、骨架锚定和 Scene Editor。")
-        root.addWidget(self.scene_summary, 1)
+        # ---- P3:实时相机视图 + 场景编辑器 + 锚定/warmup ----
+        live_buttons = QHBoxLayout()
+        self.camera_btn = QPushButton("Start Camera (Mock)"); self.camera_btn.clicked.connect(self._start_camera)
+        self.camera_anchor_btn = QPushButton("从相机取流锚定"); self.camera_anchor_btn.clicked.connect(self._camera_anchor)
+        self.camera_anchor_btn.setEnabled(False)
+        self.warmup_btn = QPushButton("Warmup(填动作历史)"); self.warmup_btn.clicked.connect(self._warmup)
+        self.warmup_btn.setEnabled(False)
+        live_buttons.addWidget(self.camera_btn); live_buttons.addWidget(self.camera_anchor_btn)
+        live_buttons.addWidget(self.warmup_btn); live_buttons.addStretch()
+        root.addLayout(live_buttons)
+
+        tool_row = QHBoxLayout()
+        self.tool_select_btn = QPushButton("select"); self.tool_select_btn.clicked.connect(lambda: self._set_tool("select"))
+        self.tool_target_btn = QPushButton("点加目标"); self.tool_target_btn.clicked.connect(lambda: self._set_tool("add_target"))
+        self.tool_obstacle_btn = QPushButton("点加障碍"); self.tool_obstacle_btn.clicked.connect(lambda: self._set_tool("add_obstacle"))
+        tool_row.addWidget(QLabel("工具:")); tool_row.addWidget(self.tool_select_btn)
+        tool_row.addWidget(self.tool_target_btn); tool_row.addWidget(self.tool_obstacle_btn); tool_row.addStretch()
+        root.addLayout(tool_row)
+
+        self.camera_view = CameraViewWidget()
+        self.scene_editor = SceneEditorPanel()
+        split = QSplitter(); split.addWidget(self.camera_view); split.addWidget(self.scene_editor)
+        split.setSizes([520, 260])
+        root.addWidget(split, 1)
+        self.anchor_status = QLabel("未锚定")
+        root.addWidget(self.anchor_status)
+
+        # 绑定:camera_view 点选 → 加原语;scene_editor 编辑 → session.set_scene
+        self.camera_view.target_picked.connect(self._add_primitive)
+        self.camera_view.obstacle_picked.connect(self._add_primitive)
+        self.scene_editor.scene_edited.connect(self._apply_scene_edit)
+
+        self._camera_thread = None
+        self._latest_frame = None
+        self._action_history = []          # warmup 填充(H×action_dim 模型单位)
         return page
+
+    def _set_tool(self, tool: str) -> None:
+        self.camera_view.set_tool(tool)
+        for btn, name in ((self.tool_select_btn, "select"), (self.tool_target_btn, "add_target"),
+                          (self.tool_obstacle_btn, "add_obstacle")):
+            btn.setStyleSheet("font-weight:bold" if name == tool else "")
+
+    def _add_primitive(self, primitive) -> None:
+        if not self.session:
+            return
+        self.session.set_scene(self.session.scene.with_primitive(primitive))
+        self.camera_view.set_scene(self.session.scene)
+        self.scene_editor.set_scene(self.session.scene)
+        self._refresh()
+
+    def _apply_scene_edit(self, scene) -> None:
+        if not self.session:
+            return
+        self.session.set_scene(scene)
+        self.camera_view.set_scene(scene)
+        self._refresh()
+
+    def _start_camera(self) -> None:
+        from PyQt5.QtCore import QThread, pyqtSignal
+
+        class _CameraThread(QThread):
+            frame_ready = pyqtSignal(object)
+
+            def run(self) -> None:
+                # 合成弯曲剪影臂(离线演示;真机换 RealSenseCam)
+                import numpy as np
+                rng = np.random.default_rng(7)
+                while not self.isInterruptionRequested():
+                    frame = np.zeros((240, 320, 3), np.uint8)
+                    frame[:, :, 0] = 180; frame[:, :, 1] = 70; frame[:, :, 2] = 40
+                    phase = int(__import__("time").time() * 2) % 12
+                    for row in range(30, 220):
+                        left = 150 + int(8 * np.sin(phase / 2.0)) + int((row - 30) ** 1.2 / 12.0)
+                        frame[row, left:left + 11] = (235, 235, 238)
+                    self.frame_ready.emit(frame)
+                    self.msleep(200)
+
+        self._camera_thread = _CameraThread(self)
+        self._camera_thread.frame_ready.connect(self._on_camera_frame)
+        self._camera_thread.start()
+        self.camera_btn.setText("Camera 运行中")
+        self.camera_anchor_btn.setEnabled(True)
+        self.warmup_btn.setEnabled(True)
+
+    def _on_camera_frame(self, bgr) -> None:
+        self._latest_frame = bgr
+        self.camera_view.set_frame(bgr)
+        if self.runtime is not None:
+            from .perception.segmentation import segment_white_on_blue
+            from .perception.skeleton import extract_skeleton_2d
+            bg = None
+            segment_params = {}
+            if self.runtime.manifest and self.runtime.manifest.segment_params:
+                segment_params = self.runtime.manifest.segment_params
+            mask = segment_white_on_blue(bgr, bg) if bg is not None else \
+                segment_white_on_blue(bgr, self._gray(bgr))
+            skeleton, _ = extract_skeleton_2d(mask, self.runtime.descriptor.n_nodes,
+                                              tip_fix=True, return_info=True)
+            self.camera_view.set_skeleton(skeleton)
+
+    def _gray(self, bgr):
+        import numpy as np
+        return np.mean(np.asarray(bgr, dtype=np.float64), axis=2).astype(np.uint8)
+
+    def _warmup(self) -> None:
+        if not self.runtime or self.runtime.descriptor.action_scale_kpa is None:
+            self._error("warmup 需要已加载带 manifest 的模型")
+            return
+        from .warmup import warmup_actions
+        descriptor = self.runtime.descriptor
+        seq = warmup_actions(descriptor.action_dim, descriptor.history_steps, kind="ramp")
+        self._action_history = [tuple(float(v) for v in row) for row in seq]
+        # 简化:用 mock 传输"下发"填历史(真机用 QtValveTransport)
+        self.warmup_btn.setText(f"Warmup 完成:{len(seq)} 步")
+        self.camera_anchor_btn.setEnabled(True)
+        self._log(f"warmup: {len(seq)} 步动作历史已就绪(模型单位,可锚定)")
+
+    def _camera_anchor(self) -> None:
+        if self._latest_frame is None or not self.runtime:
+            self._error("先 Start Camera")
+            return
+        if not self._action_history:
+            self._error("warmup 未完成 —— 需先填充动作历史")
+            return
+        from .live_anchor import anchor_from_camera_frame
+        descriptor = self.runtime.descriptor
+        bg = self._gray(self._latest_frame)   # mock 场景:背景即自身灰度近似
+        manifest = self.runtime.manifest
+        area_median = manifest.mask_area_median_px if manifest else None
+        if area_median is None:
+            area_median = float(np.asarray(self._latest_frame).sum())  # 冒烟
+        anchor, quality, skeleton = anchor_from_camera_frame(
+            self._latest_frame, background_gray=bg,
+            segment_params=(manifest.segment_params if manifest else {}),
+            n_nodes=descriptor.n_nodes, model=self.runtime.model,
+            action_history=self._action_history, area_median_px=float(area_median),
+            frame_ref="camera_live#mock")
+        if anchor is None:
+            self._error(f"帧质量 reject:{quality.reasons};请重试或调场景")
+            return
+        self.session.set_anchor(anchor)
+        self.anchor_status.setText(f"已锚定 {anchor.anchor_id[:8]} verdict={quality.verdict}")
+        self.camera_view.set_anchor(skeleton)
+        self._refresh()
 
     def _plan_page(self) -> QWidget:
         page = QWidget(); root = QVBoxLayout(page)
