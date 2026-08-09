@@ -15,32 +15,24 @@ import torch
 
 
 def obstacle_term(preds, pc_center, pc_scale, obstacles, reduce: str = "mean"):
-    """障碍惩罚:preds (K,N,3) 归一化 → px,对每个 keep-out 圆罚穿透。标量。
-
-    obstacles: [(cx, cy, r_px), ...] in model px。聚合 = mean-over-(K,N)(对 K 不变)。
-    """
-    if not obstacles:
-        return preds.new_zeros(())
-    physical = preds * pc_scale + pc_center          # (K,N,3) px
-    total = preds.new_zeros(())
-    for (cx, cy, radius) in obstacles:
-        distance = torch.linalg.vector_norm(
-            physical[:, :, :2] - physical.new_tensor((cx, cy)), dim=2)
-        total = total + torch.relu(radius - distance).square().mean()
-    if reduce == "mean":
-        return total
-    if reduce == "sum":
-        return total
-    raise ValueError(f"未知 reduce: {reduce}")
+    """障碍惩罚(纯圆):委托 obstacle_term_ext,obstacles 为 [(cx, cy, r_px), ...]。"""
+    return obstacle_term_ext(
+        preds, pc_center, pc_scale,
+        [("circle", (cx, cy), r) for (cx, cy, r) in obstacles],
+        reduce=reduce)
 
 
 def obstacle_term_ext(preds, pc_center, pc_scale, obstacles, reduce: str = "mean"):
-    """扩展版:支持 circle 与 aabb。obstacles = [("circle",(cx,cy),r) | ("aabb",(x0,y0,x1,y1),0)]。
+    """障碍惩罚:preds (K,N,3) 归一化 → px,对每个 keep-out 原语罚穿透。标量。
 
-    只在需要 AABB 的场景用;纯 circle 用 obstacle_term 更快更简单。
+    obstacles = [("circle",(cx,cy),r) | ("aabb",(x0,y0,x1,y1),0)] in model px。
+    聚合 = mean-over-(K,N)(对 K 不变)。reduce 兼容 "mean"/"sum"(当前实现内部已
+    硬编码"对障碍求和、对 (K,N) 取均值",两者等价)。
     """
     if not obstacles:
         return preds.new_zeros(())
+    if reduce not in ("mean", "sum"):
+        raise ValueError(f"未知 reduce: {reduce}")
     physical = preds * pc_scale + pc_center
     total = preds.new_zeros(())
     for kind, geom, radius in obstacles:
@@ -59,11 +51,7 @@ def obstacle_term_ext(preds, pc_center, pc_scale, obstacles, reduce: str = "mean
             total = total + torch.relu(-sdf).square().mean()
         else:
             raise ValueError(f"未知障碍类型: {kind}")
-    if reduce == "mean":
-        return total
-    if reduce == "sum":
-        return total
-    raise ValueError(f"未知 reduce: {reduce}")
+    return total
 
 
 # ---------------- CLI 兼容层(inverse_plan.py 委托到共享核的落点) ----------------
