@@ -1,10 +1,8 @@
-"""GUI/CLI 共用规划服务的第一版适配层。"""
+"""GUI/CLI 共用规划服务适配层(模型动作 → 6 通道计划)。"""
 
 from __future__ import annotations
 
-import concurrent.futures
-import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from typing import Any
 
 from .models import ActionPlan, Anchor, ModelDescriptor, SafetyPolicy, Scene
@@ -47,33 +45,3 @@ def build_plan(*, model_actions: Sequence[Sequence[float]], channel_map: Sequenc
         loss_terms=dict(loss_terms or {}),
         metadata=dict(metadata or {}),
     )
-
-
-class PlannerService:
-    """有界单 worker 规划服务，防止重复点击并发占满 GPU。"""
-
-    def __init__(self):
-        self._pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="real-validation-planner")
-        self._future: concurrent.futures.Future | None = None
-        self._lock = threading.Lock()
-
-    @property
-    def running(self) -> bool:
-        with self._lock:
-            return self._future is not None and not self._future.done()
-
-    def submit(self, planner: Callable[..., ActionPlan], *args, **kwargs):
-        with self._lock:
-            if self._future is not None and not self._future.done():
-                raise RuntimeError("已有规划任务在运行")
-            self._future = self._pool.submit(planner, *args, **kwargs)
-            return self._future
-
-    def cancel(self) -> bool:
-        with self._lock:
-            return bool(self._future and self._future.cancel())
-
-    def close(self) -> None:
-        self.cancel()
-        self._pool.shutdown(wait=False, cancel_futures=True)

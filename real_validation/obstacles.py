@@ -11,31 +11,7 @@ pc_center/pc_scale;只取 [:2](col,row 平面)。pc_scale[2]=1e-6,z 通道污染
 
 from __future__ import annotations
 
-import math
-
 import torch
-
-
-def parse_obstacle_circles(scene):
-    """从 Scene 的 obstacle_circle 原语解析 → [(cx, cy, r_px)];含 safety_margin。
-
-    只接受 frame_id == "model" 的圆;其他障碍类型(AABB/多边形)由调用方另作解析。
-    """
-    supported = []
-    for item in scene.primitives:
-        if not item.kind.startswith("obstacle_"):
-            continue
-        if item.kind != "obstacle_circle":
-            raise ValueError(f"当前 obstacle 解析尚不支持 {item.kind}")
-        if item.frame_id != "model":
-            raise ValueError("圆障碍必须先转换到 model 坐标")
-        center = item.geometry.get("center", item.geometry.get("xy"))
-        radius = float(item.geometry.get("radius", item.geometry.get("r", 0.0)))
-        if not isinstance(center, (list, tuple)) or len(center) != 2 or radius <= 0:
-            raise ValueError("obstacle_circle 需要 center=[x,y] 与正 radius")
-        supported.append((float(center[0]), float(center[1]),
-                          radius + float(item.safety_margin)))
-    return supported
 
 
 def obstacle_term(preds, pc_center, pc_scale, obstacles, reduce: str = "mean"):
@@ -88,35 +64,6 @@ def obstacle_term_ext(preds, pc_center, pc_scale, obstacles, reduce: str = "mean
     if reduce == "sum":
         return total
     raise ValueError(f"未知 reduce: {reduce}")
-
-
-def clearance_min(states_px, obstacles) -> float | None:
-    """states_px (K,N,3) 或 (N,3) px → 到所有障碍的最小净距(distance - r,可为负)。
-
-    供 preflight 碰撞门用。无障碍返回 None。
-    """
-    if not obstacles:
-        return None
-    values = []
-    for (cx, cy, radius) in obstacles:
-        xy = torch.as_tensor(states_px, dtype=torch.float64)[..., :2]
-        distance = torch.linalg.vector_norm(xy - torch.as_tensor((cx, cy), dtype=torch.float64),
-                                            dim=-1)
-        values.append(float((distance - radius).min()))
-    return min(values)
-
-
-def _clearance_min_numpy(states_px, obstacles) -> float | None:
-    """numpy 版(CLI 报告用,no_grad 场景)。states_px (K,N,3) 或 (N,3)。"""
-    if not obstacles:
-        return None
-    import numpy as np
-    xy = np.asarray(states_px, dtype=np.float64)[..., :2]
-    values = []
-    for (cx, cy, radius) in obstacles:
-        distance = np.linalg.norm(xy - np.asarray((cx, cy), dtype=np.float64), axis=-1)
-        values.append(float((distance - radius).min()))
-    return min(values)
 
 
 # ---------------- CLI 兼容层(inverse_plan.py 委托到共享核的落点) ----------------

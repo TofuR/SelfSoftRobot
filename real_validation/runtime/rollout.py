@@ -30,10 +30,3 @@ def plan_rollout(model, buffer, start_index: int, horizon: int,
         predictions.append(prediction.squeeze(0))
         previous, state = state, prediction
     return torch.stack(predictions, dim=0)
-
-
-def rollout_eval(model, buffer, start_index: int, horizon: int,
-                 window_size: int, initial_state):
-    with torch.no_grad():
-        return plan_rollout(model, buffer, start_index, horizon,
-                            window_size, initial_state)

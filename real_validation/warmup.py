@@ -65,9 +65,3 @@ def expand_to_6ch(actions_model, channel_map) -> np.ndarray:
     for i, ch in enumerate(channel_map):
         expanded[:, ch] = actions_model[:, i]
     return expanded
-
-
-def apply_scale(actions_model, action_scale_kpa, action_norm_factor) -> np.ndarray:
-    """模型单位 [0,1] → kPa(下发前换算;warmup 在 kPa 空间下发)。"""
-    scale = np.asarray(action_scale_kpa, dtype=np.float64)
-    return np.asarray(actions_model, dtype=np.float64) * float(action_norm_factor) * scale
