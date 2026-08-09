@@ -283,6 +283,110 @@ class CliGuiConsistencyTest(unittest.TestCase):
         self.assertTrue(torch.equal(via_cli, via_shared))
 
 
+class LiveAnchorTest(unittest.TestCase):
+    """P3 核心:从相机帧建 anchor(分割→骨架→质量门→归一化→Anchor)。"""
+
+    def _frame(self):
+        from tests.test_perception_parity import synthetic_bgr_scene
+        bgr, bg = synthetic_bgr_scene()
+        # synthetic 场景的臂顶行 = 24 > 质量门控 max_top_row=20 → 上移 10 行使臂顶≤14
+        shifted = np.zeros_like(bgr)
+        shifted[:-10] = bgr[10:]
+        bg_shifted = np.zeros_like(bg)
+        bg_shifted[:-10] = bg[10:]
+        return shifted, bg_shifted
+
+    def _stub_model(self):
+        return type("Geometry", (), {
+            "pc_center": torch.zeros(3), "pc_scale": torch.ones(3),
+        })()
+
+    def _anchor(self, **overrides):
+        from real_validation.live_anchor import anchor_from_camera_frame
+        from real_validation.perception.segmentation import segment_white_on_blue
+        bgr, bg = self._frame()
+        mask = segment_white_on_blue(bgr, bg)
+        area = float(mask.sum())
+        model = self._stub_model()
+        action_history = ((0.1, 0.2, 0.3),) * 40
+        kwargs = dict(
+            bgr=bgr, background_gray=bg, segment_params={}, n_nodes=15, model=model,
+            action_history=action_history, area_median_px=area, frame_ref="test#0")
+        kwargs.update(overrides)
+        return anchor_from_camera_frame(**kwargs)
+
+    def test_healthy_frame_yields_anchor(self):
+        anchor, quality, skeleton = self._anchor()
+        self.assertIsNotNone(anchor, f"quality={quality.verdict} {quality.reasons}")
+        self.assertEqual(quality.verdict, "ok")
+        self.assertEqual(len(anchor.state), 15)
+        self.assertEqual(len(anchor.action_history), 40)
+        self.assertEqual(len(anchor.action_history[0]), 3)   # action_dim=3
+        self.assertEqual(anchor.action_units, "model_normalized")
+        self.assertEqual(anchor.state_space, "model_normalized")
+        self.assertIn("verdict", anchor.quality)
+        self.assertEqual(skeleton.shape, (15, 2))
+
+    def test_normalization_matches_manual(self):
+        import numpy as np
+        anchor, _, _ = self._anchor()
+        state = np.asarray(anchor.state)
+        # 归一化 = (px - 0) / 1(stub pc_center=0, pc_scale=1)→ 直接 = 像素
+        bgr, bg = self._frame()
+        from real_validation.perception.segmentation import segment_white_on_blue
+        from real_validation.perception.skeleton import extract_skeleton_2d
+        mask = segment_white_on_blue(bgr, bg)
+        sk, _ = extract_skeleton_2d(mask, 15, tip_fix=True, return_info=True)
+        np.testing.assert_allclose(state, sk[:, :2], atol=1e-6)
+
+    def test_reject_frame_yields_none(self):
+        anchor, quality, _ = self._anchor(area_median_px=1.0)   # 面积比巨大 → reject
+        self.assertIsNone(anchor)
+        self.assertEqual(quality.verdict, "reject")
+
+    def test_prev_state_is_normalized(self):
+        # prev_skeleton 必须是像素骨架(与当前骨架同空间,node_step 才小不误拒)
+        from real_validation.perception.segmentation import segment_white_on_blue
+        from real_validation.perception.skeleton import extract_skeleton_2d
+        bgr, bg = self._frame()
+        mask = segment_white_on_blue(bgr, bg)
+        sk, _ = extract_skeleton_2d(mask, 15, tip_fix=True, return_info=True)
+        anchor, quality, _ = self._anchor(prev_skeleton=sk)
+        self.assertIsNotNone(anchor, f"quality={quality.verdict} {quality.reasons}")
+        self.assertIsNotNone(anchor.prev_state)
+        # prev_state 也是归一化空间:stub pc_center=0, pc_scale=1 → ≈像素
+        self.assertTrue(np.allclose(np.asarray(anchor.prev_state), sk[:, :2], atol=1e-6))
+
+
+class WarmupTest(unittest.TestCase):
+    """P3:冷启动动作序列 + 6 通道展开。"""
+
+    def test_warmup_actions_shape_and_bounds(self):
+        from real_validation.warmup import warmup_actions
+        seq = warmup_actions(3, 40)
+        self.assertEqual(seq.shape, (40, 3))
+        self.assertTrue(np.all(seq >= 0.0) and np.all(seq <= 1.0))
+        self.assertGreater(seq.max(), 0.5)     # ramp 到 0.8
+
+    def test_triangle_covers_load_and_unload(self):
+        from real_validation.warmup import warmup_actions
+        seq = warmup_actions(1, 60, kind="triangle")
+        # 升段后再降段:存在 v 先升后降
+        peak = seq.max()
+        self.assertGreater(peak, 0.5)
+        last = seq[-1, 0]
+        self.assertLess(last, peak)           # 回落后小于峰值
+
+    def test_expand_to_6ch(self):
+        from real_validation.warmup import expand_to_6ch
+        actions = np.array([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]])
+        expanded = expand_to_6ch(actions, (0, 1, 2))
+        self.assertEqual(expanded.shape, (2, 6))
+        np.testing.assert_allclose(expanded[0], [0.1, 0.2, 0.3, 0, 0, 0])
+        with self.assertRaises(ValueError):
+            expand_to_6ch(actions, (0, 1))    # channel_map 长度≠action_dim
+
+
 class AutoKTest(unittest.TestCase):
     """B17:step_budget 从学到的 delta_scale 现算;select_k_by_gap 纯函数。"""
 
