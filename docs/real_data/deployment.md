@@ -263,5 +263,112 @@ python real_validation/perception_probe.py --source dir --frames-dir <帧目录>
 | 规划出垃圾动作但 preflight 全绿 | ① `deploy_manifest.json` 的 `action_scale_kpa` 是否在(checkpoint 旁);② manifest 是否与 checkpoint 匹配(`checkpoint_sha256`) |
 | 相机一动结果全错 | 跑 `perception_probe.py --reference <无臂静态背景>` 看 `displacement_px`;>2px 阻断 |
 | 在线骨架跳变/大量 reject | `quality.jsonl` 的 `reasons`:mask 缺行(area_ratio_low)、手入画(top_row_high)、帧间位移大(node_step_high) |
-| 测试失败 | `python -m unittest discover -s tests -v`(95 个);parity 失败 = 感知实现被改 |
+| 测试失败 | `python -m unittest discover -s tests -v`(102 个);parity 失败 = 感知实现被改 |
 | 规划慢 | metadata `duration_s`;GL 缓存是否命中(planner 用 `getattr` 守卫) |
+
+---
+
+## 11. 接实机后的操作步骤(端到端)
+
+> 代码侧已就绪(P1a/P1b + P3/P4 可离线部分)。以下按顺序操作,从接设备到跑通避障实验。
+
+### 11.1 硬件连接与自检
+
+1. 接上相机(RealSense)、两组阀(USB-RS485 dongle)、NDI(Aurora 串口)。`real_capture` 与 `real_validation/` **并排**在工作机(或服务器)上。
+2. **固定相机位姿,单独拍一张无臂静态背景图** —— 这是配准参考帧(`deployment.md §8 #1` 的教训:中值背景混入臂运动假位移)。
+3. 跑一次感知探针确认链路:
+
+```bash
+python real_validation/perception_probe.py --source live \
+    --background <无臂静态背景.png> --reference <无臂静态背景.png> \
+    --n-points 15 --frames 12 --out output/probe_selfcheck
+```
+期望:`total p90 < 200ms`、配准 `displacement < 2px`、判决以 ok 为主。
+
+### 11.2 采集三腔道数据(两段 × 3 腔 = 6 通道)
+
+用激励协议生成器生成 actions6.csv(覆盖单腔/成对/三腔协同),走 `real_capture` 的 Replay 模式采集:
+
+```bash
+# 生成激励(3 腔道一段 × 2 段 = 6 通道;每腔上限 hi6)
+python scripts/real/gen_3chamber_excitation.py \
+    --channels 0,1,2,3,4,5 --hi6 150,150,150,150,150,150 \
+    --ramp 15 --hold 10 --out <seq>/excitation_6ch.csv
+```
+> 若先做单段(3 通道),用 `--channels 0,1,2`。`gen_3chamber_excitation.py` 对任意通道集通用。
+
+在 `real_capture/main_capture.py`:选 Replay 模式 → 选 `excitation_6ch.csv` → 开始采集(相机/NDI 同步录)。产物 `real_capture/data/raw/seq_YYYYMMDD_HHMMSS/`。
+
+### 11.3 数据前处理
+
+```bash
+SEQ=real_capture/data/raw/seq_YYYYMMDD_HHMMSS
+# 1) 阈值分割(须显式 --val 100)
+python scripts/real/segment_batch.py --seq $SEQ --val 100
+# 2) SAM2(训练数据来源;可选但推荐)
+CUDA_VISIBLE_DEVICES=3 python sam2/segment_video_full.py --seq $(basename $SEQ)
+# 3) 骨架 + npz(--action-channels 指定驱动通道)
+python scripts/real/masks_to_transition_npz.py --seq $SEQ \
+    --masks-dir sam2/masks/$(basename $SEQ)_full \
+    --out-root data/real_seq/$(basename $SEQ)_n15_sam2_clean \
+    --n-points 15 --action-channels 0,1,2,3,4,5
+# 4) 清洗
+python scripts/real/clean_transition_npz.py --seq $(basename $SEQ)_n15_sam2
+```
+
+> **验证数据正确**:npz `actions` shape = (T, action_dim) ∈ [0,1];`positions` = (T,3,15);train/val 连续切分(首 80%/末 20%)。**3 腔道若使臂离平面,单相机 2D 骨架假设失效** —— 需先确认运动平面性,必要时升级多视角三角化。
+
+### 11.4 训练(gt → open_loop)
+
+```bash
+DATA=data/real_seq/$(basename $SEQ)_n15_sam2_clean/train
+CUDA_VISIBLE_DEVICES=1 python scripts/training/train_transition.py --mode gt --data_dir $DATA
+CUDA_VISIBLE_DEVICES=1 python scripts/training/train_transition.py --mode open_loop --data_dir $DATA
+```
+> `train_transition.py` 自动按 `action_dim` 过滤 gt checkpoint 热启动;action_dim=3/6 无需改代码。确认 `config.json` 的 `action_dim` 与 `data_dirs.sequence`。
+
+### 11.5 视野认证 + 部署契约
+
+```bash
+EXP=train_log/open_loop_transition/<最新 exp>
+CUDA_VISIBLE_DEVICES=0 python scripts/evaluation/eval_horizon.py \
+    --checkpoint $EXP/phase_open_loop_transition/model/best_model.pt \
+    --data_dir data/real_seq/<seq>_n15_sam2_clean/val \
+    --max_steps 300 --n_seeds 8 --out $EXP/eval_horizon
+python scripts/utils/build_deploy_manifest.py \
+    --exp-dir $EXP --raw-seq $SEQ \
+    --horizon-summary $EXP/eval_horizon/horizon_summary.json
+```
+> manifest 落 `$EXP/deploy_manifest.json`;确认 `action_scale_kpa` 长度 = action_dim、`k_safe_table_px` 非空。
+
+### 11.6 工作台(实时锚定 → 规划 → 执行)
+
+1. 拷贝 `real_validation/` + `real_capture/` 到工作机;`checkpoints/current/` 放 `best_model.pt + config.json + deploy_manifest.json`。
+2. 启动 `python real_validation/main_validation.py`:
+   - Setup:加载模型(自动读 manifest → K_safe/plan_dt 自动回填);安全表按通道设 min/max/rise/fall。
+   - Observe:Start Camera(真机改 `_make_transport`/相机源)→ Warmup(填动作历史)→ 从相机取流锚定(真机用无臂静态背景 + manifest 的 area_median)。
+   - Scene:点上点加目标/障碍(工具按钮)。
+   - Plan:Run Planner(变长 K 或固定)→ Preflight(全绿才 Arm)。
+   - Execute:Arm → Execute(**真机时 `_make_transport` 返回 QtValveTransport**);执行中锁页;Results 显示命令安全 + jitter。
+3. **避障实验 CLI 入口**(任意目标点 + 圆障碍,不依赖 GUI):
+
+```bash
+python scripts/control/run_avoidance.py \
+    --checkpoint $EXP/phase_open_loop_transition/model/best_model.pt \
+    --data-dir data/real_seq/<seq>_n15_sam2_clean/val --t-init <起始帧> \
+    --target-x <px> --target-y <px> --target-radius 5 \
+    --obstacle '<cx>,<cy>,<r>' --auto-k \
+    --safety-max 150,150,150,150,150,150 --out $EXP/eval_avoid
+```
+> 输出 `plan.json`(含 kPa 动作 + predicted_states)+ 规划耗时 + 最小净距。把 `plan.json` 的 `actions6` 喂实机执行,再用 NDI/相机对比 `predicted_states.npz` 得 **prediction-to-execution gap**。
+
+### 11.7 待真机确认/需改动点(诚实边界)
+
+| 项 | 状态 |
+|---|---|
+| GUI 相机源(现在 Mock 合成帧)→ RealSenseCam | 接设备后改 |
+| `_make_transport`(现在 Mock)→ QtValveTransport(需活 ValveController) | 接设备后改 |
+| 3 腔道运动平面性(2D 骨架假设) | 需实机验证;离平面则升级多视角三角化 |
+| 每腔道上限 hi6/rise/fall 实际值 | 采集时确认,写进 manifest |
+| 骨架离群阈值 80px / 关节定位对 3D 弯曲 | 需重训验证 |
+| `run_avoidance` 的 target 是图像像素(免标定) | 目标需在训练像素系内 |
