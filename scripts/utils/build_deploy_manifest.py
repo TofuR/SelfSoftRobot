@@ -70,6 +70,8 @@ def main():
     parser.add_argument("--exp-dir", required=True)
     parser.add_argument("--raw-seq", required=True)
     parser.add_argument("--horizon-summary")
+    parser.add_argument("--channels", default=None,
+                        help="逗号分隔的驱动通道,如 0,1,2(3 腔道);缺省从 meta.hi6>0 推断")
     parser.add_argument("--out")
     args = parser.parse_args()
 
@@ -81,7 +83,14 @@ def main():
     meta_path = os.path.join(args.raw_seq, "meta.json")
     with open(meta_path) as stream:
         meta = json.load(stream)
-    channels = [int(meta.get("active_channel", 0))]
+    # 驱动通道:优先 --channels;否则从 meta.hi6>0 推断(支持 3 腔道,hi6=[150,150,150,0,0,0]→[0,1,2]);
+    # 兼容旧 meta 只有单值 active_channel。
+    if args.channels:
+        channels = [int(c.strip()) for c in args.channels.split(",") if c.strip()]
+    else:
+        hi6 = meta.get("hi6", [])
+        channels = [i for i, v in enumerate(hi6) if float(v) > 0] or \
+                   [int(meta.get("active_channel", 0))]
     # 复用 action_max_per_channel(优先 hi6,缺失/为 0 用数据 max)—— 不自己读 hi6
     raw_actions = load_actions_kpa(args.raw_seq, channels)
     maxes = action_max_per_channel(args.raw_seq, channels, raw_actions)

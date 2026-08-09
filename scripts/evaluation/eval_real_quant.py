@@ -162,6 +162,8 @@ def main(argv=None):
     pa.add_argument("--max-steps", type=int, default=None)
     pa.add_argument("--no-ndi", action="store_true", help="跳过 NDI(无 ndi.csv 时)")
     pa.add_argument("--frame-offset", type=int, default=None, help="npz索引→原始帧号偏移(默认自动)")
+    pa.add_argument("--action-channel", type=int, default=None,
+                    help="按 action 分箱用的通道列(默认自动选第一个非零通道;3 腔道可指定)")
     pa.add_argument("--out", default=None)
     args = pa.parse_args(argv)
 
@@ -229,8 +231,12 @@ def main(argv=None):
         print(f"               模型末端↔NDI: mean={tip_mm.mean():.3f} median={np.median(tip_mm):.3f} "
               f"p90={np.percentile(tip_mm,90):.3f} max={tip_mm.max():.2f} mm")
 
-    # ---- ③ 按 action 分箱 ----
-    act = actions[:, 0]                                        # (T,) [0,1]
+    # ---- ③ 按 action 分箱(1-DOF 用 ch0;多通道自动选第一个非零通道,或 --action-channel) ----
+    act_col = args.action_channel
+    if act_col is None:
+        nonzero = [i for i in range(actions.shape[1]) if np.abs(actions[:, i]).max() > 0]
+        act_col = nonzero[0] if nonzero else 0
+    act = actions[:, act_col]                                  # (T,) [0,1]
     bins = np.clip((act * 5).astype(int), 0, 4)
     bin_tip_px = [tip_px[bins == b].mean() if (bins == b).any() else np.nan for b in range(5)]
     bin_tip_mm = ([tip_mm[bins == b].mean() if (bins == b).any() else np.nan for b in range(5)]
