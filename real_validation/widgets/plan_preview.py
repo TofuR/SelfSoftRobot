@@ -6,9 +6,7 @@ import numpy as np
 from pathlib import Path
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QPen
-from PyQt5.QtWidgets import (QGraphicsEllipseItem, QGraphicsRectItem,
-                             QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget)
+from PyQt5.QtWidgets import QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget
 
 
 class PlanPreviewWidget(QWidget):
@@ -70,41 +68,12 @@ class PlanPreviewWidget(QWidget):
         self.slider.setValue(0); self._draw_step(0)
 
     def _draw_scene(self, scene) -> None:
+        from .primitive_items import scene_primitive_item
         for primitive in scene.primitives:
             if primitive.frame_id != "model":
                 continue
-            xy = primitive.geometry.get("xy", primitive.geometry.get("center"))
-            if primitive.kind == "target_point" and xy:
-                item = pg.ScatterPlotItem([xy[0]], [xy[1]], symbol="x", size=16,
-                                          pen=pg.mkPen("#E53E3E", width=3))
-            elif primitive.kind in {"target_circle", "obstacle_circle"} and xy:
-                radius = float(primitive.geometry.get(
-                    "radius", primitive.geometry.get("r", 0.0)))
-                if primitive.kind == "obstacle_circle":
-                    radius += float(primitive.safety_margin)
-                item = QGraphicsEllipseItem(xy[0] - radius, xy[1] - radius,
-                                            2 * radius, 2 * radius)
-                item.setPen(QPen(Qt.red if primitive.kind == "target_circle" else Qt.darkYellow,
-                                 2, Qt.DashLine))
-            elif primitive.kind == "obstacle_aabb":
-                lo = primitive.geometry.get("min")
-                hi = primitive.geometry.get("max")
-                if not lo or not hi:
-                    continue
-                margin = float(primitive.safety_margin)
-                item = QGraphicsRectItem(lo[0] - margin, lo[1] - margin,
-                                         (hi[0] - lo[0]) + 2 * margin,
-                                         (hi[1] - lo[1]) + 2 * margin)
-                item.setPen(QPen(Qt.darkYellow, 2, Qt.DashLine))
-            elif primitive.kind == "target_skeleton":
-                nodes = primitive.geometry.get("nodes")
-                if not nodes:
-                    continue
-                xs = [n[0] for n in nodes]
-                ys = [n[1] for n in nodes]
-                item = pg.ScatterPlotItem(xs, ys, symbol="x", size=8,
-                                          pen=pg.mkPen("#E53E3E", width=2))
-            else:
+            item = scene_primitive_item(primitive)
+            if item is None:
                 continue
             self.shape_plot.addItem(item); self._scene_items.append(item)
 

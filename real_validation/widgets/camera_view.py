@@ -11,16 +11,13 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QPen
-from PyQt5.QtWidgets import (QGraphicsEllipseItem, QGraphicsRectItem, QLabel,
-                             QVBoxLayout, QWidget)
+from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from ..models import Scene, ScenePrimitive
+from .primitive_items import TARGET_COLOR, scene_primitive_item
 
 _SKELETON_COLOR = "#2CB1BC"
-_TARGET_COLOR = "#E53E3E"
-_OBSTACLE_COLOR = "#B7791F"
 
 
 class CameraViewWidget(QWidget):
@@ -89,39 +86,11 @@ class CameraViewWidget(QWidget):
         for primitive in scene.primitives:
             item = self._draw_primitive(primitive)
             if item is not None:
-                item.setData(primitive_id=primitive.primitive_id)
                 self.plot.addItem(item)
                 self._scene_items.append((primitive.primitive_id, item))
 
     def _draw_primitive(self, p: ScenePrimitive):
-        xy = p.geometry.get("xy", p.geometry.get("center"))
-        if p.kind == "target_point" and xy:
-            return pg.ScatterPlotItem([xy[0]], [xy[1]], symbol="x", size=16,
-                                      pen=pg.mkPen(_TARGET_COLOR, width=3))
-        if p.kind in {"target_circle", "obstacle_circle"} and xy:
-            radius = float(p.geometry.get("radius", p.geometry.get("r", 0.0)))
-            if p.kind == "obstacle_circle":
-                radius += float(p.safety_margin)
-            item = QGraphicsEllipseItem(xy[0] - radius, xy[1] - radius, 2 * radius, 2 * radius)
-            item.setPen(QPen(Qt.red if p.kind == "target_circle" else _OBSTACLE_COLOR,
-                             2, Qt.DashLine))
-            return item
-        if p.kind == "obstacle_aabb":
-            lo = p.geometry.get("min"); hi = p.geometry.get("max")
-            if not lo or not hi:
-                return None
-            margin = float(p.safety_margin)
-            item = QGraphicsRectItem(lo[0] - margin, lo[1] - margin,
-                                     (hi[0] - lo[0]) + 2 * margin, (hi[1] - lo[1]) + 2 * margin)
-            item.setPen(QPen(_OBSTACLE_COLOR, 2, Qt.DashLine))
-            return item
-        if p.kind == "target_skeleton":
-            nodes = p.geometry.get("nodes")
-            if not nodes:
-                return None
-            xs = [n[0] for n in nodes]; ys = [n[1] for n in nodes]
-            return pg.ScatterPlotItem(xs, ys, symbol="x", size=8, pen=pg.mkPen(_TARGET_COLOR, width=2))
-        return None
+        return scene_primitive_item(p, target_color=TARGET_COLOR)
 
     # ---- 鼠标 ----
     def _on_click(self, ev) -> None:
