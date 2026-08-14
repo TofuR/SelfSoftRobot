@@ -446,23 +446,40 @@ class ValidationWindow(QMainWindow):
         return page
 
     def _execute_page(self) -> QWidget:
-        page = QWidget(); root = QVBoxLayout(page); buttons = QHBoxLayout()
-        self.arm_button = QPushButton("Arm / Confirm"); self.arm_button.clicked.connect(self._arm)
-        self.execute_button = QPushButton("Mock Execute"); self.execute_button.clicked.connect(self._execute)
-        self.pause_button = QPushButton("Pause"); self.pause_button.clicked.connect(self._pause)
-        self.resume_button = QPushButton("Resume"); self.resume_button.clicked.connect(self._resume)
+        page = QWidget(); root = QVBoxLayout(page)
+
+        # 卡1:执行控制
+        gb_ctrl = QGroupBox("执行控制")
+        c = QHBoxLayout(gb_ctrl); c.setContentsMargins(12, 14, 12, 12)
+        self.arm_button = QPushButton("Arm / Confirm"); self.arm_button.setObjectName("primary")
+        self.arm_button.clicked.connect(self._arm)
+        self.execute_button = QPushButton("Mock Execute"); self.execute_button.setObjectName("primary")
+        self.execute_button.clicked.connect(self._execute)
+        self.pause_button = QPushButton("Pause"); self.pause_button.setObjectName("accent")
+        self.pause_button.clicked.connect(self._pause)
+        self.resume_button = QPushButton("Resume"); self.resume_button.setObjectName("accent")
+        self.resume_button.clicked.connect(self._resume)
         for button in (self.arm_button, self.execute_button, self.pause_button, self.resume_button):
-            buttons.addWidget(button)
-        buttons.addStretch(); root.addLayout(buttons)
+            c.addWidget(button)
+        c.addStretch()
+        root.addWidget(gb_ctrl)
+
+        # 卡2:执行日志
+        gb_log = QGroupBox("执行日志")
+        l = QVBoxLayout(gb_log); l.setContentsMargins(12, 14, 12, 12)
         self.execution_log = QPlainTextEdit(); self.execution_log.setReadOnly(True)
-        root.addWidget(self.execution_log, 1)
+        l.addWidget(self.execution_log)
+        root.addWidget(gb_log, 1)
         return page
 
     def _results_page(self) -> QWidget:
         page = QWidget(); root = QVBoxLayout(page)
+        gb = QGroupBox("结果与指标")
+        g = QVBoxLayout(gb); g.setContentsMargins(12, 14, 12, 12)
         self.results = QPlainTextEdit(); self.results.setReadOnly(True)
         self.results.setPlaceholderText("执行记录保存在 run/execution.csv；自动指标将在后续接入。")
-        root.addWidget(self.results)
+        g.addWidget(self.results)
+        root.addWidget(gb)
         return page
 
     def _path_row(self, edit: QLineEdit, directory: bool) -> QWidget:
