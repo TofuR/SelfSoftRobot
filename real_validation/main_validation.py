@@ -32,6 +32,7 @@ from .offline_anchor import anchor_from_npz
 from .plan_io import write_actions6_csv
 from .session import ExperimentSession, SessionState
 from .widgets import CameraViewWidget, PlanPreviewWidget, SceneEditorPanel
+from .widgets.theme import QSS, STATE_BADGE_COLORS, configure_pyqtgraph
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -131,6 +132,7 @@ class ValidationWindow(QMainWindow):
         self._model_thread: _ModelLoadThread | None = None
         self._planning_thread: _PlanningThread | None = None
         self._execution_thread: _ExecutionThread | None = None
+        configure_pyqtgraph()          # 任何 PlotWidget 之前,保证白底全局生效
         self._build_ui()
         self._refresh()
 
@@ -139,11 +141,11 @@ class ValidationWindow(QMainWindow):
         layout = QVBoxLayout(central)
         safety_bar = QHBoxLayout()
         self.state_label = QLabel("No session")
-        self.state_label.setStyleSheet("font-weight:600;padding:6px")
         self.zero_button = QPushButton("归零 / Zero")
+        self.zero_button.setObjectName("danger")
         self.zero_button.clicked.connect(self._zero)
         self.abort_button = QPushButton("中止 / Abort")
-        self.abort_button.setStyleSheet("background:#C53030;color:white;font-weight:600")
+        self.abort_button.setObjectName("danger")
         self.abort_button.clicked.connect(self._abort)
         safety_bar.addWidget(self.state_label, 1)
         safety_bar.addWidget(self.zero_button)
@@ -766,6 +768,10 @@ class ValidationWindow(QMainWindow):
         state = self.session.state.value if self.session else "no_session"
         run = self.session.run_dir.name if self.session else "-"
         self.state_label.setText(f"Run: {run}    State: {state}    Hardware: MOCK")
+        color = STATE_BADGE_COLORS.get(state, STATE_BADGE_COLORS["no_session"])
+        self.state_label.setStyleSheet(
+            f"background:#FFFFFF;border:2px solid {color};border-radius:12px;"
+            f"padding:4px 12px;color:{color};font-weight:bold;")
         self.arm_button.setEnabled(bool(self.session and not self.session.replay_only and
                                         self.session.state == SessionState.READY))
         self.execute_button.setEnabled(bool(self.session and self.session.state == SessionState.ARMED))
@@ -803,6 +809,7 @@ class ValidationWindow(QMainWindow):
 
 def main() -> int:
     app = QApplication(sys.argv)
+    app.setStyleSheet(QSS)
     window = ValidationWindow(); window.show()
     return app.exec_()
 
