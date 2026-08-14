@@ -18,7 +18,8 @@ if __package__ in (None, ""):  # 支持复制目录后直接 ``python main_valid
 
 from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtWidgets import (
-    QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+    QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
+    QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter, QTabWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
@@ -162,25 +163,45 @@ class ValidationWindow(QMainWindow):
         self.setCentralWidget(central)
 
     def _setup_page(self) -> QWidget:
-        page = QWidget(); root = QVBoxLayout(page); form = QFormLayout()
+        page = QWidget(); root = QVBoxLayout(page)
+
+        # 卡1:实验与运行
+        gb_exp = QGroupBox("实验与运行")
+        exp = QVBoxLayout(gb_exp); exp.setContentsMargins(12, 14, 12, 12)
         self.run_root = QLineEdit(str(APP_DIR / "runs"))
+        exp.addWidget(self._path_row(self.run_root, True))
+        buttons = QHBoxLayout()
+        create = QPushButton("New Experiment"); create.setObjectName("primary")
+        create.clicked.connect(self._new_session)
+        replay = QPushButton("Open Run (Replay)"); replay.clicked.connect(self._open_replay)
+        buttons.addWidget(create); buttons.addWidget(replay); buttons.addStretch()
+        exp.addLayout(buttons)
+        root.addWidget(gb_exp)
+
+        # 卡2:模型与部署契约
+        gb_model = QGroupBox("模型与部署契约")
+        m = QVBoxLayout(gb_model); m.setContentsMargins(12, 14, 12, 12)
+        form = QFormLayout()
         self.checkpoint = QLineEdit(str(APP_DIR / "checkpoints" / "current" / "best_model.pt"))
         self.data_dir = QLineEdit(str(APP_DIR / "data"))
         self.k_safe = QSpinBox(); self.k_safe.setRange(0, 100000)
         self.k_safe.setSpecialValueText("未认证")
         self.device = QComboBox(); self.device.addItems(["cpu", "cuda"])
-        form.addRow("Run 根目录", self._path_row(self.run_root, True))
         form.addRow("Checkpoint", self._path_row(self.checkpoint, False))
         form.addRow("训练数据目录", self._path_row(self.data_dir, True))
         form.addRow("K_safe", self.k_safe)
         form.addRow("模型设备", self.device)
-        root.addLayout(form)
-        buttons = QHBoxLayout()
-        create = QPushButton("New Experiment"); create.clicked.connect(self._new_session)
-        replay = QPushButton("Open Run (Replay)"); replay.clicked.connect(self._open_replay)
-        load = QPushButton("Load Model"); load.clicked.connect(self._load_model)
-        buttons.addWidget(create); buttons.addWidget(replay); buttons.addWidget(load); buttons.addStretch()
-        root.addLayout(buttons)
+        m.addLayout(form)
+        load = QPushButton("Load Model"); load.setObjectName("primary")
+        load.clicked.connect(self._load_model)
+        m.addWidget(load)
+        self.model_summary = QPlainTextEdit(); self.model_summary.setReadOnly(True)
+        m.addWidget(self.model_summary, 1)
+        root.addWidget(gb_model, 1)
+
+        # 卡3:安全配置(六通道 kPa / kPa·s⁻¹)
+        gb_safety = QGroupBox("安全配置(六通道 kPa / kPa·s⁻¹)")
+        s = QVBoxLayout(gb_safety); s.setContentsMargins(12, 14, 12, 12)
         self.safety_table = QTableWidget(6, 5)
         self.safety_table.setHorizontalHeaderLabels(["min", "max", "rise/s", "fall/s", "initial"])
         self._safety_cells = []
@@ -192,13 +213,12 @@ class ValidationWindow(QMainWindow):
                 cell.setValue(default); self.safety_table.setCellWidget(channel, column, cell)
                 row.append(cell)
             self._safety_cells.append(row)
-        root.addWidget(QLabel("六通道安全配置（kPa / kPa·s⁻¹）"))
-        root.addWidget(self.safety_table)
+        s.addWidget(self.safety_table)
         apply_safety = QPushButton("应用安全配置并使旧计划失效")
+        apply_safety.setObjectName("primary")
         apply_safety.clicked.connect(self._apply_safety)
-        root.addWidget(apply_safety)
-        self.model_summary = QPlainTextEdit(); self.model_summary.setReadOnly(True)
-        root.addWidget(self.model_summary, 1)
+        s.addWidget(apply_safety)
+        root.addWidget(gb_safety)
         return page
 
     def _observe_page(self) -> QWidget:
