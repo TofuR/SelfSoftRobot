@@ -33,7 +33,7 @@ from .offline_anchor import anchor_from_npz
 from .plan_io import write_actions6_csv
 from .session import ExperimentSession, SessionState
 from .widgets import CameraViewWidget, PlanPreviewWidget, SceneEditorPanel
-from .widgets.theme import QSS, STATE_BADGE_COLORS, configure_pyqtgraph
+from .widgets.theme import QSS, CARD, STATE_BADGE_COLORS, configure_pyqtgraph
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -286,11 +286,11 @@ class ValidationWindow(QMainWindow):
         live_buttons.addWidget(self.warmup_btn); live_buttons.addStretch()
         live.addLayout(live_buttons)
         tool_row = QHBoxLayout()
-        self.tool_select_btn = QPushButton("select")
+        self.tool_select_btn = QPushButton("select"); self.tool_select_btn.setCheckable(True)
         self.tool_select_btn.clicked.connect(lambda: self._set_tool("select"))
-        self.tool_target_btn = QPushButton("点加目标")
+        self.tool_target_btn = QPushButton("点加目标"); self.tool_target_btn.setCheckable(True)
         self.tool_target_btn.clicked.connect(lambda: self._set_tool("add_target"))
-        self.tool_obstacle_btn = QPushButton("点加障碍")
+        self.tool_obstacle_btn = QPushButton("点加障碍"); self.tool_obstacle_btn.setCheckable(True)
         self.tool_obstacle_btn.clicked.connect(lambda: self._set_tool("add_obstacle"))
         tool_row.addWidget(QLabel("工具:")); tool_row.addWidget(self.tool_select_btn)
         tool_row.addWidget(self.tool_target_btn); tool_row.addWidget(self.tool_obstacle_btn)
@@ -316,14 +316,14 @@ class ValidationWindow(QMainWindow):
         self.scene_editor.scene_edited.connect(self._apply_scene_edit)
         self._camera_thread = None
         self._latest_frame = None
-        self._action_history = []
+        self._action_history = []  # warmup 填充(H×action_dim 模型单位)
         return page
 
     def _set_tool(self, tool: str) -> None:
         self.camera_view.set_tool(tool)
         for btn, name in ((self.tool_select_btn, "select"), (self.tool_target_btn, "add_target"),
                           (self.tool_obstacle_btn, "add_obstacle")):
-            btn.setStyleSheet("font-weight:bold" if name == tool else "")
+            btn.setChecked(name == tool)
 
     def _add_primitive(self, primitive) -> None:
         if not self.session:
@@ -851,7 +851,7 @@ class ValidationWindow(QMainWindow):
         self.state_label.setText(f"Run: {run}    State: {state}    Hardware: MOCK")
         color = STATE_BADGE_COLORS.get(state, STATE_BADGE_COLORS["no_session"])
         self.state_label.setStyleSheet(
-            f"background:#FFFFFF;border:2px solid {color};border-radius:12px;"
+            f"background:{CARD};border:2px solid {color};border-radius:12px;"
             f"padding:4px 12px;color:{color};font-weight:bold;")
         self.arm_button.setEnabled(bool(self.session and not self.session.replay_only and
                                         self.session.state == SessionState.READY))

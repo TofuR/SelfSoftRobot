@@ -37,6 +37,9 @@ QMainWindow, QWidget {{
     color: {text};
     font-family: {font};
 }}
+/* pyqtgraph PlotWidget 的 QGraphicsView 必须保持透明,让 pg.setBackground 的白底生效;
+   QSS 背景压在 QGraphicsView viewport 上是 pyqtgraph 渲染成纯色块的已知失败源。 */
+QGraphicsView {{ background: transparent; }}
 QGroupBox {{
     background-color: {card};
     border: 1px solid {border};
@@ -61,6 +64,7 @@ QPushButton {{
 }}
 QPushButton:hover {{ background-color: {tab_bg}; }}
 QPushButton:pressed {{ background-color: {border}; }}
+QPushButton:checked {{ background-color: {primary}; color: #FFFFFF; border: none; }}
 QPushButton#primary {{ background-color: {primary}; color: #FFFFFF; border: none; }}
 QPushButton#primary:hover {{ background-color: {primary_hover}; }}
 QPushButton#primary:pressed {{ background-color: {primary_pressed}; }}
