@@ -407,6 +407,10 @@ class ValidationWindow(QMainWindow):
 
     def _plan_page(self) -> QWidget:
         page = QWidget(); root = QVBoxLayout(page)
+
+        # 卡1:规划参数
+        gb_param = QGroupBox("规划参数")
+        p = QVBoxLayout(gb_param); p.setContentsMargins(12, 14, 12, 12)
         form = QFormLayout()
         self.plan_k = QSpinBox(); self.plan_k.setRange(1, 10000); self.plan_k.setValue(20)
         self.plan_iter = QSpinBox(); self.plan_iter.setRange(1, 100000); self.plan_iter.setValue(400)
@@ -417,18 +421,27 @@ class ValidationWindow(QMainWindow):
         form.addRow("K", self.plan_k); form.addRow("优化迭代", self.plan_iter)
         form.addRow("多起点", self.plan_restarts); form.addRow("动作周期(s)", self.plan_dt)
         form.addRow("模型维度→硬件通道", self.channel_map)
-        root.addLayout(form)
+        p.addLayout(form)
+        root.addWidget(gb_param)
+
+        # 卡2:规划与预检
+        gb_act = QGroupBox("规划与预检")
+        a = QVBoxLayout(gb_act); a.setContentsMargins(12, 14, 12, 12)
         buttons = QHBoxLayout()
-        generate = QPushButton("运行 OpenLoop Planner"); generate.clicked.connect(self._start_planning)
-        cancel = QPushButton("取消规划"); cancel.clicked.connect(self._cancel_planning)
+        generate = QPushButton("运行 OpenLoop Planner"); generate.setObjectName("primary")
+        generate.clicked.connect(self._start_planning)
+        cancel = QPushButton("取消规划"); cancel.setObjectName("accent")
+        cancel.clicked.connect(self._cancel_planning)
         load = QPushButton("导入 plan.json"); load.clicked.connect(self._load_plan)
         check = QPushButton("运行 Preflight"); check.clicked.connect(self._run_preflight)
         buttons.addWidget(generate); buttons.addWidget(cancel); buttons.addWidget(load)
         buttons.addWidget(check); buttons.addStretch()
-        root.addLayout(buttons)
+        a.addLayout(buttons)
         self.plan_summary = QPlainTextEdit(); self.plan_summary.setReadOnly(True)
         self.plan_summary.setPlaceholderText("异步 shooting planner 与交互式候选预览将在此页接入。")
-        root.addWidget(self.plan_summary)
+        a.addWidget(self.plan_summary)
+        root.addWidget(gb_act)
+
         self.plan_preview = PlanPreviewWidget(); root.addWidget(self.plan_preview, 1)
         return page
 
