@@ -21,10 +21,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtWidgets import QApplication
 
-from real_validation.contracts.models import ScenePrimitive
+from real_validation.contracts.models import Scene, ScenePrimitive
 from real_validation.core.session import ExperimentSession
 from real_validation.widgets.camera_view import CameraViewWidget
 from real_validation.widgets.primitive_items import scene_primitive_item
+from real_validation.widgets.scene_editor import SceneEditorPanel
 
 # 惰性创建单个 QApplication,避免 unittest 多次 init
 _app: QApplication | None = None
@@ -216,6 +217,59 @@ class MainDisplayLayerTest(unittest.TestCase):
     def test_unknown_layer_raises(self):
         with self.assertRaises(ValueError):
             self.view.set_layer_visible("no_such_layer", True)
+
+
+class SceneEditorMultiSelectTest(unittest.TestCase):
+    """Task 2:scene_editor 列表多选(ExtendedSelection)+ 批量删 + Del 快捷键。"""
+
+    def setUp(self):
+        _ensure_app()
+        self.editor = SceneEditorPanel()
+        self.edited = []
+        self.editor.scene_edited.connect(self.edited.append)
+        scene = Scene("s", (
+            ScenePrimitive("target_point", "model", {"xy": [0, 0]}, name="t1"),
+            ScenePrimitive("obstacle_circle", "model", {"center": [1, 1], "r": 1}, name="o1"),
+            ScenePrimitive("target_point", "model", {"xy": [2, 2]}, name="t2"),
+        ))
+        self.editor.set_scene(scene)
+
+    def test_extended_selection_enabled(self):
+        self.assertEqual(self.editor.list.selectionMode(),
+                         3)  # QAbstractItemView.ExtendedSelection
+
+    def test_batch_delete_removes_selected(self):
+        self.editor.list.setCurrentRow(0)
+        self.editor.list.item(0).setSelected(True)
+        self.editor.list.item(2).setSelected(True)   # 选 t1 + t2
+        self.editor._on_delete()
+        self.assertEqual(len(self.edited), 1)
+        remaining = self.edited[-1].primitives
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0].name, "o1")     # 只留障碍
+
+    def test_delete_key_triggers_batch_delete(self):
+        from PyQt5.QtCore import QEvent, Qt
+        from PyQt5.QtGui import QKeyEvent
+        self.editor.list.item(0).setSelected(True)
+        self.editor.list.item(2).setSelected(True)   # 选 t1 + t2
+        event = QKeyEvent(QEvent.KeyPress, Qt.Key_Delete, Qt.NoModifier)
+        self.editor.keyPressEvent(event)
+        self.assertTrue(event.isAccepted())
+        self.assertEqual(len(self.edited), 1)
+        remaining = self.edited[-1].primitives
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0].name, "o1")
+
+    def test_delete_key_no_selection_is_noop(self):
+        from PyQt5.QtCore import QEvent, Qt
+        from PyQt5.QtGui import QKeyEvent
+        self.editor.list.clearSelection()
+        event = QKeyEvent(QEvent.KeyPress, Qt.Key_Backspace, Qt.NoModifier)
+        self.editor.keyPressEvent(event)
+        self.assertTrue(event.isAccepted())
+        self.assertEqual(len(self.edited), 0)
+        self.assertEqual(self.editor.list.count(), 3)
 
 
 if __name__ == "__main__":

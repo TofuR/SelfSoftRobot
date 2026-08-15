@@ -5,9 +5,10 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import (QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-                             QListWidget, QPushButton, QVBoxLayout, QWidget)
+from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtWidgets import (QAbstractItemView, QFormLayout, QHBoxLayout, QLabel,
+                             QLineEdit, QListWidget, QPushButton, QVBoxLayout,
+                             QWidget)
 
 from ..contracts.models import Scene, ScenePrimitive
 
@@ -20,6 +21,7 @@ class SceneEditorPanel(QWidget):
         super().__init__(parent)
         root = QVBoxLayout(self)
         self.list = QListWidget()
+        self.list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         root.addWidget(self.list, 1)
         form = QFormLayout()
         self.name_edit = QLineEdit()
@@ -64,15 +66,32 @@ class SceneEditorPanel(QWidget):
         self.primitive_selected.emit(p.primitive_id)
 
     def _on_delete(self) -> None:
-        if self._current_id is None or self._scene is None:
+        """批量删除选中项(Ctrl 多选/Shift 范围/Ctrl+A 全选)。"""
+        if self._scene is None:
             return
-        try:
-            updated = self._scene.without_primitive(self._current_id)
-        except KeyError:
+        rows = sorted({idx.row() for idx in self.list.selectedIndexes()}, reverse=True)
+        if not rows:
             return
+        primitives = list(self._scene.primitives)
+        to_delete = [primitives[row].primitive_id for row in rows if row < len(primitives)]
+        if not to_delete:
+            return
+        updated = self._scene
+        for pid in to_delete:
+            try:
+                updated = updated.without_primitive(pid)
+            except KeyError:
+                continue
         self._scene = updated
         self.scene_edited.emit(updated)
         self.set_scene(updated)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+            self._on_delete()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _on_apply(self) -> None:
         if self._current_id is None or self._scene is None:
