@@ -62,6 +62,36 @@ class _ModelLoadThread(QThread):
             self.failed.emit(traceback.format_exc())   # 真 bug 才给 traceback
 
 
+class _ValveConnectThread(QThread):
+    """后台执行串口连接(open 阻塞,不能卡 GUI)。controller 在 GUI 线程创建并传入。
+
+    ValveController 是 QObject,须与 QtValveTransport 同线程(GUI 线程,有事件循环);
+    只有 connect_group(串口 open)阻塞 → 放后台线程。
+    """
+    connected = pyqtSignal(object, str)      # (controller, 摘要)
+    failed = pyqtSignal(str)
+
+    def __init__(self, controller, groups: tuple[int, ...]):
+        super().__init__()
+        self.controller = controller
+        self.groups = groups
+
+    def run(self) -> None:
+        try:
+            from .hardware.valve import connect_valve_groups
+            results = connect_valve_groups(self.controller, groups=self.groups)
+            ok_groups = [gid for gid, (ok, _) in results.items() if ok]
+            failed_groups = [gid for gid, (ok, _) in results.items() if not ok]
+            summary = (f"已连接组: {sorted(ok_groups) or '无'}"
+                       + (f" | 失败组: {sorted(failed_groups)}" if failed_groups else ""))
+            if not ok_groups:
+                self.failed.emit(f"阀连接失败: {summary}")
+                return
+            self.connected.emit(self.controller, summary)
+        except Exception as error:
+            self.failed.emit(f"{type(error).__name__}: {error}")
+
+
 class _ExecutionThread(QThread):
     event = pyqtSignal(str, object)
     finished_ok = pyqtSignal(object)
@@ -133,8 +163,11 @@ class ValidationWindow(QMainWindow):
         self._model_thread: _ModelLoadThread | None = None
         self._planning_thread: _PlanningThread | None = None
         self._execution_thread: _ExecutionThread | None = None
+        self.valve_controller = None   # 真机阀(连接成功后有值;否则 Mock)
+        self._valve_connect_thread: _ValveConnectThread | None = None
         configure_pyqtgraph()          # 任何 PlotWidget 之前,保证白底全局生效
         self._build_ui()
+        self._load_hardware_config()   # 回填上次保存的串口配置(若有)
         self._refresh()
 
     def _build_ui(self) -> None:
@@ -219,6 +252,35 @@ class ValidationWindow(QMainWindow):
         apply_safety.clicked.connect(self._apply_safety)
         s.addWidget(apply_safety)
         root.addWidget(gb_safety)
+
+        # 卡4:硬件连接(真机阀/NDI —— 设计 spec §3.2 + §5 [Setup])
+        gb_hw = QGroupBox("硬件连接(真机)")
+        hw = QVBoxLayout(gb_hw); hw.setContentsMargins(12, 14, 12, 12)
+        hw_form = QFormLayout()
+        self.hw_g1 = QLineEdit("")          # 组1 串口(COM),默认空 = 不接
+        self.hw_g1.setPlaceholderText("如 COM3")
+        self.hw_g2 = QLineEdit("")          # 组2 串口
+        self.hw_g2.setPlaceholderText("如 COM46")
+        self.hw_baud = QSpinBox(); self.hw_baud.setRange(4800, 115200)
+        self.hw_baud.setValue(9600)
+        hw_form.addRow("组1 串口(阀,ch0-2)", self.hw_g1)
+        hw_form.addRow("组2 串口(阀,ch3-5)", self.hw_g2)
+        hw_form.addRow("baudrate", self.hw_baud)
+        hw.addLayout(hw_form)
+        hw_buttons = QHBoxLayout()
+        self.hw_connect_btn = QPushButton("连接阀"); self.hw_connect_btn.setObjectName("primary")
+        self.hw_connect_btn.clicked.connect(self._connect_valve)
+        self.hw_disconnect_btn = QPushButton("断开阀"); self.hw_disconnect_btn.setObjectName("danger")
+        self.hw_disconnect_btn.setEnabled(False)
+        self.hw_disconnect_btn.clicked.connect(self._disconnect_valve)
+        hw_buttons.addWidget(self.hw_connect_btn); hw_buttons.addWidget(self.hw_disconnect_btn)
+        hw_buttons.addStretch()
+        hw.addLayout(hw_buttons)
+        self.hw_status = QLabel("未连接(Mock 执行仍可用)")
+        self.hw_status.setWordWrap(True)
+        self.hw_status.setStyleSheet("color:#486581;font-size:11px;")
+        hw.addWidget(self.hw_status)
+        root.addWidget(gb_hw)
         return page
 
     def _observe_page(self) -> QWidget:
@@ -676,6 +738,61 @@ class ValidationWindow(QMainWindow):
         except Exception as error:
             self._error(str(error))
 
+    def _connect_valve(self) -> None:
+        """连接真机阀:controller 在 GUI 线程构造(QObject 须与 transport 同线程),
+        串口 open 放后台线程。连接成功 → 执行走真阀,失败回退 Mock。"""
+        g1, g2 = self.hw_g1.text().strip(), self.hw_g2.text().strip()
+        if not g1 and not g2:
+            self._error("请至少填一组串口(COM)。真机需要:组1 COMx,组2 COMy。")
+            return
+        if self._valve_connect_thread and self._valve_connect_thread.isRunning():
+            return
+        try:
+            from .hardware.valve import create_valve_controller
+            controller = create_valve_controller(g1, g2, baudrate=self.hw_baud.value())
+        except Exception as error:
+            self._error(f"构造阀控制器失败: {error}")
+            return
+        self.hw_connect_btn.setEnabled(False)
+        self.hw_status.setText("正在连接阀(后台线程)……")
+        self.hw_status.setStyleSheet("color:#F6AD55;font-size:11px;")
+        self._valve_connect_thread = _ValveConnectThread(controller, groups=(1, 2))
+        self._valve_connect_thread.connected.connect(self._valve_connected)
+        self._valve_connect_thread.failed.connect(self._valve_connect_failed)
+        self._valve_connect_thread.start()
+
+    def _valve_connected(self, controller, summary: str) -> None:
+        self.valve_controller = controller
+        self.hw_status.setText(f"已连接真机阀: {summary}。执行将走真阀(非 Mock)。")
+        self.hw_status.setStyleSheet("color:#38A169;font-size:11px;")
+        self.hw_connect_btn.setEnabled(False)
+        self.hw_disconnect_btn.setEnabled(True)
+        self._log(f"真机阀已连接: {summary}")
+        self._refresh()
+
+    def _valve_connect_failed(self, message: str) -> None:
+        self.valve_controller = None
+        self.hw_status.setText(f"阀连接失败: {message}。执行继续用 Mock。")
+        self.hw_status.setStyleSheet("color:#EF4E4E;font-size:11px;")
+        self.hw_connect_btn.setEnabled(True)
+        self.hw_disconnect_btn.setEnabled(False)
+        self._log(f"ERROR: 阀连接失败 {message}")
+        self._refresh()
+
+    def _disconnect_valve(self) -> None:
+        if self.valve_controller is not None:
+            try:
+                self.valve_controller.disconnect_group(1)
+                self.valve_controller.disconnect_group(2)
+            except Exception as error:
+                self._log(f"WARN: 断开阀异常 {error}")
+        self.valve_controller = None
+        self.hw_status.setText("已断开,执行回退 Mock。")
+        self.hw_status.setStyleSheet("color:#486581;font-size:11px;")
+        self.hw_connect_btn.setEnabled(True)
+        self.hw_disconnect_btn.setEnabled(False)
+        self._refresh()
+
     def _load_anchor(self) -> None:
         self._load_session_json("anchor", Anchor.from_dict)
 
@@ -869,7 +986,14 @@ class ValidationWindow(QMainWindow):
             self._error(str(error))
 
     def _make_transport(self):
-        """执行 transport 工厂:离线 Mock;接实机时改返回 QtValveTransport(需活 controller)。"""
+        """执行 transport 工厂:真机阀已连接 → QtValveTransport(线程安全桥接);否则 Mock。
+
+        QtValveTransport 须与 controller 同线程创建(GUI 线程);执行器在 worker 线程
+        调它的 send,内部经 QueuedConnection 转发到 controller 的 Qt 线程。
+        """
+        if self.valve_controller is not None:
+            from .hardware_session import QtValveTransport
+            return QtValveTransport(self.valve_controller)
         from .executor import MockCommandTransport
         return MockCommandTransport()
 
@@ -990,10 +1114,36 @@ class ValidationWindow(QMainWindow):
         except Exception as error:
             self._error(str(error))
 
+    def _load_hardware_config(self) -> None:
+        """启动时加载硬件连接配置(config/hardware.json,gitignore 不入库)。"""
+        path = APP_DIR / "config" / "hardware.json"
+        if not path.is_file():
+            return
+        try:
+            value = read_json(path)
+            self.hw_g1.setText(str(value.get("group1", "")))
+            self.hw_g2.setText(str(value.get("group2", "")))
+            self.hw_baud.setValue(int(value.get("baudrate", 9600)))
+        except Exception as error:
+            self._log(f"WARN: 加载硬件配置失败 {error}")
+
+    def _save_hardware_config(self) -> None:
+        path = APP_DIR / "config" / "hardware.json"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(path, {
+                "group1": self.hw_g1.text().strip(),
+                "group2": self.hw_g2.text().strip(),
+                "baudrate": self.hw_baud.value(),
+            })
+        except Exception as error:
+            self._log(f"WARN: 保存硬件配置失败 {error}")
+
     def _refresh(self) -> None:
         state = self.session.state.value if self.session else "no_session"
         run = self.session.run_dir.name if self.session else "-"
-        self.state_label.setText(f"Run: {run}    State: {state}    Hardware: MOCK")
+        hardware = "REAL VALVE" if self.valve_controller is not None else "MOCK"
+        self.state_label.setText(f"Run: {run}    State: {state}    Hardware: {hardware}")
         color = STATE_BADGE_COLORS.get(state, STATE_BADGE_COLORS["no_session"])
         self.state_label.setStyleSheet(
             f"background:{CARD};border:2px solid {color};border-radius:12px;"
@@ -1030,6 +1180,7 @@ class ValidationWindow(QMainWindow):
             self._planning_thread.cancel(); self._planning_thread.wait(3000)
         if self.runtime:
             self.runtime.clear()
+        self._save_hardware_config()
         event.accept()
 
 
