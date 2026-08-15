@@ -156,7 +156,7 @@ class ValidationWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SelfSoftRobot 实机验证工作台 · Mock/离线基线")
-        self.resize(1280, 820)
+        self.resize(1400, 860)
         self.session: ExperimentSession | None = None
         self.runtime: ModelRuntime | None = None
         self.executor: PlanExecutor | None = None
@@ -223,11 +223,11 @@ class ValidationWindow(QMainWindow):
         self.setCentralWidget(central)
 
     def _setup_page(self) -> QWidget:
-        page = QWidget(); root = QVBoxLayout(page)
+        page = QWidget(); root = QVBoxLayout(page); root.setSpacing(8)
 
         # 卡1:实验与运行
         gb_exp = QGroupBox("实验与运行")
-        exp = QVBoxLayout(gb_exp); exp.setContentsMargins(12, 14, 12, 12)
+        exp = QVBoxLayout(gb_exp); exp.setContentsMargins(8, 10, 8, 8)
         self.run_root = QLineEdit(str(APP_DIR / "runs"))
         exp.addWidget(self._path_row(self.run_root, True))
         buttons = QHBoxLayout()
@@ -240,7 +240,7 @@ class ValidationWindow(QMainWindow):
 
         # 卡2:模型与部署契约
         gb_model = QGroupBox("模型与部署契约")
-        m = QVBoxLayout(gb_model); m.setContentsMargins(12, 14, 12, 12)
+        m = QVBoxLayout(gb_model); m.setContentsMargins(8, 10, 8, 8)
         form = QFormLayout()
         self.checkpoint = QLineEdit(str(APP_DIR / "checkpoints" / "current" / "best_model.pt"))
         self.data_dir = QLineEdit(str(APP_DIR / "data"))
@@ -256,14 +256,19 @@ class ValidationWindow(QMainWindow):
         load.clicked.connect(self._load_model)
         m.addWidget(load)
         self.model_summary = QPlainTextEdit(); self.model_summary.setReadOnly(True)
+        self.model_summary.setMaximumHeight(110)
         m.addWidget(self.model_summary, 1)
         root.addWidget(gb_model, 1)
 
         # 卡3:安全配置(六通道 kPa / kPa·s⁻¹)
         gb_safety = QGroupBox("安全配置(六通道 kPa / kPa·s⁻¹)")
-        s = QVBoxLayout(gb_safety); s.setContentsMargins(12, 14, 12, 12)
+        s = QVBoxLayout(gb_safety); s.setContentsMargins(8, 10, 8, 8)
         self.safety_table = QTableWidget(6, 5)
         self.safety_table.setHorizontalHeaderLabels(["min", "max", "rise/s", "fall/s", "initial"])
+        self.safety_table.verticalHeader().setDefaultSectionSize(24)
+        self.safety_table.horizontalHeader().setDefaultSectionSize(92)
+        self.safety_table.setMinimumHeight(6 * 24 + 26)
+        self.safety_table.setMaximumHeight(6 * 24 + 26)
         self._safety_cells = []
         for channel in range(6):
             self.safety_table.setVerticalHeaderItem(channel, QTableWidgetItem(f"ch{channel}"))
@@ -282,7 +287,7 @@ class ValidationWindow(QMainWindow):
 
         # 卡4:硬件连接(真机阀/NDI —— 设计 spec §3.2 + §5 [Setup])
         gb_hw = QGroupBox("硬件连接(真机)")
-        hw = QVBoxLayout(gb_hw); hw.setContentsMargins(12, 14, 12, 12)
+        hw = QVBoxLayout(gb_hw); hw.setContentsMargins(8, 10, 8, 8)
         hw_form = QFormLayout()
         self.hw_g1 = QLineEdit("")          # 组1 串口(COM),默认空 = 不接
         self.hw_g1.setPlaceholderText("如 COM3")
@@ -541,6 +546,7 @@ class ValidationWindow(QMainWindow):
             "color:#F6AD55;font-size:11px;" if checked else "color:#486581;font-size:11px;")
 
     def _camera_anchor(self) -> None:
+        import numpy as np   # 冒烟分支 np.asarray 用(本模块 numpy 均为方法局部 import)
         if self._latest_frame is None or not self.runtime:
             self._error("先 Start Camera")
             return
@@ -578,7 +584,7 @@ class ValidationWindow(QMainWindow):
         # 卡1:规划参数
         gb_param = QGroupBox("规划参数")
         p = QVBoxLayout(gb_param); p.setContentsMargins(12, 14, 12, 12)
-        form = QFormLayout()
+        form = QFormLayout(); form.setVerticalSpacing(5)
         self.plan_k = QSpinBox(); self.plan_k.setRange(1, 10000); self.plan_k.setValue(20)
         self.plan_iter = QSpinBox(); self.plan_iter.setRange(1, 100000); self.plan_iter.setValue(400)
         self.plan_restarts = QSpinBox(); self.plan_restarts.setRange(1, 32); self.plan_restarts.setValue(4)
@@ -605,6 +611,7 @@ class ValidationWindow(QMainWindow):
         buttons.addWidget(check); buttons.addStretch()
         a.addLayout(buttons)
         self.plan_summary = QPlainTextEdit(); self.plan_summary.setReadOnly(True)
+        self.plan_summary.setMaximumHeight(90)
         self.plan_summary.setPlaceholderText("异步 shooting planner 与交互式候选预览将在此页接入。")
         a.addWidget(self.plan_summary)
         root.addWidget(gb_act)

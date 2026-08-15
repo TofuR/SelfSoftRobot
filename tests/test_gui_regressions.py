@@ -239,6 +239,52 @@ class MainWindowLayoutTest(unittest.TestCase):
             w.close()
 
 
+class CompactLayoutTest(unittest.TestCase):
+    """Task 4:紧凑排版 —— 安全配置 6×5 一次显示全 + Setup/Plan 参数压缩 + 窗口 1400x860。"""
+
+    @classmethod
+    def setUpClass(cls):
+        _ensure_app()
+
+    def test_safety_table_shows_all_six_rows(self):
+        from real_validation.gui.main_window import ValidationWindow
+        w = ValidationWindow()
+        try:
+            table = w.safety_table
+            row_h = table.verticalHeader().defaultSectionSize()
+            header_h = table.horizontalHeader().height()
+            # 6 行 + 表头应在一屏内(不再需滚动)
+            self.assertLessEqual(6 * row_h + header_h, table.minimumHeight() + 20)
+            self.assertEqual(table.rowCount(), 6)
+        finally:
+            w.close()
+
+    def test_model_summary_height_capped(self):
+        from real_validation.gui.main_window import ValidationWindow
+        w = ValidationWindow()
+        try:
+            self.assertLessEqual(w.model_summary.maximumHeight(), 110)
+        finally:
+            w.close()
+
+    def test_plan_summary_height_capped(self):
+        from real_validation.gui.main_window import ValidationWindow
+        w = ValidationWindow()
+        try:
+            self.assertLessEqual(w.plan_summary.maximumHeight(), 90)
+        finally:
+            w.close()
+
+    def test_window_default_size(self):
+        from real_validation.gui.main_window import ValidationWindow
+        w = ValidationWindow()
+        try:
+            self.assertEqual(w.size().width(), 1400)
+            self.assertEqual(w.size().height(), 860)
+        finally:
+            w.close()
+
+
 class SceneEditorMultiSelectTest(unittest.TestCase):
     """Task 2:scene_editor 列表多选(ExtendedSelection)+ 批量删 + Del 快捷键。"""
 
