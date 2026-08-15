@@ -52,6 +52,7 @@ class CameraViewWidget(QWidget):
         self._skeleton_points: list[tuple[float, float]] = []
 
         self.tool = "select"
+        self.read_only = False          # 只读模式(主显示区):禁用鼠标点选 + 隐藏工具提示
         self._scene: Scene | None = None
         self._scene_items: list[tuple[str, object]] = []   # [(primitive_id, item)]
         self.plot.scene().sigMouseClicked.connect(self._on_click)
@@ -177,8 +178,15 @@ class CameraViewWidget(QWidget):
             name=f"target_skeleton_{len(self._scene_items)}"))
         self.clear_skeleton_points()
 
+    def set_read_only(self, read_only: bool) -> None:
+        """只读模式:主显示区是纯显示,禁用鼠标点选 handler + 隐藏工具提示。"""
+        self.read_only = bool(read_only)
+        self._hint.setVisible(not self.read_only)
+
     # ---- 鼠标 ----
     def _on_click(self, ev) -> None:
+        if self.read_only:
+            return
         if not self.plot.sceneBoundingRect().contains(ev.scenePos()):
             return
         view = self.plot.getViewBox()

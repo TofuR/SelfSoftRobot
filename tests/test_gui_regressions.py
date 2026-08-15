@@ -226,15 +226,20 @@ class MainWindowLayoutTest(unittest.TestCase):
     def setUpClass(cls):
         _ensure_app()
 
-    def test_two_column_layout_with_main_display(self):
+    def test_main_display_in_top_level_splitter(self):
+        # 收紧:主显示区必须在顶层水平 splitter 的 index 0 子树内。
+        # (旧断言只查"存在任一水平 splitter"——Observe 页也有一个,会假过。)
         from real_validation.gui.main_window import ValidationWindow
         w = ValidationWindow()
         try:
-            splitters = w.findChildren(QSplitter)
-            horizontal = [s for s in splitters if s.orientation() == 1]  # Qt.Horizontal
-            self.assertTrue(horizontal, "应有一个水平 splitter 分左右两栏")
-            self.assertTrue(hasattr(w, "main_display"), "应有主显示视图")
-            self.assertIsNotNone(w.main_display)
+            self.assertTrue(hasattr(w, "main_split"), "应暴露顶层 splitter 为 main_split")
+            self.assertIsInstance(w.main_split, QSplitter)
+            self.assertEqual(w.main_split.orientation(), 1)   # Qt.Horizontal
+            # 顶层 splitter 第一个 widget 含 main_display
+            left = w.main_split.widget(0)
+            self.assertTrue(w.main_display in left.findChildren(type(w.main_display)) or
+                            w.main_display is left or
+                            w.main_display in [left])
         finally:
             w.close()
 

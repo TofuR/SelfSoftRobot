@@ -187,12 +187,13 @@ class ValidationWindow(QMainWindow):
         layout.addLayout(safety_bar)
 
         # ---- 左右两栏:左固定显示区 + 右 5 页 Tab ----
-        main_split = QSplitter(Qt.Horizontal)
+        self.main_split = QSplitter(Qt.Horizontal)
 
         # 左:主显示区(摄像头 + 多层叠加 + 图层开关)
         left_panel = QWidget()
         ll = QVBoxLayout(left_panel); ll.setContentsMargins(4, 4, 4, 4)
         self.main_display = CameraViewWidget()
+        self.main_display.set_read_only(True)   # 主显示区纯显示:禁点选、隐藏工具提示
         ll.addWidget(self.main_display, 1)
         layer_row = QHBoxLayout()
         self.layer_checks = {}
@@ -206,7 +207,7 @@ class ValidationWindow(QMainWindow):
             layer_row.addWidget(cb)
         layer_row.addStretch()
         ll.addLayout(layer_row)
-        main_split.addWidget(left_panel)
+        self.main_split.addWidget(left_panel)
 
         # 右:tabs
         self.tabs = QTabWidget()
@@ -215,11 +216,11 @@ class ValidationWindow(QMainWindow):
         self.tabs.addTab(self._plan_page(), "3 Plan")
         self.tabs.addTab(self._execute_page(), "4 Execute")
         self.tabs.addTab(self._results_page(), "5 Results")
-        main_split.addWidget(self.tabs)
+        self.main_split.addWidget(self.tabs)
 
-        main_split.setSizes([520, 860])
-        main_split.setStretchFactor(0, 0); main_split.setStretchFactor(1, 1)
-        layout.addWidget(main_split, 1)
+        self.main_split.setSizes([520, 860])
+        self.main_split.setStretchFactor(0, 0); self.main_split.setStretchFactor(1, 1)
+        layout.addWidget(self.main_split, 1)
         self.setCentralWidget(central)
 
     def _setup_page(self) -> QWidget:
@@ -487,6 +488,7 @@ class ValidationWindow(QMainWindow):
             return
         self.session.set_scene(self.session.scene.with_primitive(primitive))
         self.camera_view.set_scene(self.session.scene)
+        self.main_display.set_scene(self.session.scene)
         self.scene_editor.set_scene(self.session.scene)
         self._refresh()
 
@@ -495,6 +497,7 @@ class ValidationWindow(QMainWindow):
             return
         self.session.set_scene(scene)
         self.camera_view.set_scene(scene)
+        self.main_display.set_scene(scene)
         self._refresh()
 
     def _start_camera(self) -> None:
@@ -914,6 +917,7 @@ class ValidationWindow(QMainWindow):
         # 同步可视化:数值添加(_set_target/_add_obstacle)与加载 scene.json 也走这里,
         # 若不刷 camera_view/scene_editor,右边可视化和原语列表不会更新(工具点加才更新)。
         self.camera_view.set_scene(self.session.scene)
+        self.main_display.set_scene(self.session.scene)
         self.scene_editor.set_scene(self.session.scene)
         self.scene_summary.setPlainText(
             f"anchor={self.session.anchor.anchor_id if self.session.anchor else 'None'}\n"
@@ -1007,6 +1011,7 @@ class ValidationWindow(QMainWindow):
         self._show_preflight(result)
 
     def _show_preflight(self, result) -> None:
+        import numpy as np
         if result.ok:
             # 打磨③:页间引导 —— preflight 通过提示可去 Execute
             self.plan_summary.setPlainText("Preflight: PASS → 可前往 4 Execute 进行 Arm")
@@ -1017,19 +1022,26 @@ class ValidationWindow(QMainWindow):
                 except Exception as error:
                     self.plan_summary.appendPlainText(f"\nPreview unavailable: {error}")
             # 主显示区叠加预测轨迹(读 predicted_states.npz)
-            if self.session and self.session.plan and self.session.plan.predicted_states_path:
-                p = Path(self.session.plan.predicted_states_path)
-                if not p.is_absolute():
-                    p = self.session.run_dir / p
-                if p.is_file():
-                    import numpy as np
-                    with np.load(p) as data:
-                        key = "states_model" if "states_model" in data else "states_normalized"
-                        self.main_display.set_predicted_states(np.asarray(data[key]))
+            # 失败/缺失一律清空,防历史 run/replay 的 corrupt npz 抛未捕获、旧轨迹残留。
+            states = np.zeros((0, 0, 0))
+            try:
+                if self.session and self.session.plan and self.session.plan.predicted_states_path:
+                    p = Path(self.session.plan.predicted_states_path)
+                    if not p.is_absolute():
+                        p = self.session.run_dir / p
+                    if p.is_file():
+                        with np.load(p) as data:
+                            key = "states_model" if "states_model" in data else "states_normalized"
+                            states = np.asarray(data[key])
+            except Exception as error:
+                self.plan_summary.appendPlainText(f"\n预测轨迹叠加失败: {error}")
+                states = np.zeros((0, 0, 0))
+            self.main_display.set_predicted_states(states)
         else:
             self.plan_summary.setPlainText("Preflight: BLOCKED\n" + "\n".join(
                 f"[{item.code}] {item.message}" for item in result.issues))
             self.plan_preview.clear_plan()
+            self.main_display.set_predicted_states(np.zeros((0, 0, 0)))
         self._refresh()
 
     def _arm(self) -> None:
