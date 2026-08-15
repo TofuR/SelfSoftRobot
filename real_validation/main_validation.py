@@ -238,14 +238,27 @@ class ValidationWindow(QMainWindow):
         buttons.addWidget(anchor); buttons.addWidget(scene); buttons.addStretch()
         off.addLayout(buttons)
         offline = QFormLayout()
-        self.anchor_npz = QLineEdit()
+        # 打磨:默认指向随目录携带的示例数据(15 节点 clean npz),让 Mock 流程可立即跑通
+        self.anchor_npz = QLineEdit(str(APP_DIR / "data" / "npz" / "seq_20260627_163921_train.npz"))
         self.anchor_index = QSpinBox(); self.anchor_index.setRange(0, 100000000)
+        self.anchor_index.setValue(39)
+        self.anchor_index.setToolTip(
+            "从该帧建立 anchor。帧索引往前必须凑满模型历史长度 H(此模型 40 步)——\n"
+            "选太靠前的帧会报『缺少 N 步历史』。示例数据共 8172 帧,建议从 39 开始。")
         load_npz = QPushButton("从 NPZ 建立 Anchor"); load_npz.setObjectName("primary")
         load_npz.clicked.connect(self._load_anchor_npz)
         offline.addRow("Transition NPZ", self._path_row(self.anchor_npz, False))
         index_row = QHBoxLayout(); index_row.addWidget(self.anchor_index); index_row.addWidget(load_npz)
-        offline.addRow("帧索引(必须已有完整 H)", index_row)
+        offline.addRow("帧索引(≥H-1,悬停看说明)", index_row)
         off.addLayout(offline)
+        # 打磨:anchor 规则提示 —— 数据从哪来、格式是什么、帧怎么选
+        self.anchor_help = QLabel(
+            "Anchor = 模型规划的起点(当前软臂形状 + 最近 H 步动作)。\n"
+            "数据来自 transition NPZ(positions(T,3,N) + actions(T,D),动作已归一 [0,1])。\n"
+            "示例数据已内置在 data/npz/(15 节点,8172 帧);其它序列按 GUI_GUIDE 拷入。")
+        self.anchor_help.setWordWrap(True)
+        self.anchor_help.setStyleSheet("color:#486581;font-size:11px;")
+        off.addWidget(self.anchor_help)
         ll.addWidget(gb_off)
 
         # 卡2:目标与障碍
@@ -639,8 +652,30 @@ class ValidationWindow(QMainWindow):
             self.session.set_anchor(anchor)
             atomic_write_json(self.session.run_dir / "anchor.json", anchor.to_dict())
             self._scene_changed()
-        except Exception:
-            self._error(traceback.format_exc())
+        except FileNotFoundError as error:
+            self._error(f"找不到 NPZ 文件:\n{error}\n\n请把 transition NPZ 拷入 "
+                        f"real_validation/data/npz/,或点击 … 选择现有文件。")
+        except IndexError as error:
+            self._error(f"帧索引越界:\n{error}\n\n请把『帧索引』改到数据帧数范围内"
+                        f"(示例数据 0~8171)。")
+        except ValueError as error:
+            # anchor_from_npz 的格式/节点/历史/NaN 错误;转成可读引导
+            message = str(error)
+            hint = ""
+            if "缺少" in message and "步历史" in message:
+                hint = ("\n\n该帧往前凑不满模型历史 H。把『帧索引』调大"
+                        "(如示例数据用 39 及以上),或换更长序列。")
+            elif "节点形状" in message or "N=" in message:
+                hint = ("\n\nNPZ 的节点数与模型不匹配(模型 "
+                        f"n_nodes={self.runtime.descriptor.n_nodes})。"
+                        "请选同节点数的 npz。")
+            elif "action_dim" in message:
+                hint = (f"\n\nNPZ 动作维度与模型 action_dim="
+                        f"{self.runtime.descriptor.action_dim} 不匹配。")
+            elif "positions 和 actions" in message:
+                hint = ("\n\n该文件不是 transition NPZ,或格式不符。需要 "
+                        "positions(T,3,N) + actions(T,D)。")
+            self._error(message + hint)
 
     def _load_scene(self) -> None:
         self._load_session_json("scene", Scene.from_dict)
