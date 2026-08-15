@@ -57,6 +57,25 @@ GUI 用五个 Tab 页串起"**加载模型 → 建立状态锚点 → 定义目�
 
 **这一步要产出**:一个锚点(anchor)+ 一份场景(目标 + 障碍)。第 3 页规划必需 anchor。
 
+#### Anchor 是什么、怎么建(离线 NPZ 方式,新手从这里开始)
+
+**Anchor = 模型规划的起点**:OpenLoop 模型是状态转移模型 `s_t = F(s_{t-1}, 最近 H 步动作, z)`,它需要知道"现在软臂在什么形状 + 最近 H 步怎么动的",才能预测下一步。这个"现在的形状 + 最近 H 步动作"就是 anchor。**它不是界面填出来的,是从 transition NPZ 数据里选一帧提取的。**
+
+**最快跑通步骤(示例数据已内置)**:
+```text
+1. Setup 页:  New Experiment → Load Model(checkpoint 已放 checkpoints/current/)
+2. Observe 页: 左下『离线锚定』卡,Transition NPZ 已默认指向 data/npz/seq_20260627_163921_train.npz
+3. 帧索引保持 39(≥H-1=39,保证有完整 40 步历史)→ 点『从 NPZ 建立 Anchor』
+4. 底部 anchor_status 显示『已锚定 …』+ 右侧 scene_summary 更新 → 可去第 3 页规划
+```
+
+**规则(报错时会提示怎么改)**:
+- NPZ 必须含 `positions(T,3,N)` + `actions(T,D)`;N = 模型节点数(15),D = action_dim(1),动作已归一 [0,1]。
+- 帧索引往前必须凑满 H=40 步历史 —— 选太靠前会报"缺少 N 步历史",把帧索引调大即可(示例数据 8172 帧,用 39+)。
+- 其它序列:把 transition npz 拷入 `real_validation/data/npz/`,或点 `…` 选择任意位置的文件。
+
+**另一种锚定方式(实时相机)**:`Start Camera (Mock)` → `Warmup(填动作历史)` → `从相机取流锚定`。需要带 manifest 的 checkpoint(当前示例未带,故推荐先走离线 NPZ 方式)。
+
 ### 2.3 Page 3 · Plan — 逆规划 + 预检 + 预览
 
 > 前置:已加载模型 + 已建立 anchor。
@@ -130,8 +149,9 @@ session 状态机:`IDLE → PLANNING → READY → ARMED → EXECUTING → PAUSE
 | 执行链路 | **Mock**(MockCommandTransport);真机接线后改 `main_validation.py:765 _make_transport()` |
 | 相机 | **合成演示帧**;真机换 RealSenseCam |
 | 在线锚定/warmup | 可用(Mock 演示);真机需带 manifest 的 checkpoint |
-| 场景编辑 | camera_view + scene_editor 已接;`target_skeleton`/`obstacle_aabb` 支持解析但交互创建待后续 |
-| 目标类型 | 末端 target_point/circle + 圆障碍(已启用);全身形态、多边形/AABB 障碍、多检查点重锚定待 P3/M4+ |
+| 场景编辑 | camera_view + scene_editor 已接;`obstacle_aabb` 支持解析但交互创建待后续 |
+| 目标类型 | 末端 target_point/circle、**全身 target_skeleton**(已解锁,planner/metrics 均支持)+ 圆障碍;多边形/AABB 障碍、多检查点重锚定待 P3/M4+ |
+| 离线锚定 | 示例数据已内置 `data/npz/`(15 节点,8172 帧);`checkpoints/current/best_model.pt` 已放置,可直接走通 Mock 流程 |
 | K_safe | 加载带认证表的模型后自动填充;`未认证` 时规划会被 preflight 阻断(fail-closed) |
 
 > 目标取自真实录制帧可保证物理可达;planner 优化出的动作**尚未在真机执行过** —— 真机闭环是下一个里程碑。

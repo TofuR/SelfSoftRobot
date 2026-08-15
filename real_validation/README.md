@@ -39,6 +39,9 @@ python -m pip install -r requirements-perception.txt
 `config.json` 占位已经对应服务器 `exp_20260714_8`，因此只需复制该实验的
 `best_model.pt`；更换其他模型时必须把二者一起更换。
 
+离线锚定用的 transition NPZ 放 `data/npz/`(示例 15 节点数据已内置;GUI_GUIDE
+§2.2 有『从 NPZ 建 Anchor』的完整操作入门)。
+
 启动 GUI：
 
 ```bash
