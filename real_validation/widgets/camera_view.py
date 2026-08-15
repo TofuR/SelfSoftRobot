@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from ..contracts.models import Scene, ScenePrimitive
@@ -40,8 +40,8 @@ class CameraViewWidget(QWidget):
 
         self.image_item = pg.ImageItem()
         self.plot.addItem(self.image_item)
-        self.skeleton_curve = self.plot.plot([], [], pen=pg.mkPen(_SKELETON_COLOR, width=2),
-                                             symbol="o", symbolSize=5, symbolBrush=_SKELETON_COLOR)
+        self._skeleton_curve = self.plot.plot([], [], pen=pg.mkPen(_SKELETON_COLOR, width=2),
+                                              symbol="o", symbolSize=5, symbolBrush=_SKELETON_COLOR)
         self.anchor_scatter = pg.ScatterPlotItem(symbol="t", size=14, pen=pg.mkPen("#38A169", width=2))
         self.plot.addItem(self.anchor_scatter)
 
@@ -56,6 +56,25 @@ class CameraViewWidget(QWidget):
         self._scene_items: list[tuple[str, object]] = []   # [(primitive_id, item)]
         self.plot.scene().sigMouseClicked.connect(self._on_click)
 
+        # ---- 主显示增强图层(规划预测轨迹 / 执行实际骨架 / NDI 末端) ----
+        self._predicted_items: list[object] = []
+        self._actual_scatter = pg.ScatterPlotItem(symbol="o", size=10,
+                                                  pen=pg.mkPen("#EF4E4E", width=2),
+                                                  brush=pg.mkBrush("#EF4E4E"))
+        self.plot.addItem(self._actual_scatter)
+        self._ndi_scatter = pg.ScatterPlotItem(symbol="star", size=14,
+                                               pen=pg.mkPen("#805AD5", width=2))
+        self.plot.addItem(self._ndi_scatter)
+        # 图层可见性映射(_layer_items["predicted"] 与 self._predicted_items 指向同一
+        # list 对象,set_predicted_states 用 .clear() 而非重绑定以保持引用)。
+        self._layer_items: dict[str, list[object]] = {
+            "skeleton": [self._skeleton_curve],
+            "scene": [],            # set_scene 时登记
+            "predicted": self._predicted_items,
+            "actual": [self._actual_scatter],
+            "ndi": [self._ndi_scatter],
+        }
+
     # ---- 图层更新 ----
     def set_frame(self, bgr) -> None:
         """显示一帧 BGR;并锁定 view 到图像范围。"""
@@ -68,9 +87,9 @@ class CameraViewWidget(QWidget):
     def set_skeleton(self, skeleton) -> None:
         sk = np.asarray(skeleton, dtype=np.float64)
         if sk.size and sk.shape[1] >= 2:
-            self.skeleton_curve.setData(sk[:, 0], sk[:, 1])
+            self._skeleton_curve.setData(sk[:, 0], sk[:, 1])
         else:
-            self.skeleton_curve.setData([], [])
+            self._skeleton_curve.setData([], [])
 
     def set_anchor(self, skeleton) -> None:
         sk = np.asarray(skeleton, dtype=np.float64)
@@ -78,6 +97,43 @@ class CameraViewWidget(QWidget):
             self.anchor_scatter.setData(x=sk[:, 0], y=sk[:, 1])
         else:
             self.anchor_scatter.setData(x=[], y=[])
+
+    # ---- 主显示增强图层 ----
+    def set_predicted_states(self, states) -> None:
+        """规划预测轨迹:states(K,N,2) 图像像素,每条 K 画一条灰色虚线。"""
+        for item in self._predicted_items:
+            self.plot.removeItem(item)
+        self._predicted_items.clear()   # 保持 _layer_items["predicted"] 引用同一 list
+        states = np.asarray(states, dtype=np.float64)
+        if states.ndim != 3 or states.shape[2] < 2:
+            return
+        for k in range(states.shape[0]):
+            line = self.plot.plot(states[k, :, 0], states[k, :, 1],
+                                  pen=pg.mkPen("#8B9BB4", width=1,
+                                               style=Qt.DashLine))
+            self._predicted_items.append(line)
+
+    def set_actual_skeleton(self, skeleton) -> None:
+        """执行实际骨架(N,2) 图像像素,红点叠加。"""
+        sk = np.asarray(skeleton, dtype=np.float64)
+        if sk.size and sk.shape[1] >= 2:
+            self._actual_scatter.setData(x=sk[:, 0], y=sk[:, 1])
+        else:
+            self._actual_scatter.setData(x=[], y=[])
+
+    def set_ndi_position(self, xy) -> None:
+        """NDI 末端位置(图像像素),紫星;None 时清空。"""
+        if xy is None:
+            self._ndi_scatter.setData(x=[], y=[])
+        else:
+            self._ndi_scatter.setData(x=[float(xy[0])], y=[float(xy[1])])
+
+    def set_layer_visible(self, layer: str, visible: bool) -> None:
+        """图层可见性开关:layer ∈ {"skeleton","scene","predicted","actual","ndi"}。"""
+        if layer not in self._layer_items:
+            raise ValueError(f"未知图层: {layer}")
+        for item in self._layer_items[layer]:
+            item.setVisible(bool(visible))
 
     def set_tool(self, tool: str) -> None:
         if tool not in {"select", "add_target", "add_obstacle", "add_target_skeleton"}:
@@ -87,16 +143,21 @@ class CameraViewWidget(QWidget):
             self.clear_skeleton_points()   # 离开骨架工具清掉未提交的点
 
     def set_scene(self, scene: Scene) -> None:
-        """清旧原语、按 scene 重绘。"""
+        """清旧原语、按 scene 重绘。scene 为 None 时仅清空(图层开关测试用)。"""
         for _pid, item in self._scene_items:
             self.plot.removeItem(item)
         self._scene_items = []
         self._scene = scene
+        if scene is None:
+            self._layer_items["scene"] = []
+            return
         for primitive in scene.primitives:
             item = self._draw_primitive(primitive)
             if item is not None:
                 self.plot.addItem(item)
                 self._scene_items.append((primitive.primitive_id, item))
+        # 登记 scene 图层(每次重绘后刷新,供 set_layer_visible("scene") 开关)
+        self._layer_items["scene"] = [item for _pid, item in self._scene_items]
 
     def _draw_primitive(self, p: ScenePrimitive):
         return scene_primitive_item(p, target_color=TARGET_COLOR)

@@ -15,12 +15,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtWidgets import QApplication
 
 from real_validation.contracts.models import ScenePrimitive
 from real_validation.core.session import ExperimentSession
+from real_validation.widgets.camera_view import CameraViewWidget
 from real_validation.widgets.primitive_items import scene_primitive_item
 
 # 惰性创建单个 QApplication,避免 unittest 多次 init
@@ -172,6 +175,47 @@ class SceneSummaryRegressionTest(unittest.TestCase):
             self.assertEqual(len(primitive.geometry["nodes"]), 3)
         finally:
             window.close()
+
+
+class MainDisplayLayerTest(unittest.TestCase):
+    """Task 1:主显示多层叠加(预测轨迹/实际骨架/NDI)+ 图层可见性开关。"""
+
+    def setUp(self):
+        _ensure_app()
+        self.view = CameraViewWidget()
+        self.view.set_frame(np.zeros((240, 320, 3)))
+
+    def test_layer_api_accepts_predicted_and_actual(self):
+        self.view.set_predicted_states(np.zeros((5, 15, 2)))
+        self.view.set_actual_skeleton(np.zeros((15, 2)))
+        self.view.set_ndi_position((10.0, 20.0))
+        # 不应抛异常,且 predicted/actual item 已加入 plot
+        self.assertEqual(len(self.view._predicted_items), 5)   # K 条骨架线
+        self.assertIsNotNone(self.view._actual_scatter)
+
+    def test_layer_visibility_toggles_items(self):
+        self.view.set_scene(None)  # 不设场景,只测骨架层
+        self.view.set_skeleton(np.zeros((15, 2)))
+        self.assertTrue(self.view._skeleton_curve.isVisible())
+        self.view.set_layer_visible("skeleton", False)
+        self.assertFalse(self.view._skeleton_curve.isVisible())
+        self.view.set_layer_visible("skeleton", True)
+        self.assertTrue(self.view._skeleton_curve.isVisible())
+
+    def test_predicted_layer_visibility_survives_restate(self):
+        # 锁死实现细节:set_predicted_states 用 .clear() 而非重绑定,否则
+        # _layer_items["predicted"] 会指向陈旧 list,二次 set 后开关失效。
+        self.view.set_predicted_states(np.zeros((3, 15, 2)))
+        self.view.set_predicted_states(np.zeros((4, 15, 2)))   # 二次 set(重绘)
+        self.assertEqual(len(self.view._predicted_items), 4)
+        self.view.set_layer_visible("predicted", False)
+        self.assertTrue(all(not it.isVisible() for it in self.view._predicted_items))
+        self.view.set_layer_visible("predicted", True)
+        self.assertTrue(all(it.isVisible() for it in self.view._predicted_items))
+
+    def test_unknown_layer_raises(self):
+        with self.assertRaises(ValueError):
+            self.view.set_layer_visible("no_such_layer", True)
 
 
 if __name__ == "__main__":
