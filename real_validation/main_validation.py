@@ -412,7 +412,9 @@ class ValidationWindow(QMainWindow):
             self._error(f"帧质量 reject:{quality.reasons};请重试或调场景")
             return
         self.session.set_anchor(anchor)
-        self.anchor_status.setText(f"已锚定 {anchor.anchor_id[:8]} verdict={quality.verdict}")
+        # 打磨③:页间引导 —— 锚定成功提示下一步
+        self.anchor_status.setText(
+            f"已锚定 {anchor.anchor_id[:8]} verdict={quality.verdict} → 可前往 3 Plan 规划")
         self.camera_view.set_anchor(skeleton)
         self._refresh()
 
@@ -583,11 +585,20 @@ class ValidationWindow(QMainWindow):
         if ref_dt:
             self.plan_dt.setValue(float(ref_dt))
         # B9:K_safe 从 k_safe_table_px 自动读(按 10px 容差),不再手填
+        k_safe_source = "手动"
         if descriptor.k_safe_table_px:
             k = (descriptor.k_safe_table_px.get("10px")
                  or descriptor.k_safe_table_px.get("5px"))
             if k:
                 self.k_safe.setValue(int(k))
+                k_safe_source = "认证表(10px 容差)" if "10px" in descriptor.k_safe_table_px else "认证表"
+        # 打磨③:K_safe 来源标注(唯一安全门,操作员需知它是自动还是手动)
+        if descriptor.k_safe_table_px:
+            self.k_safe.setToolTip(f"K_safe 来源: {k_safe_source}(视野认证表)。"
+                                   f"这是规划视野上限,修改后 Preflight 按新值门禁。")
+        else:
+            self.k_safe.setToolTip("K_safe 来源: 手动。该模型无视野认证表,规划由 preflight 的 k_safe_uncertified 门保护。")
+        self.model_summary.appendPlainText(f"K_safe 来源: {k_safe_source}")
         self._refresh()
 
     def _apply_safety(self) -> None:
@@ -751,7 +762,8 @@ class ValidationWindow(QMainWindow):
 
     def _show_preflight(self, result) -> None:
         if result.ok:
-            self.plan_summary.setPlainText("Preflight: PASS")
+            # 打磨③:页间引导 —— preflight 通过提示可去 Execute
+            self.plan_summary.setPlainText("Preflight: PASS → 可前往 4 Execute 进行 Arm")
             if self.session and self.session.plan and self.session.plan.predicted_states_path:
                 try:
                     self.plan_preview.set_plan(self.session.plan, self.session.scene,
