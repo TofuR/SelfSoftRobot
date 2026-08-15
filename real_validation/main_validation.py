@@ -16,7 +16,7 @@ if __package__ in (None, ""):  # 支持复制目录后直接 ``python main_valid
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     __package__ = "real_validation"
 
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit,
@@ -222,7 +222,12 @@ class ValidationWindow(QMainWindow):
         return page
 
     def _observe_page(self) -> QWidget:
+        # 打磨②:左右两栏 —— 左控制面板(锚定/目标障碍/相机) + 右可视化(场景编辑)
         page = QWidget(); root = QVBoxLayout(page)
+        outer = QSplitter(Qt.Horizontal)
+
+        # ---- 左栏:控制面板 ----
+        left = QWidget(); ll = QVBoxLayout(left); ll.setContentsMargins(0, 0, 0, 0)
 
         # 卡1:离线锚定
         gb_off = QGroupBox("离线锚定")
@@ -241,7 +246,7 @@ class ValidationWindow(QMainWindow):
         index_row = QHBoxLayout(); index_row.addWidget(self.anchor_index); index_row.addWidget(load_npz)
         offline.addRow("帧索引(必须已有完整 H)", index_row)
         off.addLayout(offline)
-        root.addWidget(gb_off)
+        ll.addWidget(gb_off)
 
         # 卡2:目标与障碍
         gb_tgt = QGroupBox("目标与障碍")
@@ -268,7 +273,7 @@ class ValidationWindow(QMainWindow):
         obstacle_row.addWidget(obstacle_button)
         target_form.addRow("障碍 x / y / 半径 (model)", obstacle_row)
         t.addLayout(target_form)
-        root.addWidget(gb_tgt)
+        ll.addWidget(gb_tgt)
 
         # 卡3:实时相机与 Warmup(含相机视图交互工具)
         gb_live = QGroupBox("实时相机与 Warmup")
@@ -296,19 +301,25 @@ class ValidationWindow(QMainWindow):
         tool_row.addWidget(self.tool_target_btn); tool_row.addWidget(self.tool_obstacle_btn)
         tool_row.addStretch()
         live.addLayout(tool_row)
-        root.addWidget(gb_live)
+        ll.addWidget(gb_live)
+        ll.addStretch(1)
 
-        # 卡4:场景编辑(相机视图 + 场景列表)
+        # ---- 右栏:场景编辑(相机视图 + 场景列表) ----
         gb_scene = QGroupBox("场景编辑")
         sc = QVBoxLayout(gb_scene); sc.setContentsMargins(12, 14, 12, 12)
         self.camera_view = CameraViewWidget()
         self.scene_editor = SceneEditorPanel()
-        split = QSplitter(); split.addWidget(self.camera_view); split.addWidget(self.scene_editor)
-        split.setSizes([520, 260])
-        sc.addWidget(split, 1)
+        right_split = QSplitter(Qt.Vertical)
+        right_split.addWidget(self.camera_view); right_split.addWidget(self.scene_editor)
+        right_split.setSizes([560, 220])
+        sc.addWidget(right_split, 1)
         self.anchor_status = QLabel("未锚定")
         sc.addWidget(self.anchor_status)
-        root.addWidget(gb_scene, 1)
+
+        outer.addWidget(left); outer.addWidget(gb_scene)
+        outer.setSizes([360, 720])
+        outer.setStretchFactor(0, 0); outer.setStretchFactor(1, 1)
+        root.addWidget(outer, 1)
 
         # 绑定(保持原样)
         self.camera_view.target_picked.connect(self._add_primitive)
