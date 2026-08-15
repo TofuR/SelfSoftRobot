@@ -23,7 +23,7 @@
 ### Task 1: 增强 CameraViewWidget —— 多层叠加 + 图层开关
 
 **Files:**
-- Modify: `real_validation/gui/widgets/camera_view.py`
+- Modify: `real_validation/widgets/camera_view.py`
 - Test: `tests/test_gui_regressions.py`(新增主显示图层测试)
 
 **Interfaces:**
@@ -151,7 +151,7 @@ Run: `python -m unittest discover -s tests -v`
 Expected: 全绿。
 
 ```bash
-git add real_validation/gui/widgets/camera_view.py tests/test_gui_regressions.py
+git add real_validation/widgets/camera_view.py tests/test_gui_regressions.py
 git commit -m "feat(real_validation): CameraViewWidget 增强 —— 多层叠加(预测轨迹/实际骨架/NDI)+ 图层可见性开关"
 ```
 
@@ -160,7 +160,7 @@ git commit -m "feat(real_validation): CameraViewWidget 增强 —— 多层叠�
 ### Task 2: scene_editor 多选删除
 
 **Files:**
-- Modify: `real_validation/gui/widgets/scene_editor.py`
+- Modify: `real_validation/widgets/scene_editor.py`
 - Test: `tests/test_gui_regressions.py`
 
 **Interfaces:**
@@ -262,7 +262,7 @@ Run: `python -m unittest discover -s tests -v`
 Expected: 全绿。
 
 ```bash
-git add real_validation/gui/widgets/scene_editor.py tests/test_gui_regressions.py
+git add real_validation/widgets/scene_editor.py tests/test_gui_regressions.py
 git commit -m "feat(real_validation): scene_editor 多选删除 —— ExtendedSelection + 批量删 + Del 快捷键"
 ```
 
