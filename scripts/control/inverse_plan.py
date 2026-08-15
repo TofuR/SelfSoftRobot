@@ -117,7 +117,7 @@ def obstacle_loss(preds_norm, pc_center, pc_scale, obs_list):
        docs/reports/2026-07-14/15 中含障碍的 planner 数字与本实现不可比
        (该报告本来就含不可复现的随机重启分量 —— CLI 无 torch.manual_seed)。
     """
-    from real_validation.obstacles import cli_obstacle_loss
+    from real_validation.planning.obstacles import cli_obstacle_loss
     return cli_obstacle_loss(preds_norm, pc_center, pc_scale, obs_list)
 
 

@@ -1,4 +1,4 @@
-"""避障逆规划实验入口(CLI 薄脚本,包 real_validation.openloop_planner)。
+"""避障逆规划实验入口(CLI 薄脚本,包 real_validation.planning.openloop_planner)。
 
 对任意 action_dim(1/3/6 腔道):给定起始骨架(离线 npz 帧)或目标点 + 圆障碍,
 用工作台 planner 求 K 步动作序列 → 存 plan JSON + predicted_states.npz(kPa 动作,
@@ -49,13 +49,13 @@ def main():
     import numpy as np
     import torch
 
-    from real_validation.models import (ActionPlan, Anchor, SafetyPolicy, Scene,
-                                        ScenePrimitive)
-    from real_validation.openloop_planner import OpenLoopShootingPlanner, ShootingConfig
-    from real_validation.offline_anchor import anchor_from_npz
+    from real_validation.contracts.models import (ActionPlan, Anchor, SafetyPolicy, Scene,
+                                                  ScenePrimitive)
+    from real_validation.planning.openloop_planner import OpenLoopShootingPlanner, ShootingConfig
+    from real_validation.runtime.anchors import anchor_from_npz
 
     # 1. 加载模型 + manifest(自动找同目录 deploy_manifest.json)
-    from real_validation.model_runtime import ModelRuntime
+    from real_validation.runtime.model_runtime import ModelRuntime
     runtime = ModelRuntime(args.checkpoint, device="cuda" if torch.cuda.is_available() else "cpu")
     descriptor = runtime.descriptor
     if descriptor.action_scale_kpa is None:

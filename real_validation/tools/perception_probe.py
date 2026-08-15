@@ -11,7 +11,7 @@
       [--segment-params <derived>/segment_meta.json] \\
       [--reference <derived>/bg_median.png] --n-points 15 --frames 12 --out <out>
 
-  # 在线：从 RealSense 实时取流（需要 real_capture/ 并排存在 + pyrealsense2）
+  # 在线：从 RealSense 实时取流（经 hardware.camera.RealSenseCam，需要 pyrealsense2）
   python perception_probe.py --source live --background <bg.png> --frames 12 --out <out>
 
 产物：overlay.png（叠加网格）/ timing.json（逐算子 mean+p90）/ quality.jsonl（逐帧标志）
@@ -189,27 +189,41 @@ def _load_frames_from_dir(frames_dir, count: int, start: int = 0):
 
 
 def _load_frames_from_camera(count: int, warmup: int = 5):
-    """从 RealSense 取 count 帧。需要 real_capture/ 并排存在 + pyrealsense2。"""
-    sys.path.append(str(Path(__file__).resolve().parent.parent / "real_capture"))
-    import pyrealsense2 as rs  # noqa: E402  延迟 import：只有 live 模式需要
-    config = rs.config()
-    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-    pipeline = rs.pipeline()
-    pipeline.start(config)
+    """从 RealSense 取 count 帧。
+
+    经 hardware.camera.RealSenseCam(驱动已内部移植),不再依赖 real_capture/ 并排
+    存在 + pyrealsense2。延迟 import:只有 --source live 模式需要 Qt + 相机驱动。
+    """
+    from PyQt5.QtCore import QCoreApplication
+    from ..hardware.camera import create_realsense_cam
+
+    app = QCoreApplication.instance() or QCoreApplication([])
+    cam = create_realsense_cam(width=640, height=480, fps=30)
+    frames: list[np.ndarray] = []
+    errors: list[str] = []
+
+    def _on_frame(img, _t_monotonic):
+        frames.append(img)
+
+    def _on_error(message):
+        errors.append(message)
+
+    cam.frame_ready.connect(_on_frame)
+    cam.error.connect(_on_error)
+    cam.start()
     try:
-        frames = []
-        for index in range(count + warmup):
-            composite = pipeline.wait_for_frames(2000)
-            color = composite.get_color_frame()
-            if color is None:
-                continue
-            if index >= warmup:
-                frames.append(np.array(color.get_data()))
-        if not frames:
-            raise RuntimeError("相机没有返回任何 color frame")
-        return frames
+        target = count + warmup
+        deadline = time.monotonic() + 30.0
+        while len(frames) < target and time.monotonic() < deadline:
+            app.processEvents()   # 把 QThread 的 queued signal 分发给上面的 Python slot
+            if errors:
+                raise RuntimeError(errors[0])
+            time.sleep(0.01)
+        if len(frames) < target:
+            raise RuntimeError(f"相机只返回 {len(frames)} 帧(需 {target})")
+        return frames[warmup:warmup + count]
     finally:
-        pipeline.stop()
+        cam.stop()
 
 
 def main() -> int:

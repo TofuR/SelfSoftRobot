@@ -7,23 +7,23 @@ from pathlib import Path
 
 import numpy as np
 
-from real_validation.coordinate_system import PlanarTransform
-from real_validation.executor import ExecutionError, MockCommandTransport, PlanExecutor
-from real_validation.models import (
+from real_validation.planning.coordinate_system import PlanarTransform
+from real_validation.execution.executor import ExecutionError, MockCommandTransport, PlanExecutor
+from real_validation.contracts.models import (
     ActionPlan, Anchor, ModelDescriptor, SafetyPolicy, Scene, ScenePrimitive,
 )
-from real_validation.metrics import (
+from real_validation.execution.metrics import (
     evaluate_command_safety, evaluate_plan_scene, evaluate_prediction,
 )
-from real_validation.observation_policy import ObservationPolicy
-from real_validation.observation_policy import ActionHistoryBuffer
-from real_validation.offline_anchor import anchor_from_npz
-from real_validation.openloop_planner import OpenLoopShootingPlanner, ShootingConfig
-from real_validation.planner_service import build_plan, expand_model_actions
-from real_validation.preflight import validate_plan
+from real_validation.runtime.observation_policy import ObservationPolicy
+from real_validation.runtime.observation_policy import ActionHistoryBuffer
+from real_validation.runtime.anchors import anchor_from_npz
+from real_validation.planning.openloop_planner import OpenLoopShootingPlanner, ShootingConfig
+from real_validation.planning.planner_service import build_plan, expand_model_actions
+from real_validation.execution.preflight import validate_plan
 from real_validation.runtime.loader import load_openloop_model
 from real_validation.runtime.model import OpenLoopTransitionModel
-from real_validation.session import ExperimentSession, SessionState
+from real_validation.core.session import ExperimentSession, SessionState
 
 
 def fixtures():
@@ -265,7 +265,7 @@ class ValidationCoreTest(unittest.TestCase):
 
     def test_qt_valve_transport_keeps_controller_on_qt_thread(self):
         from PyQt5.QtCore import QCoreApplication, QObject, QTimer, pyqtSignal
-        from real_validation.hardware_session import QtValveTransport
+        from real_validation.execution.hardware_session import QtValveTransport
 
         class FakeController(QObject):
             communication_result = pyqtSignal(str, int, bool, float, str)

@@ -1,6 +1,6 @@
 import unittest
 
-from real_validation.widgets.theme import (
+from real_validation.gui.theme import (
     BG, CARD, BORDER, TAB_BG,
     TEXT_MAIN, TEXT_STRONG, TEXT_MUTED, INPUT_BG,
     PRIMARY, PRIMARY_HOVER, PRIMARY_PRESSED,
@@ -29,12 +29,12 @@ class ThemeTest(unittest.TestCase):
         self.assertEqual(PGG_OPTS["foreground"], "#334E68")
 
     def test_badge_colors_cover_all_session_states(self):
-        from real_validation.session import SessionState
+        from real_validation.core.session import SessionState
         state_values = {s.value for s in SessionState}
         self.assertTrue(state_values <= set(STATE_BADGE_COLORS))
 
     def test_configure_is_callable(self):
-        from real_validation.widgets.theme import configure_pyqtgraph
+        from real_validation.gui.theme import configure_pyqtgraph
         configure_pyqtgraph()
         import pyqtgraph as pg
         self.assertEqual(pg.getConfigOption("background"), PGG_OPTS["background"])

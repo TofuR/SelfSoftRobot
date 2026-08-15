@@ -8,14 +8,14 @@ import unittest
 import numpy as np
 import torch
 
-from real_validation.models import Anchor, ModelDescriptor, SafetyPolicy, Scene, ScenePrimitive
+from real_validation.contracts.models import Anchor, ModelDescriptor, SafetyPolicy, Scene, ScenePrimitive
 
 
 class UnitConversionTest(unittest.TestCase):
     """T2:kPa ↔ 模型动作单位往返;safety=150kPa 时模型输入 ≤ 1.0。"""
 
     def test_kpa_to_model_is_bounded_by_training_domain(self):
-        from real_validation.units import kPa_to_model
+        from real_validation.planning.units import kPa_to_model
         # 训练域上界 150 kPa → 模型输入必须 ≤ 1.0(锁 B1:此前把 0-150 原样喂进 [0,1] 域)
         actions = np.array([[0.0], [150.0], [75.0], [10.0]], dtype=np.float32)
         model = kPa_to_model(actions, action_scale_kpa=np.array([150.0]),
@@ -24,7 +24,7 @@ class UnitConversionTest(unittest.TestCase):
         self.assertAlmostEqual(model[1, 0], 1.0, places=6)
 
     def test_round_trip_is_exact(self):
-        from real_validation.units import kPa_to_model, model_to_kPa
+        from real_validation.planning.units import kPa_to_model, model_to_kPa
         scale = np.array([150.0, 120.0, 100.0, 90.0, 80.0, 70.0], dtype=np.float32)
         actions = np.random.default_rng(0).uniform(0, 1, (5, 6)).astype(np.float32)
         restored = model_to_kPa(kPa_to_model(actions * scale, action_scale_kpa=scale,
@@ -33,14 +33,14 @@ class UnitConversionTest(unittest.TestCase):
         np.testing.assert_allclose(restored, actions * scale, rtol=1e-6, atol=1e-6)
 
     def test_norm_factor_multiplicative(self):
-        from real_validation.units import kPa_to_model
+        from real_validation.planning.units import kPa_to_model
         actions = np.array([[150.0]], dtype=np.float32)
         with_norm = kPa_to_model(actions, action_scale_kpa=np.array([150.0]),
                                  action_norm_factor=2.0)
         self.assertAlmostEqual(with_norm[0, 0], 0.5, places=6)  # /scale /norm
 
     def test_torch_tensor_path(self):
-        from real_validation.units import kPa_to_model
+        from real_validation.planning.units import kPa_to_model
         actions = torch.tensor([[0.0], [150.0]])
         out = kPa_to_model(actions, action_scale_kpa=torch.tensor([150.0]),
                            action_norm_factor=1.0)
@@ -48,7 +48,7 @@ class UnitConversionTest(unittest.TestCase):
         self.assertLessEqual(out.max().item(), 1.0)
 
     def test_check_unit_consistency(self):
-        from real_validation.units import check_unit_consistency
+        from real_validation.planning.units import check_unit_consistency
         # npz 已归一化链路(本数据:norm_factor≈1.0)
         label = check_unit_consistency([150.0], 0.99999)
         self.assertIn("npz 已归一化", label)
@@ -61,7 +61,7 @@ class SharedObjectiveParityTest(unittest.TestCase):
     """T4a:共享目标核的 4 个损失项 + 障碍项逐位一致;障碍项对 K 不变;z 永不进 loss。"""
 
     def test_obstacle_term_is_mean_over_k_and_nodes(self):
-        from real_validation.obstacles import obstacle_term
+        from real_validation.planning.obstacles import obstacle_term
         # 全 0 落在障碍圆内 → 穿透非零(修 B4:障碍此前放太远,relu(r-d) 恒 0 空转)
         preds = torch.zeros(4, 15, 3, dtype=torch.float64)      # (K,N,3) 归一化
         center = torch.zeros(3, dtype=torch.float64)
@@ -82,7 +82,7 @@ class SharedObjectiveParityTest(unittest.TestCase):
         全 0 穿透值(非零 loss);base(K=5)与 doubled(K=10)必须完全相等 ——
         旧 double-divide 会给出 2 倍关系,此断言直接卡死。
         """
-        from real_validation.obstacles import obstacle_term
+        from real_validation.planning.obstacles import obstacle_term
         base = torch.zeros(5, 15, 3, dtype=torch.float64)
         center = torch.zeros(3, dtype=torch.float64)
         scale = torch.ones(3, dtype=torch.float64)
@@ -95,7 +95,7 @@ class SharedObjectiveParityTest(unittest.TestCase):
 
     def test_z_channel_never_enters_obstacle_loss(self):
         """pc_scale[2]=1e-6,任何非零 z 会被放大 1e6 —— 障碍 loss 必须只吃 [:2]。"""
-        from real_validation.obstacles import obstacle_term
+        from real_validation.planning.obstacles import obstacle_term
         preds = torch.zeros(3, 15, 3, dtype=torch.float64)
         center = torch.zeros(3, dtype=torch.float64)
         scale = torch.ones(3, dtype=torch.float64)
@@ -108,7 +108,7 @@ class SharedObjectiveParityTest(unittest.TestCase):
 
     def test_k_equals_one_is_finite(self):
         """抓 CLI inverse_plan.py:154 的 K=1 时 errs[1:] 空 → L_mono NaN。"""
-        from real_validation.obstacles import obstacle_term
+        from real_validation.planning.obstacles import obstacle_term
         preds = torch.randn(1, 15, 3, dtype=torch.float64)
         center = torch.zeros(3, dtype=torch.float64)
         scale = torch.ones(3, dtype=torch.float64)
@@ -121,7 +121,7 @@ class ContractRejectionTest(unittest.TestCase):
 
     def test_action_scale_kpa_missing_blocks_planning(self):
         """fail-closed 裁决:action_scale_kpa 缺失不能回退 1.0(否则把活 OOD bug 固化成默认)。"""
-        from real_validation.models import ModelDescriptor
+        from real_validation.contracts.models import ModelDescriptor
         descriptor = ModelDescriptor(
             checkpoint="m.pt", checkpoint_hash="abc", model_type="state_transition",
             action_dim=1, n_nodes=15, history_steps=40,
@@ -129,7 +129,7 @@ class ContractRejectionTest(unittest.TestCase):
         self.assertIsNone(descriptor.action_scale_kpa)
 
     def test_manifest_round_trip(self):
-        from real_validation.deploy_manifest import DeployManifest
+        from real_validation.contracts.deploy_manifest import DeployManifest
         manifest = DeployManifest(
             checkpoint_sha256="deadbeef", action_scale_kpa=(150.0,),
             channel_map=(0,), train_dt_nominal_s=0.2, train_dt_measured_s=0.2031,
@@ -144,7 +144,7 @@ class ContractRejectionTest(unittest.TestCase):
         self.assertEqual(restored.k_safe_table_px["10px"], 124)
 
     def test_manifest_missing_required_raises(self):
-        from real_validation.deploy_manifest import DeployManifest
+        from real_validation.contracts.deploy_manifest import DeployManifest
         with self.assertRaises(ValueError):
             DeployManifest(checkpoint_sha256="x", action_scale_kpa=None,
                            channel_map=None, train_dt_nominal_s=None, mask_source=None,
@@ -158,7 +158,7 @@ class PreflightNewGatesTest(unittest.TestCase):
     """P1b:preflight 新门(dt_mismatch / k_safe_uncertified / unsupported_obstacle / action_scale_missing)。"""
 
     def _base(self, **model_kw):
-        from real_validation.planner_service import build_plan
+        from real_validation.planning.planner_service import build_plan
         kwargs = {"k_safe": 4, **model_kw}   # 默认 k_safe=4;测试可覆盖为 None 测 uncertified
         model = ModelDescriptor("m.pt", "abc", "state_transition", 1, 3, 2,
                                 k_train=4, action_scale_kpa=(1.0,), channel_map=(0,),
@@ -174,31 +174,31 @@ class PreflightNewGatesTest(unittest.TestCase):
         return plan, model, anchor, scene, safety
 
     def test_dt_mismatch_is_detected(self):
-        from real_validation.preflight import validate_plan
+        from real_validation.execution.preflight import validate_plan
         plan, model, anchor, scene, safety = self._base()
         bad = plan.__class__.from_dict({**plan.to_dict(), "step_interval_s": 0.3})
         codes = {i.code for i in validate_plan(bad, model, anchor, scene, safety).issues}
         self.assertIn("dt_mismatch", codes)
 
     def test_dt_match_passes(self):
-        from real_validation.preflight import validate_plan
+        from real_validation.execution.preflight import validate_plan
         plan, model, anchor, scene, safety = self._base()
         self.assertTrue(validate_plan(plan, model, anchor, scene, safety).ok)
 
     def test_k_safe_uncertified_blocks(self):
-        from real_validation.preflight import validate_plan
+        from real_validation.execution.preflight import validate_plan
         plan, model, anchor, scene, safety = self._base(k_safe=None, k_safe_table_px=None)
         codes = {i.code for i in validate_plan(plan, model, anchor, scene, safety).issues}
         self.assertIn("k_safe_uncertified", codes)
 
     def _plan_for(self, scene, model, anchor, safety, step_interval_s=0.2):
-        from real_validation.planner_service import build_plan
+        from real_validation.planning.planner_service import build_plan
         return build_plan(model_actions=((10,), (20,)), channel_map=(0,),
                           step_interval_s=step_interval_s, model=model, anchor=anchor,
                           scene=scene, safety=safety)
 
     def test_unsupported_obstacle_blocks(self):
-        from real_validation.preflight import validate_plan
+        from real_validation.execution.preflight import validate_plan
         _, model, anchor, _, safety = self._base()
         scene_with_poly = Scene("t", (
             ScenePrimitive("target_point", "model", {"xy": [2, 3]}),
@@ -210,7 +210,7 @@ class PreflightNewGatesTest(unittest.TestCase):
 
     def test_supported_aabb_passes_when_planned(self):
         """obstacle_aabb 在 planner 支持后不再是 unsupported(AABB SDF 已在 obstacles)。"""
-        from real_validation.preflight import validate_plan
+        from real_validation.execution.preflight import validate_plan
         _, model, anchor, _, safety = self._base()
         scene_with_aabb = Scene("t", (
             ScenePrimitive("target_point", "model", {"xy": [2, 3]}),
@@ -271,7 +271,7 @@ class CliGuiConsistencyTest(unittest.TestCase):
     """
 
     def test_shared_objective_matches_across_call_sites(self):
-        from real_validation.obstacles import cli_obstacle_loss, obstacle_term
+        from real_validation.planning.obstacles import cli_obstacle_loss, obstacle_term
         # 全 0 落在障碍圆内 → 非零 penalty,两个调用点必须逐位一致
         preds = torch.zeros(4, 15, 3, dtype=torch.float64)
         center = torch.zeros(3, dtype=torch.float64)
@@ -304,7 +304,7 @@ class LiveAnchorTest(unittest.TestCase):
         })()
 
     def _anchor(self, **overrides):
-        from real_validation.live_anchor import anchor_from_camera_frame
+        from real_validation.runtime.anchors import anchor_from_camera_frame
         from real_validation.perception.segmentation import segment_white_on_blue
         bgr, bg = self._frame()
         mask = segment_white_on_blue(bgr, bg)
@@ -383,14 +383,14 @@ class WarmupTest(unittest.TestCase):
     """P3:冷启动动作序列 + 6 通道展开。"""
 
     def test_warmup_actions_shape_and_bounds(self):
-        from real_validation.warmup import warmup_actions
+        from real_validation.runtime.warmup import warmup_actions
         seq = warmup_actions(3, 40)
         self.assertEqual(seq.shape, (40, 3))
         self.assertTrue(np.all(seq >= 0.0) and np.all(seq <= 1.0))
         self.assertGreater(seq.max(), 0.5)     # ramp 到 0.8
 
     def test_triangle_covers_load_and_unload(self):
-        from real_validation.warmup import warmup_actions
+        from real_validation.runtime.warmup import warmup_actions
         seq = warmup_actions(1, 60, kind="triangle")
         # 升段后再降段:存在 v 先升后降
         peak = seq.max()
@@ -399,7 +399,7 @@ class WarmupTest(unittest.TestCase):
         self.assertLess(last, peak)           # 回落后小于峰值
 
     def test_expand_to_6ch(self):
-        from real_validation.warmup import expand_to_6ch
+        from real_validation.runtime.warmup import expand_to_6ch
         actions = np.array([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]])
         expanded = expand_to_6ch(actions, (0, 1, 2))
         self.assertEqual(expanded.shape, (2, 6))

@@ -19,8 +19,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtWidgets import QApplication
 
-from real_validation.models import ScenePrimitive
-from real_validation.session import ExperimentSession
+from real_validation.contracts.models import ScenePrimitive
+from real_validation.core.session import ExperimentSession
 from real_validation.widgets.primitive_items import scene_primitive_item
 
 # 惰性创建单个 QApplication,避免 unittest 多次 init
@@ -73,7 +73,7 @@ class PrimitivePenRegressionTest(unittest.TestCase):
 
     def test_target_skeleton_kind_is_in_whitelist(self):
         # 白名单缺 target_skeleton 会让 primitive_items 的该分支成死代码
-        from real_validation.models import Scene
+        from real_validation.contracts.models import Scene
         scene = Scene("s", (ScenePrimitive("target_skeleton", "model",
                                            {"nodes": [[0, 0], [1, 1]]}),))
         self.assertEqual(len(scene.primitives), 1)
@@ -87,7 +87,7 @@ class SceneSummaryRegressionTest(unittest.TestCase):
         _ensure_app()
 
     def test_add_target_and_obstacle_writes_scene_summary(self):
-        from real_validation.main_validation import ValidationWindow
+        from real_validation.gui.main_window import ValidationWindow
         window = ValidationWindow()
         window.session = ExperimentSession.create(
             tempfile.mkdtemp(prefix="gui_regress_"))
@@ -112,7 +112,7 @@ class SceneSummaryRegressionTest(unittest.TestCase):
     def test_numeric_add_syncs_visualization(self):
         # 打磨:数值添加(_set_target/_add_obstacle)后,右侧 camera_view 原语与
         # scene_editor 列表必须同步更新(原先只有工具点加才刷新)。
-        from real_validation.main_validation import ValidationWindow
+        from real_validation.gui.main_window import ValidationWindow
         window = ValidationWindow()
         window.session = ExperimentSession.create(
             tempfile.mkdtemp(prefix="gui_regress_sync_"))
@@ -139,7 +139,7 @@ class SceneSummaryRegressionTest(unittest.TestCase):
         # 功能③:『点出目标骨架』—— 依次点击累积节点,双击提交 target_skeleton
         import numpy as np
         from PyQt5.QtCore import QPointF
-        from real_validation.main_validation import ValidationWindow
+        from real_validation.gui.main_window import ValidationWindow
         window = ValidationWindow()
         window.session = ExperimentSession.create(
             tempfile.mkdtemp(prefix="gui_regress_skel_"))

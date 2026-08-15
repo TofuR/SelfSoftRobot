@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import numpy as np
 
 from scripts.real.masks_to_transition_npz import action_max_per_channel
-from real_validation.io import file_sha256
+from real_validation.contracts.io import file_sha256
 
 
 def find_checkpoint(exp_dir):

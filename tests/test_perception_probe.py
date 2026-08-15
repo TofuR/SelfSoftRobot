@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-PROBE = REPO / "real_validation" / "perception_probe.py"
+PROBE = REPO / "real_validation" / "tools" / "perception_probe.py"
 
 
 def _write_synthetic_sequence(directory: Path, count: int = 4):
@@ -124,7 +124,7 @@ class ProbeTest(unittest.TestCase):
         """配准在 loop 前对首帧算一次，位移必须喂进每帧 quality 门控的 flags。"""
         import cv2
         from real_validation.perception.quality import QualityThresholds
-        from real_validation.perception_probe import run_probe
+        from real_validation.tools.perception_probe import run_probe
 
         frame, background_gray = _noisy_bgr_scene()
         frames = [np.roll(frame, index, axis=1).copy() for index in range(3)]
