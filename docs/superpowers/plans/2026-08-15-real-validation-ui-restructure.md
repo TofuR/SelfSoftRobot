@@ -36,7 +36,7 @@
 
 ```python
 import numpy as np
-from real_validation.gui.widgets.camera_view import CameraViewWidget
+from real_validation.widgets.camera_view import CameraViewWidget
 
 class MainDisplayLayerTest(unittest.TestCase):
     def setUp(self):
@@ -172,7 +172,7 @@ git commit -m "feat(real_validation): CameraViewWidget 增强 —— 多层叠�
 `tests/test_gui_regressions.py` 加:
 
 ```python
-from real_validation.gui.widgets.scene_editor import SceneEditorPanel
+from real_validation.widgets.scene_editor import SceneEditorPanel
 from real_validation.contracts.models import Scene, ScenePrimitive
 
 class SceneEditorMultiSelectTest(unittest.TestCase):
