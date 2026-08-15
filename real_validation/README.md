@@ -1,5 +1,7 @@
 # Real Robot Validation Workbench
 
+> **GUI 使用指南见 [`GUI_GUIDE.md`](GUI_GUIDE.md)** —— 五页功能、使用顺序、标准操作流程、当前能力边界。
+
 第一版提供独立于采集 GUI 的验证工作台基础：
 
 - 不可变 model/anchor/scene/safety/plan 数据契约；

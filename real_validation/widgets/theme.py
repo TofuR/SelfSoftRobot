@@ -142,7 +142,7 @@ PGG_OPTS = dict(background=CARD, foreground=TEXT_MAIN)
 # SessionState.value -> 状态色块边框/文字色。SessionState 见 real_validation/session.py。
 STATE_BADGE_COLORS = {
     "idle": TEXT_MUTED,
-    "planning": DANGER,
+    "planning": WARN_ORANGE,
     "ready": OK_GREEN,
     "armed": WARN_ORANGE,
     "executing": DANGER,
