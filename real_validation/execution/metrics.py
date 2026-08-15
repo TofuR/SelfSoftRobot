@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .models import SafetyPolicy, Scene
+from ..contracts.models import SafetyPolicy, Scene
 
 
 def _states(value, name: str) -> np.ndarray:

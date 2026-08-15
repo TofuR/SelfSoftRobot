@@ -13,10 +13,10 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable, Protocol, Sequence, TYPE_CHECKING
 
-from .models import ActionPlan, SafetyPolicy
+from ..contracts.models import ActionPlan, SafetyPolicy
 
 if TYPE_CHECKING:
-    from .observation_policy import ActionHistoryBuffer
+    from ..runtime.observation_policy import ActionHistoryBuffer
 
 
 @dataclass(frozen=True)

@@ -9,7 +9,7 @@
    拉入部署侧依赖。新增重导出前先跑 tests/test_import_hygiene.py。
 """
 
-from .models import (
+from .contracts.models import (
     ActionPlan,
     Anchor,
     ModelDescriptor,
@@ -17,7 +17,7 @@ from .models import (
     Scene,
     ScenePrimitive,
 )
-from .session import ExperimentSession, SessionState
+from .core.session import ExperimentSession, SessionState
 
 __all__ = [
     "ActionPlan",

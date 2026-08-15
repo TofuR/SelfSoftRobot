@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from .models import ActionPlan, Anchor, ModelDescriptor, SafetyPolicy, Scene
+from ..contracts.models import ActionPlan, Anchor, ModelDescriptor, SafetyPolicy, Scene
 
 
 def expand_model_actions(actions: Sequence[Sequence[float]],

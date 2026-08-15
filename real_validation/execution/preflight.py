@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from .models import ActionPlan, Anchor, ModelDescriptor, SafetyPolicy, Scene
+from ..contracts.models import ActionPlan, Anchor, ModelDescriptor, SafetyPolicy, Scene
 
 
 @dataclass(frozen=True)

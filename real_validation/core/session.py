@@ -8,9 +8,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .io import atomic_write_json, read_json
-from .models import ActionPlan, Anchor, ModelDescriptor, SafetyPolicy, Scene
-from .preflight import PreflightResult, validate_plan
+from ..contracts.io import atomic_write_json, read_json
+from ..contracts.models import ActionPlan, Anchor, ModelDescriptor, SafetyPolicy, Scene
+from ..execution.preflight import PreflightResult, validate_plan
 
 
 class SessionState(str, Enum):

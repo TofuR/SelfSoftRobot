@@ -16,9 +16,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .runtime import plan_rollout
+from ..runtime import plan_rollout
 
-from .models import Anchor, ModelDescriptor, SafetyPolicy, Scene
+from ..contracts.models import Anchor, ModelDescriptor, SafetyPolicy, Scene
 from .planner_service import build_plan
 from .units import kPa_to_model, model_to_kPa
 
@@ -187,8 +187,8 @@ def _skeleton_dists(predictions, target_nodes, scale, center):
 def _resolve_k(config, descriptor, model, target, state, center, scale):
     """固定 K 或 auto_k(step_budget 从学到的 delta_scale 现算)→ (k_effective, gap_px)。"""
     if config.auto_k:
-        from .planning.auto_k import (gap_px_point, gap_px_skeleton,
-                                      select_k_by_gap, step_budget_px)
+        from .auto_k import (gap_px_point, gap_px_skeleton,
+                             select_k_by_gap, step_budget_px)
         budget = step_budget_px(model)
         if target["kind"] == "target_skeleton":
             now_px = (state.squeeze(0).detach().cpu().numpy()
