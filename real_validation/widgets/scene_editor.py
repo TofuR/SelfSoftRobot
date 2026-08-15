@@ -9,7 +9,7 @@ from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (QFormLayout, QHBoxLayout, QLabel, QLineEdit,
                              QListWidget, QPushButton, QVBoxLayout, QWidget)
 
-from ..models import Scene, ScenePrimitive
+from ..contracts.models import Scene, ScenePrimitive
 
 
 class SceneEditorPanel(QWidget):

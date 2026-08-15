@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .io import file_sha256
-from .models import ModelDescriptor
-from .runtime import load_openloop_model
+from ..contracts.io import file_sha256
+from ..contracts.models import ModelDescriptor
+from . import load_openloop_model
 
 
 def _nearby_config(checkpoint: Path) -> dict[str, Any]:
@@ -77,7 +77,7 @@ class ModelRuntime:
         manifest_raw = _nearby_manifest(checkpoint_path)
         manifest = None
         if manifest_raw:
-            from .deploy_manifest import DeployManifest
+            from ..contracts.deploy_manifest import DeployManifest
             try:
                 manifest = DeployManifest.from_dict(manifest_raw)
             except ValueError:

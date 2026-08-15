@@ -57,5 +57,5 @@ def expand_to_6ch(actions_model, channel_map) -> np.ndarray:
     委托 planner_service.expand_model_actions(共享 6 通道展开逻辑,含 channel_map
     唯一性/范围校验)。
     """
-    from .planner_service import expand_model_actions
+    from ..planning.planner_service import expand_model_actions
     return np.asarray(expand_model_actions(actions_model, channel_map), dtype=np.float64)

@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from .models import Anchor
-from .perception.quality import QualityThresholds, assess_frame
-from .perception.segmentation import segment_white_on_blue
-from .perception.skeleton import extract_skeleton_2d
+from ..contracts.models import Anchor
+from ..perception.quality import QualityThresholds, assess_frame
+from ..perception.segmentation import segment_white_on_blue
+from ..perception.skeleton import extract_skeleton_2d
 
 # 分割/骨架所需 cv2/scipy 由 perception 子模块内部处理;本模块只依赖 numpy 与上述调用。
 

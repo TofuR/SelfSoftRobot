@@ -14,7 +14,7 @@ import pyqtgraph as pg
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-from ..models import Scene, ScenePrimitive
+from ..contracts.models import Scene, ScenePrimitive
 from .primitive_items import TARGET_COLOR, scene_primitive_item
 
 _SKELETON_COLOR = "#2CB1BC"

@@ -1,6 +1,6 @@
 """实机验证工作台 GUI 第一版。
 
-运行：``python -m real_validation.main_validation``。
+运行：``python -m real_validation.main``(入口壳)。
 当前完成离线/Mock 会话、模型元数据加载、scene/anchor/plan 导入、preflight 与
 Mock ACK 执行；真硬件连接与交互式 scene view 按 TODO 后续阶段接入。
 """
@@ -12,9 +12,9 @@ import threading
 import traceback
 from pathlib import Path
 
-if __package__ in (None, ""):  # 支持复制目录后直接 ``python main_validation.py``
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    __package__ = "real_validation"
+if __package__ in (None, ""):  # 支持复制目录后直接 ``python gui/main_window.py``
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+    __package__ = "real_validation.gui"
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
@@ -24,18 +24,18 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from .executor import MockCommandTransport, PlanExecutor
-from .io import atomic_write_json, read_json
-from .model_runtime import ModelRuntime
-from .models import ActionPlan, Anchor, SafetyPolicy, Scene, ScenePrimitive
-from .openloop_planner import OpenLoopShootingPlanner, ShootingConfig
-from .offline_anchor import anchor_from_npz
-from .plan_io import write_actions6_csv
-from .session import ExperimentSession, SessionState
-from .widgets import CameraViewWidget, PlanPreviewWidget, SceneEditorPanel
-from .widgets.theme import QSS, CARD, STATE_BADGE_COLORS, configure_pyqtgraph
+from ..execution.executor import MockCommandTransport, PlanExecutor
+from ..contracts.io import atomic_write_json, read_json
+from ..runtime.model_runtime import ModelRuntime
+from ..contracts.models import ActionPlan, Anchor, SafetyPolicy, Scene, ScenePrimitive
+from ..planning.openloop_planner import OpenLoopShootingPlanner, ShootingConfig
+from ..runtime.anchors import anchor_from_npz
+from ..contracts.plan_io import write_actions6_csv
+from ..core.session import ExperimentSession, SessionState
+from ..widgets import CameraViewWidget, PlanPreviewWidget, SceneEditorPanel
+from .theme import QSS, CARD, STATE_BADGE_COLORS, configure_pyqtgraph
 
-APP_DIR = Path(__file__).resolve().parent
+APP_DIR = Path(__file__).resolve().parent.parent  # real_validation/ 包根(数据目录 config/checkpoints/data/runs 不变)
 
 
 class _ModelLoadThread(QThread):
@@ -51,7 +51,7 @@ class _ModelLoadThread(QThread):
         self.k_safe = k_safe
 
     def run(self) -> None:
-        from .model_runtime import ModelLoadError
+        from ..runtime.model_runtime import ModelLoadError
         try:
             runtime = ModelRuntime(self.checkpoint, self.data_dir or None, self.device,
                                    k_safe=self.k_safe)
@@ -78,7 +78,7 @@ class _ValveConnectThread(QThread):
 
     def run(self) -> None:
         try:
-            from .hardware.valve import connect_valve_groups
+            from ..hardware.valve import connect_valve_groups
             results = connect_valve_groups(self.controller, groups=self.groups)
             ok_groups = [gid for gid, (ok, _) in results.items() if ok]
             failed_groups = [gid for gid, (ok, _) in results.items() if not ok]
@@ -473,8 +473,8 @@ class ValidationWindow(QMainWindow):
         self._latest_frame = bgr
         self.camera_view.set_frame(bgr)
         if self.runtime is not None:
-            from .perception.segmentation import segment_white_on_blue
-            from .perception.skeleton import extract_skeleton_2d
+            from ..perception.segmentation import segment_white_on_blue
+            from ..perception.skeleton import extract_skeleton_2d
             # Mock 场景:背景 = 帧自身灰度近似(真机用 manifest.segment_params + 无臂静态背景)
             mask = segment_white_on_blue(bgr, self._gray(bgr))
             skeleton, _ = extract_skeleton_2d(mask, self.runtime.descriptor.n_nodes,
@@ -489,7 +489,7 @@ class ValidationWindow(QMainWindow):
         if not self.runtime or self.runtime.descriptor.action_scale_kpa is None:
             self._error("warmup 需要已加载带 manifest 的模型")
             return
-        from .warmup import warmup_actions
+        from ..runtime.warmup import warmup_actions
         descriptor = self.runtime.descriptor
         seq = warmup_actions(descriptor.action_dim, descriptor.history_steps, kind="ramp")
         self._action_history = [tuple(float(v) for v in row) for row in seq]
@@ -512,7 +512,7 @@ class ValidationWindow(QMainWindow):
         if not self._action_history and not self.zero_history_cb.isChecked():
             self._error("无动作历史:勾选『零历史起步』可免 warmup 直接锚定,或先点 Warmup")
             return
-        from .live_anchor import anchor_from_camera_frame
+        from ..runtime.anchors import anchor_from_camera_frame
         descriptor = self.runtime.descriptor
         bg = self._gray(self._latest_frame)   # mock 场景:背景即自身灰度近似
         manifest = self.runtime.manifest
@@ -748,7 +748,7 @@ class ValidationWindow(QMainWindow):
         if self._valve_connect_thread and self._valve_connect_thread.isRunning():
             return
         try:
-            from .hardware.valve import create_valve_controller
+            from ..hardware.valve import create_valve_controller
             controller = create_valve_controller(g1, g2, baudrate=self.hw_baud.value())
         except Exception as error:
             self._error(f"构造阀控制器失败: {error}")
@@ -992,9 +992,9 @@ class ValidationWindow(QMainWindow):
         调它的 send,内部经 QueuedConnection 转发到 controller 的 Qt 线程。
         """
         if self.valve_controller is not None:
-            from .hardware_session import QtValveTransport
+            from ..execution.hardware_session import QtValveTransport
             return QtValveTransport(self.valve_controller)
-        from .executor import MockCommandTransport
+        from ..execution.executor import MockCommandTransport
         return MockCommandTransport()
 
     def _execute(self) -> None:
@@ -1002,7 +1002,7 @@ class ValidationWindow(QMainWindow):
             self._error("计划必须先通过 Preflight 并 Arm")
             return
         # 功能①:执行时累积本次实验的真实动作历史,供后续滚动重锚定/重规划
-        from .observation_policy import ActionHistoryBuffer
+        from ..runtime.observation_policy import ActionHistoryBuffer
         descriptor = self.runtime.descriptor if self.runtime else None
         if descriptor is not None and descriptor.channel_map is not None:
             if (getattr(self, "_history_buffer", None) is None
@@ -1027,7 +1027,7 @@ class ValidationWindow(QMainWindow):
         assert self.session is not None
         self.session.transition(SessionState.COMPLETED, "all commands acked")
         # P4:执行摘要 —— 命令安全 + jitter 统计(替代占位符)
-        from .metrics import evaluate_command_safety, evaluate_plan_scene
+        from ..execution.metrics import evaluate_command_safety, evaluate_plan_scene
         plan = self.session.plan
         actions6 = [tuple(r.applied6) for r in receipts]
         safety_metrics = evaluate_command_safety(

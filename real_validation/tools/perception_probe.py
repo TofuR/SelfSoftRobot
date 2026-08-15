@@ -28,17 +28,17 @@ import sys
 import time
 from pathlib import Path
 
-if __package__ in (None, ""):  # 支持复制目录后直接 ``python perception_probe.py``
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    __package__ = "real_validation"
+if __package__ in (None, ""):  # 支持复制目录后直接 ``python tools/perception_probe.py``
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+    __package__ = "real_validation.tools"
 
 import numpy as np
 
-from .perception.background import background_drift, load_median_background
-from .perception.quality import QualityThresholds, assess_frame
-from .perception.registration import estimate_registration, save_registration
-from .perception.segmentation import segment_white_on_blue
-from .perception.skeleton import extract_skeleton_2d
+from ..perception.background import background_drift, load_median_background
+from ..perception.quality import QualityThresholds, assess_frame
+from ..perception.registration import estimate_registration, save_registration
+from ..perception.segmentation import segment_white_on_blue
+from ..perception.skeleton import extract_skeleton_2d
 
 _SKELETON_COLOR = (255, 255, 0)   # BGR 青
 _MASK_COLOR = (0, 0, 255)         # BGR 红

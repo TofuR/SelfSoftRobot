@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .models import Anchor, ModelDescriptor
+from ..contracts.models import Anchor, ModelDescriptor
 
 
 def anchor_from_npz(path: str | Path, frame_index: int, model: ModelDescriptor,

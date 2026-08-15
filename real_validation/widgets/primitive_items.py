@@ -10,7 +10,7 @@ import pyqtgraph as pg
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QGraphicsEllipseItem, QGraphicsRectItem
 
-from ..models import ScenePrimitive
+from ..contracts.models import ScenePrimitive
 
 TARGET_COLOR = "#E53E3E"
 OBSTACLE_COLOR = "#B7791F"
