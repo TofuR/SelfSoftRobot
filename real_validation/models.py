@@ -157,6 +157,7 @@ class ScenePrimitive:
     def __post_init__(self) -> None:
         if self.kind not in {
             "target_point", "target_circle", "target_rectangle", "target_polygon",
+            "target_skeleton",
             "obstacle_circle", "obstacle_aabb", "obstacle_polygon", "obstacle_mask",
             "waypoint", "gate", "observation_port", "workspace",
         }:

@@ -63,10 +63,20 @@ class PrimitivePenRegressionTest(unittest.TestCase):
         self.assertTrue(pen.color().isValid())
         self.assertIn(pen.color().name(), ("#e53e3e", "#E53E3E"))
 
-    def test_target_point_pen_valid(self):
-        item = scene_primitive_item(
-            ScenePrimitive("target_point", "model", {"xy": [5, 5]}))
-        self.assertIsNotNone(item)
+    def test_target_point_and_skeleton_pen_valid(self):
+        for primitive in (
+            ScenePrimitive("target_point", "model", {"xy": [5, 5]}),
+            ScenePrimitive("target_skeleton", "model", {"nodes": [[0, 0], [10, 10]]}),
+        ):
+            item = scene_primitive_item(primitive)
+            self.assertIsNotNone(item)
+
+    def test_target_skeleton_kind_is_in_whitelist(self):
+        # 白名单缺 target_skeleton 会让 primitive_items 的该分支成死代码
+        from real_validation.models import Scene
+        scene = Scene("s", (ScenePrimitive("target_skeleton", "model",
+                                           {"nodes": [[0, 0], [1, 1]]}),))
+        self.assertEqual(len(scene.primitives), 1)
 
 
 class SceneSummaryRegressionTest(unittest.TestCase):
