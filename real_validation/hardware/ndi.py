@@ -3,11 +3,11 @@
 设计 spec §3.3:ndi_mm 只进评价、**永不进控制/模型**。本模块把 NDI 封装成
 只读的评价观测源 —— 执行期同步记录末端 mm 真值,但绝不喂给 planner 或模型。
 真机依赖 scikit-surgerynditracker;延迟 import。
+
+NdiThread 驱动移植在 Task 3(此处暂保留 real_capture 延迟 import 占位)。
 """
 
 from __future__ import annotations
-
-from ._bootstrap import ensure_real_capture_importable
 
 
 class NdiHardwareError(RuntimeError):
@@ -22,7 +22,6 @@ def create_ndi_thread(port: str, *, rate_hz: float = 50.0, ndi_count: int = 1):
     """构造真机 NdiThread(QThread,emit ndi_data 末端 mm 真值)。"""
     if not port:
         raise NdiHardwareError("NDI 需要串口(COM)")
-    ensure_real_capture_importable()
     from real_capture.hardware_threads import NdiThread  # type: ignore[import-not-found]
     return NdiThread(port=port, rate_hz=rate_hz, ndi_count=ndi_count)
 

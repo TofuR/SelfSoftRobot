@@ -1,22 +1,20 @@
 """hardware/ 适配层的纯逻辑测试(不依赖真机硬件/串口)。
 
-覆盖:_bootstrap sys.path 桥接、valve 单位收口、camera 指纹断言、ndi 隐藏评价流。
+覆盖:valve 自包含与单位收口、camera 指纹断言、ndi 隐藏评价流。
 真机 import(ValveController/RealSenseCam/NdiThread)在真机才有,本测试不触碰。
 """
 
 import sys
 import unittest
 
-from real_validation.hardware._bootstrap import ensure_real_capture_importable
 from real_validation.hardware import camera, ndi, valve
 
 
-class BootstrapTest(unittest.TestCase):
-    def test_ensure_real_capture_is_importable(self):
-        path = ensure_real_capture_importable()
-        self.assertTrue(path.is_dir())
-        self.assertEqual(path.name, "real_capture")
-        self.assertIn(str(path), sys.path)
+class ValveSelfContainedTest(unittest.TestCase):
+    def test_valve_module_does_not_import_real_capture(self):
+        # 移植后硬件模块必须完全自包含(不触碰 real_capture)
+        self.assertNotIn("real_capture", sys.modules)
+        self.assertNotIn("modbus_manager", sys.modules)   # 顶层模块名也不该出现
 
 
 class ValveAdapterTest(unittest.TestCase):

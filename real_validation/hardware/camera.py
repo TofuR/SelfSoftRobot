@@ -3,13 +3,13 @@
 设计 spec §3.2:相机是"数据来源",必须与训练采集位姿一致 —— 用
 deploy_manifest.camera 指纹(serial/width/height/fps)校验,防用错设备导致
 骨架坐标与训练分布漂移。真机依赖 pyrealsense2;延迟 import。
+
+RealSenseCam 驱动移植在 Task 2(此处暂保留 real_capture 延迟 import 占位)。
 """
 
 from __future__ import annotations
 
 from typing import Any
-
-from ._bootstrap import ensure_real_capture_importable
 
 
 class CameraHardwareError(RuntimeError):
@@ -19,7 +19,6 @@ class CameraHardwareError(RuntimeError):
 def create_realsense_cam(width: int = 640, height: int = 480, fps: int = 30,
                          serial: str | None = None):
     """构造真机 RealSenseCam(QThread,start() 后 emit 帧)。"""
-    ensure_real_capture_importable()
     from real_capture.realsense_cam import RealSenseCam  # type: ignore[import-not-found]
     return RealSenseCam(width=width, height=height, fps=fps, serial=serial)
 
