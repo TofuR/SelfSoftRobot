@@ -1,4 +1,4 @@
 @echo off
-cd /d "%~dp0"
-python main_validation.py
+cd /d "%~dp0.."
+python -m real_validation.main
 if errorlevel 1 pause

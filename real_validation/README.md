@@ -16,8 +16,9 @@
 
 ## 搬到 PC
 
-直接复制整个 `real_validation/` 目录，不需要复制项目的 `src/`、`scripts/`、
-`real_capture/`、`config/` 或 `train_log/`。在 PC 上安装本目录依赖：
+直接复制整个 `real_validation/` 目录 —— **完全自包含**,不需要项目的 `src/`、
+`scripts/`、`real_capture/`、`config/` 或 `train_log/` 等任何其它目录并排部署。
+在 PC 上安装本目录依赖：
 
 ```bash
 python -m pip install -r requirements.txt
@@ -45,10 +46,10 @@ python -m pip install -r requirements-perception.txt
 启动 GUI：
 
 ```bash
-python main_validation.py
+python -m real_validation.main
 ```
 
-Windows 也可以双击 `run_gui.bat`。所有默认路径都由 `main_validation.py` 所在目录
+Windows 也可以双击 `run_gui.bat`。所有默认路径都由 `real_validation/` 包所在目录
 计算，不依赖启动时的工作目录。
 
 ## 自检
@@ -60,10 +61,11 @@ Windows 也可以双击 `run_gui.bat`。所有默认路径都由 `main_validatio
 python -c "import real_validation; print('contracts ok')"
 ```
 
-完整测试（20 个契约测试 + 感知 parity + import 卫生）在仓库根运行：
+完整测试（10 个模块、130 个测试:契约 + 硬件适配 + GUI 回归 + 感知
+parity/registration/quality/probe + import 卫生)在仓库根运行:
 
 ```bash
-python -m unittest tests.test_real_validation_core tests.test_perception_parity tests.test_import_hygiene -v
+python -m unittest discover -s tests -v
 ```
 
 当前 GUI 中的执行明确标记为 Mock。真阀连接面板、在线骨架提取和完整交互式 Scene

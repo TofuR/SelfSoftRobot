@@ -1,6 +1,6 @@
 # 实机验证工作台 GUI 使用指南
 
-> 运行:`python main_validation.py`(或双击 `run_gui.bat`)。本目录随部署整体拷贝到 PC,操作者机器上直接可用。
+> 运行:`python -m real_validation.main`(或双击 `run_gui.bat`)。本目录随部署整体拷贝到 PC,**完全自包含**(不需 real_capture 并排部署),操作者机器上直接可用。
 > 对应设计文档:`docs/experiments/real_robot_validation_workbench_todo.md`、`docs/superpowers/specs/2026-07-28-real-validation-task-layer-ik-design.md`。
 
 ---
@@ -46,7 +46,7 @@ GUI 用五个 Tab 页串起"**加载模型 → 建立状态锚点 → 定义目�
 ### 2.2 Page 2 · Observe & Scene — 建立锚点、定义目标与障碍
 
 > 前置:已 `Load Model`。锚点(s_{t-1} + 动作历史)是模型规划的起点,必须有。
-> 布局:**左右两栏**(对齐 real_capture)—— 左栏控制面板(离线锚定/目标与障碍/实时相机),右栏场景编辑(相机视图 + 原语列表)。
+> 布局:**左右两栏**(沿用采集 GUI 的布局风格,已自包含实现)—— 左栏控制面板(离线锚定/目标与障碍/实时相机),右栏场景编辑(相机视图 + 原语列表)。
 
 | 卡片 | 控件 | 作用 |
 |---|---|---|
@@ -161,7 +161,7 @@ session 状态机:`IDLE → PLANNING → READY → ARMED → EXECUTING → PAUSE
 
 | 能力 | 状态 |
 |---|---|
-| 执行链路 | **Mock 默认**;Setup 页『硬件连接』填两组串口连真机阀后 → `Hardware: REAL VALVE`,执行走 QtValveTransport(线程安全桥接 real_capture 的 ValveController);失败/未连回退 Mock |
+| 执行链路 | **Mock 默认**;Setup 页『硬件连接』填两组串口连真机阀后 → `Hardware: REAL VALVE`,执行走 QtValveTransport(线程安全桥接 `hardware/valve.py` 的 ValveController,已自包含移植);失败/未连回退 Mock |
 | 相机 | **合成演示帧**(Mock);真机换 RealSenseCam(`hardware/camera.py` 适配层已就位,含指纹断言) |
 | NDI | `hardware/ndi.py` 适配层已就位(隐藏评价流,只进评价不进模型);真机接 COM 后启用 |
 | 在线锚定/warmup | 可用;**零历史起步**(默认勾选,免 warmup,⚠️ OOD 标注);Warmup 可选填真实历史;真机需带 manifest 的 checkpoint |
