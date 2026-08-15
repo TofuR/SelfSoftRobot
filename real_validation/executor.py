@@ -11,9 +11,12 @@ import threading
 import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Callable, Protocol, Sequence
+from typing import Callable, Protocol, Sequence, TYPE_CHECKING
 
 from .models import ActionPlan, SafetyPolicy
+
+if TYPE_CHECKING:
+    from .observation_policy import ActionHistoryBuffer
 
 
 @dataclass(frozen=True)
@@ -81,10 +84,12 @@ class ExecutionError(RuntimeError):
 
 class PlanExecutor:
     def __init__(self, transport: CommandTransport, safety: SafetyPolicy,
-                 event_callback: Callable[[str, dict], None] | None = None):
+                 event_callback: Callable[[str, dict], None] | None = None,
+                 history_buffer: "ActionHistoryBuffer | None" = None):
         self.transport = transport
         self.safety = safety
         self.event_callback = event_callback
+        self.history_buffer = history_buffer
         self._abort = threading.Event()
         self._resume = threading.Event()
         self._resume.set()
@@ -141,6 +146,9 @@ class PlanExecutor:
                 # 记录期望下发时刻(绝对时基)→ jitter 可归因
                 receipt = replace(receipt, t_expected=deadline)
                 self.receipts.append(receipt)
+                # 功能①:运行累积本次实验的实际动作历史(供后续重锚定/滚动规划)
+                if self.history_buffer is not None and receipt.status == "ack":
+                    self.history_buffer.append_applied6(receipt.applied6)
                 self._emit("command", {"step": step, "receipt": asdict(receipt)})
                 if receipt.status != "ack":
                     raise ExecutionError(f"command {receipt.command_id}: {receipt.status}")

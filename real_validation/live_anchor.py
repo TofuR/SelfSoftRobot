@@ -22,13 +22,23 @@ from .perception.skeleton import extract_skeleton_2d
 # 分割/骨架所需 cv2/scipy 由 perception 子模块内部处理;本模块只依赖 numpy 与上述调用。
 
 
+def _model_history_steps(model) -> int:
+    """模型动作历史窗口长度(先 temporal.window_size,再 history_steps,兜底 40)。"""
+    temporal = getattr(model, "temporal", None)
+    window = getattr(temporal, "window_size", None)
+    if window:
+        return int(window)
+    return int(getattr(model, "history_steps", 40) or 40)
+
+
 def anchor_from_camera_frame(
         bgr, *, background_gray, segment_params: dict, n_nodes: int, model,
         action_history, area_median_px: float,
         prev_skeleton=None, frame_age_s: float | None = None,
         registration_displacement_px: float | None = None,
         frame_ref: str = "", state_space: str = "model_normalized",
-        action_units: str = "model_normalized", source: str = "camera_live"):
+        action_units: str = "model_normalized", source: str = "camera_live",
+        zero_pad_history: bool = False):
     """单帧 BGR → (Anchor, FrameQuality, skeleton_px)。
 
     质量门 verdict == "reject" 时返回 (None, quality, skeleton_px)—— 调用方不得上锚。
@@ -36,6 +46,10 @@ def anchor_from_camera_frame(
 
     area_median_px 必须显式提供(quality.QualityThresholds 无默认值;来自
     deploy_manifest.mask_area_median_px)。
+
+    zero_pad_history:action_history 为空/不足时,是否零填充到完整 H 步(模型
+    history_steps 从 model 的 config 推断)。⚠️ 模型训练从没见过零填充窗口,
+    零填充起步是 OOD(预测可能不准),只在操作员明确接受时开启(GUI 需标注)。
     """
     mask = segment_white_on_blue(bgr, background_gray, **segment_params)
     skeleton, info = extract_skeleton_2d(mask, n_nodes, tip_fix=True, return_info=True)
@@ -48,8 +62,22 @@ def anchor_from_camera_frame(
         return None, quality, skeleton
 
     history = tuple(tuple(float(v) for v in action) for action in action_history)
-    if not history or any(len(action) != len(history[0]) for action in history):
+    if history and any(len(action) != len(history[0]) for action in history):
         raise ValueError("action_history 必须是 (H, action_dim) 且宽度一致")
+    history_steps = _model_history_steps(model)
+    action_dim = getattr(model, "action_dim", None)
+    if action_dim is None and history:
+        action_dim = len(history[0])
+    if not history:
+        if not zero_pad_history:
+            raise ValueError("action_history 为空;开启 zero_pad_history 可用全 0 历史起步")
+        if action_dim is None:
+            raise ValueError("zero_pad_history 需要模型暴露 action_dim")
+        history = ((0.0,) * action_dim,) * history_steps
+    elif zero_pad_history and len(history) < history_steps:
+        # 部分历史 + 零填充到完整 H(运行几步后累积的真实历史 + 前缀零)
+        pad = ((0.0,) * len(history[0]),) * (history_steps - len(history))
+        history = pad + history
 
     # 归一化(与 offline_anchor 同款;live 只取平面 [:2],pc_scale[2]=1e-6 退化)
     from .anchor_utils import float_rows, model_normalization, normalize_rows

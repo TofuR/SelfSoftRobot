@@ -230,6 +230,18 @@ class ValidationCoreTest(unittest.TestCase):
         history.append_applied6((5, 4, 3, 2, 1, 0))
         self.assertEqual(history.snapshot(), ((1.0, 4.0), (4.0, 1.0)))
 
+    def test_executor_accumulates_applied_history_for_reanchor(self):
+        # 功能①:执行后,本次实验的实际下发动作累积进 history_buffer(供滚动重锚定)
+        _, _, _, safety, plan = fixtures()
+        history = ActionHistoryBuffer(history_steps=2, action_dim=1, channel_map=(0,))
+        executor = PlanExecutor(MockCommandTransport(), safety, history_buffer=history)
+        executor.execute(plan)
+        self.assertTrue(history.ready)
+        snapshot = history.snapshot()
+        self.assertEqual(len(snapshot), 2)
+        self.assertEqual(len(snapshot[0]), 1)   # action_dim=1
+        self.assertNotEqual(snapshot[0], (0.0,))  # 累积的是真实下发值,不是零
+
     def test_offline_npz_anchor_requires_full_history(self):
         import torch
         model, _, _, _, _ = fixtures()

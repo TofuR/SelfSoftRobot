@@ -297,8 +297,10 @@ class LiveAnchorTest(unittest.TestCase):
         return shifted, bg_shifted
 
     def _stub_model(self):
+        temporal = type("Temporal", (), {"window_size": 40})()
         return type("Geometry", (), {
             "pc_center": torch.zeros(3), "pc_scale": torch.ones(3),
+            "action_dim": 3, "temporal": temporal,
         })()
 
     def _anchor(self, **overrides):
@@ -326,6 +328,25 @@ class LiveAnchorTest(unittest.TestCase):
         self.assertEqual(anchor.state_space, "model_normalized")
         self.assertIn("verdict", anchor.quality)
         self.assertEqual(skeleton.shape, (15, 2))
+
+    def test_empty_history_requires_explicit_zero_pad(self):
+        # 功能①:action_history 为空时,默认拒绝(安全);开启 zero_pad_history 才零填充
+        with self.assertRaises(ValueError):
+            self._anchor(action_history=())
+        anchor, _, _ = self._anchor(action_history=(), zero_pad_history=True)
+        self.assertIsNotNone(anchor)
+        self.assertEqual(len(anchor.action_history), 40)      # 零填充到完整 H
+        self.assertEqual(anchor.action_history[0], (0.0, 0.0, 0.0))
+        self.assertEqual(anchor.action_history[-1], (0.0, 0.0, 0.0))
+
+    def test_partial_history_zero_pads_to_full_window(self):
+        # 功能①:运行几步后累积的部分真实历史 + 前缀零填充
+        anchor, _, _ = self._anchor(
+            action_history=((0.1, 0.2, 0.3),) * 5, zero_pad_history=True)
+        self.assertIsNotNone(anchor)
+        self.assertEqual(len(anchor.action_history), 40)
+        self.assertEqual(anchor.action_history[0], (0.0, 0.0, 0.0))   # 前缀零
+        self.assertEqual(anchor.action_history[-1], (0.1, 0.2, 0.3))  # 尾部真实历史
 
     def test_normalization_matches_manual(self):
         import numpy as np

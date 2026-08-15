@@ -18,7 +18,7 @@ if __package__ in (None, ""):  # 支持复制目录后直接 ``python main_valid
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
-    QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
+    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter, QTabWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
@@ -303,6 +303,20 @@ class ValidationWindow(QMainWindow):
         live_buttons.addWidget(self.camera_btn); live_buttons.addWidget(self.camera_anchor_btn)
         live_buttons.addWidget(self.warmup_btn); live_buttons.addStretch()
         live.addLayout(live_buttons)
+        # 功能①:零历史起步 —— 勾选后不强制 warmup,用全 0 历史锚定(⚠️ 训练分布外,首窗口可能不准)
+        zero_row = QHBoxLayout()
+        self.zero_history_cb = QCheckBox("零历史起步(免 warmup,首窗口 OOD)")
+        self.zero_history_cb.setChecked(True)
+        self.zero_history_cb.setToolTip(
+            "勾选:用全 0 动作历史直接锚定,不需先 Warmup。\n"
+            "⚠️ 模型训练从没见过零填充窗口,首窗口预测可能明显不准;\n"
+            "运行几步后自动用本次真实动作累积历史,误差会收敛。")
+        self.zero_history_cb.toggled.connect(self._on_zero_history_toggled)
+        self.zero_hist_hint = QLabel("已启用:零历史起步(OOD)")
+        self.zero_hist_hint.setStyleSheet("color:#F6AD55;font-size:11px;")
+        zero_row.addWidget(self.zero_history_cb); zero_row.addStretch()
+        live.addLayout(zero_row)
+        live.addWidget(self.zero_hist_hint)
         tool_row = QHBoxLayout()
         self.tool_select_btn = QPushButton("select"); self.tool_select_btn.setCheckable(True)
         self.tool_select_btn.clicked.connect(lambda: self._set_tool("select"))
@@ -347,6 +361,7 @@ class ValidationWindow(QMainWindow):
         self._camera_thread = None
         self._latest_frame = None
         self._action_history = []  # warmup 填充(H×action_dim 模型单位)
+        self._history_buffer = None  # 功能①:执行累积的实际动作历史(滚动重锚定用)
         return page
 
     def _set_tool(self, tool: str) -> None:
@@ -407,12 +422,19 @@ class ValidationWindow(QMainWindow):
         self.camera_anchor_btn.setEnabled(True)
         self._log(f"warmup: {len(seq)} 步动作历史已就绪(模型单位,可锚定)")
 
+    def _on_zero_history_toggled(self, checked: bool) -> None:
+        self.zero_hist_hint.setText(
+            "已启用:零历史起步(OOD,首窗口可能不准)" if checked
+            else "已禁用:锚定需先 Warmup 填真实历史")
+        self.zero_hist_hint.setStyleSheet(
+            "color:#F6AD55;font-size:11px;" if checked else "color:#486581;font-size:11px;")
+
     def _camera_anchor(self) -> None:
         if self._latest_frame is None or not self.runtime:
             self._error("先 Start Camera")
             return
-        if not self._action_history:
-            self._error("warmup 未完成 —— 需先填充动作历史")
+        if not self._action_history and not self.zero_history_cb.isChecked():
+            self._error("无动作历史:勾选『零历史起步』可免 warmup 直接锚定,或先点 Warmup")
             return
         from .live_anchor import anchor_from_camera_frame
         descriptor = self.runtime.descriptor
@@ -426,14 +448,16 @@ class ValidationWindow(QMainWindow):
             segment_params=(manifest.segment_params if manifest else {}),
             n_nodes=descriptor.n_nodes, model=self.runtime.model,
             action_history=self._action_history, area_median_px=float(area_median),
-            frame_ref="camera_live#mock")
+            frame_ref="camera_live#mock",
+            zero_pad_history=self.zero_history_cb.isChecked())
         if anchor is None:
             self._error(f"帧质量 reject:{quality.reasons};请重试或调场景")
             return
         self.session.set_anchor(anchor)
         # 打磨③:页间引导 —— 锚定成功提示下一步
+        zero_note = " · 零历史起步(OOD)" if self.zero_history_cb.isChecked() else ""
         self.anchor_status.setText(
-            f"已锚定 {anchor.anchor_id[:8]} verdict={quality.verdict} → 可前往 3 Plan 规划")
+            f"已锚定 {anchor.anchor_id[:8]} verdict={quality.verdict}{zero_note} → 可前往 3 Plan 规划")
         self.camera_view.set_anchor(skeleton)
         self._refresh()
 
@@ -839,7 +863,19 @@ class ValidationWindow(QMainWindow):
         if not self.session or self.session.state != SessionState.ARMED or not self.session.plan:
             self._error("计划必须先通过 Preflight 并 Arm")
             return
-        self.executor = PlanExecutor(self._make_transport(), self.session.safety)
+        # 功能①:执行时累积本次实验的真实动作历史,供后续滚动重锚定/重规划
+        from .observation_policy import ActionHistoryBuffer
+        descriptor = self.runtime.descriptor if self.runtime else None
+        if descriptor is not None and descriptor.channel_map is not None:
+            if (getattr(self, "_history_buffer", None) is None
+                    or self._history_buffer.history_steps != descriptor.history_steps
+                    or self._history_buffer.channel_map != descriptor.channel_map):
+                self._history_buffer = ActionHistoryBuffer(
+                    descriptor.history_steps, descriptor.action_dim,
+                    descriptor.channel_map)
+        self.executor = PlanExecutor(
+            self._make_transport(), self.session.safety,
+            history_buffer=getattr(self, "_history_buffer", None))
         self.session.transition(SessionState.EXECUTING, "mock execution")
         self._execution_thread = _ExecutionThread(
             self.executor, self.session.plan, self.session.run_dir / "execution.csv")
