@@ -135,25 +135,30 @@ class _PlanningThread(QThread):
 
 class _CameraThread(QThread):
     frame_ready = pyqtSignal(object)
+    frame_ready_cam = pyqtSignal(int, object)   # (cam_index, bgr) 多相机
 
-    def __init__(self, parent=None, *, use_real: bool = False):
+    def __init__(self, parent=None, *, real_count: int = 0):
         super().__init__(parent)
-        self.use_real = bool(use_real)
-        self._real_cam = None
+        self.real_count = int(real_count)   # 0 = 合成;1/2/3 = 真实相机数
+        self._real_cams = []
 
     def run(self) -> None:
-        if self.use_real:
-            # 真实 RealSense:hardware/camera.py 的 RealSenseCam(QThread,emit frame_ready(ndarray,float))
+        if self.real_count > 0:
+            # 真实 RealSense ×N:每个 RealSenseCam 一个 QThread,帧带相机索引
             from ..hardware.camera import create_realsense_cam
-            self._real_cam = create_realsense_cam()
-            self._real_cam.frame_ready.connect(
-                lambda img, _t: self.frame_ready.emit(img))
-            self._real_cam.error.connect(
-                lambda msg: self.frame_ready.emit(None))
-            self._real_cam.start()
+            for cam_index in range(self.real_count):
+                cam = create_realsense_cam(serial=None)
+                cam.frame_ready.connect(
+                    lambda img, _t, idx=cam_index: self.frame_ready_cam.emit(idx, img))
+                cam.error.connect(
+                    lambda msg, idx=cam_index: self.frame_ready_cam.emit(idx, None))
+                self._real_cams.append(cam)
+            for cam in self._real_cams:
+                cam.start()
             while not self.isInterruptionRequested():
                 self.msleep(100)
-            self._real_cam.stop()
+            for cam in self._real_cams:
+                cam.stop()
             return
         # 合成弯曲剪影臂(离线演示)
         import time
@@ -183,6 +188,8 @@ class ValidationWindow(QMainWindow):
         self._execution_thread: _ExecutionThread | None = None
         self.valve_controller = None   # 真机阀(连接成功后有值;否则 Mock)
         self.ndi_thread = None         # 真机 NDI(连接成功后有值;否则不用)
+        self._camera_frames: dict[int, object] = {}   # 多相机最新帧(cam_index → bgr)
+        self._current_cam_index = 0    # 主显示当前相机
         self._valve_connect_thread: _ValveConnectThread | None = None
         configure_pyqtgraph()          # 任何 PlotWidget 之前,保证白底全局生效
         self._build_ui()
@@ -313,21 +320,30 @@ class ValidationWindow(QMainWindow):
         gb_hw = QGroupBox("硬件连接(真机/ Mock)")
         hw = QVBoxLayout(gb_hw); hw.setContentsMargins(8, 10, 8, 8)
         hw_form = QFormLayout()
-        # 相机来源:合成 Mock 或真实 RealSense(可单独选择,对齐 real_capture --mock-cam)
+        # 相机来源:合成 Mock 或真实 RealSense ×N(对齐 real_capture --mock-cam / --camera-count)
         self.hw_camera_src = QComboBox()
-        self.hw_camera_src.addItems(["相机: 合成 Mock", "相机: 真实 RealSense"])
+        self.hw_camera_src.addItems(
+            ["相机: 合成 Mock", "相机: 真实 ×1", "相机: 真实 ×2", "相机: 真实 ×3"])
         self.hw_camera_src.currentIndexChanged.connect(self._on_camera_src_changed)
+        self.hw_camera_view = QComboBox()   # 主显示区显示哪台相机
+        self.hw_camera_view.setEnabled(False)
+        self.hw_camera_view.currentIndexChanged.connect(self._on_camera_view_changed)
         self.hw_g1 = QLineEdit("COM3")      # 组1 串口(默认 COM3,对齐 real_capture)
         self.hw_g2 = QLineEdit("COM46")     # 组2 串口(默认 COM46)
         self.hw_baud = QSpinBox(); self.hw_baud.setRange(4800, 115200)
         self.hw_baud.setValue(9600)
         self.hw_ndi_port = QLineEdit("COM9")   # NDI 串口(默认 COM9)
         self.hw_ndi_port.setPlaceholderText("如 COM9;留空 = 不用 NDI")
+        self.hw_ndi_count = QSpinBox(); self.hw_ndi_count.setRange(1, 4)
+        self.hw_ndi_count.setValue(1)
+        self.hw_ndi_count.setToolTip("NDI 探头数(单端口多探头,对齐 real_capture --ndi-count)")
         hw_form.addRow("相机来源", self.hw_camera_src)
+        hw_form.addRow("主显示相机", self.hw_camera_view)
         hw_form.addRow("组1 串口(阀,ch0-2)", self.hw_g1)
         hw_form.addRow("组2 串口(阀,ch3-5)", self.hw_g2)
         hw_form.addRow("baudrate", self.hw_baud)
         hw_form.addRow("NDI 串口", self.hw_ndi_port)
+        hw_form.addRow("NDI 探头数", self.hw_ndi_count)
         hw.addLayout(hw_form)
         hw_buttons = QHBoxLayout()
         self.hw_connect_btn = QPushButton("连接阀"); self.hw_connect_btn.setObjectName("primary")
@@ -530,12 +546,14 @@ class ValidationWindow(QMainWindow):
 
     def _start_camera(self) -> None:
         import numpy as np
-        use_real = (getattr(self, "hw_camera_src", None) is not None
-                    and self.hw_camera_src.currentIndex() == 1)
-        self._camera_thread = _CameraThread(self, use_real=use_real)
+        real_count = 0
+        if getattr(self, "hw_camera_src", None) is not None:
+            real_count = max(0, self.hw_camera_src.currentIndex())  # idx0=合成,1/2/3=1/2/3 台真实
+        self._camera_thread = _CameraThread(self, real_count=real_count)
         self._camera_thread.frame_ready.connect(self._on_camera_frame)
+        self._camera_thread.frame_ready_cam.connect(self._on_camera_frame_cam)
         self._camera_thread.start()
-        self.camera_btn.setText("Camera 运行中" + ("(真实)" if use_real else "(Mock)"))
+        self.camera_btn.setText("Camera 运行中" + (f"(真实×{real_count})" if real_count else "(Mock)"))
         self.camera_anchor_btn.setEnabled(True)
         self.warmup_btn.setEnabled(True)
         # 主显示区 + Observe 页 camera_view 都要帧(若存在)
@@ -560,6 +578,24 @@ class ValidationWindow(QMainWindow):
             self.main_display.set_skeleton(skeleton)           # 主显示骨架层
             if hasattr(self, "camera_view") and self.camera_view is not None:
                 self.camera_view.set_skeleton(skeleton)        # Observe 也显示
+
+    def _on_camera_frame_cam(self, cam_index: int, bgr) -> None:
+        """多真实相机:按索引存帧;当前显示的那台相机才送主显示 + 骨架。"""
+        if cam_index not in self._camera_frames:
+            self._camera_frames[cam_index] = None
+        if bgr is None:
+            return
+        self._camera_frames[cam_index] = bgr
+        if cam_index == self._current_cam_index:
+            self._on_camera_frame(bgr)
+
+    def _on_camera_view_changed(self, index: int) -> None:
+        """切换主显示区显示哪台相机(多相机时)。"""
+        self._current_cam_index = int(index)
+        frames = getattr(self, "_camera_frames", {})
+        frame = frames.get(self._current_cam_index)
+        if frame is not None:
+            self._on_camera_frame(frame)
 
     def _gray(self, bgr):
         import numpy as np
@@ -876,37 +912,53 @@ class ValidationWindow(QMainWindow):
         self._refresh()
 
     def _on_camera_src_changed(self, index: int) -> None:
-        """相机来源切换:真实 RealSense 需安装 pyrealsense2 + 连接设备。"""
-        if index == 1:
-            self.hw_status.setText("相机: 真实 RealSense(需 pyrealsense2 + 连接设备;点 Start Camera 启动)")
+        """相机来源切换:同步相机视图选择器(数量),并更新提示。"""
+        real_count = max(0, index)       # idx0=合成,1/2/3=1/2/3 台真实
+        self.hw_camera_view.clear()
+        if real_count > 0:
+            self.hw_camera_view.addItems([f"相机 {i + 1}" for i in range(real_count)])
+            self.hw_camera_view.setEnabled(True)
+            self._current_cam_index = 0
+            self.hw_status.setText(f"相机: 真实 RealSense ×{real_count}(需 pyrealsense2 + 连接设备;点 Start Camera 启动)")
             self.hw_status.setStyleSheet("color:#F6AD55;font-size:11px;")
         else:
+            self.hw_camera_view.setEnabled(False)
+            self._current_cam_index = 0
             self.hw_status.setText("相机: 合成 Mock(离线演示,无需硬件)")
             self.hw_status.setStyleSheet("color:#486581;font-size:11px;")
 
     def _connect_ndi(self) -> None:
-        """连接 NDI 追踪器(末端 mm 真值,只进评价不进模型)。后台线程避免阻塞。"""
+        """连接 NDI 追踪器(末端 mm 真值,只进评价不进模型)。后台线程避免阻塞。
+
+        支持多探头(ndi_count):单端口连多个 tracking object,数据按 11 维/探头拼接。
+        """
         port = self.hw_ndi_port.text().strip()
         if not port:
             self._error("请填 NDI 串口(如 COM9);留空 = 不用 NDI")
             return
         try:
             from ..hardware.ndi import create_ndi_thread
-            self.ndi_thread = create_ndi_thread(port)
+            ndi_count = self.hw_ndi_count.value()
+            self.ndi_thread = create_ndi_thread(port, ndi_count=ndi_count)
             self.ndi_thread.ndi_data.connect(self._on_ndi_data)
             self.ndi_thread.error.connect(
                 lambda msg: self._log(f"NDI 错误: {msg}"))
             self.ndi_thread.start()
-            self.hw_status.setText(f"NDI 已连接({port}),末端 mm 只进评价")
+            self.hw_status.setText(f"NDI 已连接({port}, {ndi_count} 探头),末端 mm 只进评价")
             self.hw_status.setStyleSheet("color:#38A169;font-size:11px;")
-            self._log(f"NDI 已连接: {port}(隐藏评价流)")
+            self._log(f"NDI 已连接: {port} ×{ndi_count} 探头(隐藏评价流)")
         except Exception as error:
             self._error(f"NDI 连接失败: {error}")
 
     def _on_ndi_data(self, data: list, _t: float) -> None:
-        """NDI 末端位置 → 主显示区 NDI 图层(紫星);只显示,不进模型。"""
+        """NDI 末端位置 → 主显示区 NDI 图层(紫星,显示第 1 探头);只显示,不进模型。
+
+        数据布局(对齐 real_capture):每探头 11 维 [x,y,z,Rx,Ry,Rz,qw,qx,qy,qz,quality]。
+        多探头时先显示 probe0;后续 3D 三角化再叠加多点。
+        """
         try:
             if data and len(data) >= 3:
+                # 第 1 探头 x,y(平面);多探头数据更全但主显示只取 probe0 平面
                 self.main_display.set_ndi_position((float(data[0]), float(data[1])))
         except Exception:
             pass
@@ -1262,6 +1314,7 @@ class ValidationWindow(QMainWindow):
             self.hw_g2.setText(str(value.get("group2", "COM46")))
             self.hw_baud.setValue(int(value.get("baudrate", 9600)))
             self.hw_ndi_port.setText(str(value.get("ndi_port", "COM9")))
+            self.hw_ndi_count.setValue(int(value.get("ndi_count", 1)))
             self.hw_camera_src.setCurrentIndex(int(value.get("camera_src", 0)))
         except Exception as error:
             self._log(f"WARN: 加载硬件配置失败 {error}")
@@ -1275,6 +1328,7 @@ class ValidationWindow(QMainWindow):
                 "group2": self.hw_g2.text().strip(),
                 "baudrate": self.hw_baud.value(),
                 "ndi_port": self.hw_ndi_port.text().strip(),
+                "ndi_count": self.hw_ndi_count.value(),
                 "camera_src": self.hw_camera_src.currentIndex(),
             })
         except Exception as error:
