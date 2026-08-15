@@ -17,7 +17,7 @@ GUI 用五个 Tab 页串起"**加载模型 → 建立状态锚点 → 定义目�
 ```
 
 顶部始终显示全局安全栏:`Run: <实验名>    State: <状态>    Hardware: MOCK`,颜色随状态变化:
-- 灰 `idle`/无会话 · 绿 `ready`/`completed`/`zeroed` · 橙 `armed`/`paused`/`planning`/`reanchor` · 红 `executing`/`aborting`/`error`
+- 灰 未建实验(`no_session`)· 蓝 `idle`(已建实验待机)· 绿 `ready`/`completed`/`zeroed` · 橙 `armed`/`paused`/`planning`/`reanchor` · 红 `executing`/`aborting`/`error`
 
 **关键约束**:各页之间有前置依赖(见下),第 2~4 页在不满足前置时会弹窗拒绝并提示。`执行中(armed/executing/paused)会自动锁定第 1/2/3 页`,防止执行中改场景破坏记录溯源。
 
@@ -31,7 +31,7 @@ GUI 用五个 Tab 页串起"**加载模型 → 建立状态锚点 → 定义目�
 |---|---|---|
 | **实验与运行** | Run 根目录 + `New Experiment` | 在指定目录下创建唯一 `run_<时间戳>` 实验目录(所有产物写这里) |
 | | `Open Run (Replay)` | 只读打开历史 run 目录,回看当时的模型/场景/计划/结果(**不能 Arm**) |
-| **模型与部署契约** | Checkpoint / 训练数据目录 / K_safe / 设备 | 指定模型权重路径;K_safe(规划视野上限)在加载后按认证表自动填充 |
+| **模型与部署契约** | Checkpoint / 训练数据目录 / K_safe / 设备 | 指定模型权重路径;K_safe(规划视野上限)在加载后按认证表自动填充,并在模型摘要标注来源(`认证表(10px 容差)` 或 `手动`),悬停 K_safe 可见说明 |
 | | `Load Model` | 后台加载 checkpoint,显示 type/action_dim/nodes/H/K_train/K_safe/train_dt/action_scale_kpa/hash |
 | **安全配置(六通道)** | min/max/rise/fall/initial × 6 通道 | kPa 上下界 + 升/降压速率 + 初始动作,默认 max=150 kPa(对齐训练域) |
 | | `应用安全配置并使旧计划失效` | 写入 session 并落盘 safety.json,任何安全改动都会让旧计划失效 |
@@ -41,6 +41,7 @@ GUI 用五个 Tab 页串起"**加载模型 → 建立状态锚点 → 定义目�
 ### 2.2 Page 2 · Observe & Scene — 建立锚点、定义目标与障碍
 
 > 前置:已 `Load Model`。锚点(s_{t-1} + 动作历史)是模型规划的起点,必须有。
+> 布局:**左右两栏**(对齐 real_capture)—— 左栏控制面板(离线锚定/目标与障碍/实时相机),右栏场景编辑(相机视图 + 原语列表)。
 
 | 卡片 | 控件 | 作用 |
 |---|---|---|
@@ -87,7 +88,13 @@ GUI 用五个 Tab 页串起"**加载模型 → 建立状态锚点 → 定义目�
 
 | 卡片 | 控件 | 作用 |
 |---|---|---|
-| **结果与指标** | results | 执行摘要:命令数、压力/速率越界计数、jitter 统计、execution.csv 路径 |
+| **结果与指标** | results | 执行摘要 + 指标,见下 |
+
+**执行完成自动展示(实测指标)**:
+- **计划侧场景指标**(用预测轨迹 + 场景,离线下即可算):末端目标距离、目标达成 ✓/✗、最小障碍间距、是否碰撞;
+- **命令安全**:压力越界数、速率越界数(`evaluate_command_safety`);
+- **jitter 统计**:mean/max(执行时基偏差);
+- `prediction-to-execution gap`:当前标为 `待真机闭环(M5)` —— 需要执行期观测骨架,Mock 链路暂缺,不假装有数。
 
 完整执行记录落在 `run_<时间戳>/execution.csv`(requested/applied/ACK/时间),可离线重放。
 
