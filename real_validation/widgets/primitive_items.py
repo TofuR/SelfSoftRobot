@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QPen
 from PyQt5.QtWidgets import QGraphicsEllipseItem, QGraphicsRectItem
 
 from ..models import ScenePrimitive
@@ -30,8 +29,8 @@ def scene_primitive_item(p: ScenePrimitive, *,
         if p.kind == "obstacle_circle":
             radius += float(p.safety_margin)
         item = QGraphicsEllipseItem(xy[0] - radius, xy[1] - radius, 2 * radius, 2 * radius)
-        item.setPen(QPen(Qt.red if p.kind == "target_circle" else obstacle_color,
-                         2, Qt.DashLine))
+        color = target_color if p.kind == "target_circle" else obstacle_color
+        item.setPen(pg.mkPen(color, width=2, style=Qt.DashLine))
         return item
     if p.kind == "obstacle_aabb":
         lo, hi = p.geometry.get("min"), p.geometry.get("max")
@@ -40,7 +39,7 @@ def scene_primitive_item(p: ScenePrimitive, *,
         margin = float(p.safety_margin)
         item = QGraphicsRectItem(lo[0] - margin, lo[1] - margin,
                                  (hi[0] - lo[0]) + 2 * margin, (hi[1] - lo[1]) + 2 * margin)
-        item.setPen(QPen(obstacle_color, 2, Qt.DashLine))
+        item.setPen(pg.mkPen(obstacle_color, width=2, style=Qt.DashLine))
         return item
     if p.kind == "target_skeleton":
         nodes = p.geometry.get("nodes")

@@ -315,6 +315,12 @@ class ValidationWindow(QMainWindow):
         sc.addWidget(right_split, 1)
         self.anchor_status = QLabel("未锚定")
         sc.addWidget(self.anchor_status)
+        # 打磨补:B 修复 —— _scene_changed 引用的 scene_summary 从未被创建(悬空引用 bug)
+        self.scene_summary = QPlainTextEdit()
+        self.scene_summary.setReadOnly(True)
+        self.scene_summary.setMaximumHeight(88)
+        self.scene_summary.setPlaceholderText("场景摘要:anchor / scene / primitives / digest")
+        sc.addWidget(self.scene_summary)
 
         outer.addWidget(left); outer.addWidget(gb_scene)
         outer.setSizes([360, 720])
