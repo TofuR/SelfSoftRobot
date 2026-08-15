@@ -136,8 +136,26 @@ class _PlanningThread(QThread):
 class _CameraThread(QThread):
     frame_ready = pyqtSignal(object)
 
+    def __init__(self, parent=None, *, use_real: bool = False):
+        super().__init__(parent)
+        self.use_real = bool(use_real)
+        self._real_cam = None
+
     def run(self) -> None:
-        # 合成弯曲剪影臂(离线演示;真机换 RealSenseCam)
+        if self.use_real:
+            # 真实 RealSense:hardware/camera.py 的 RealSenseCam(QThread,emit frame_ready(ndarray,float))
+            from ..hardware.camera import create_realsense_cam
+            self._real_cam = create_realsense_cam()
+            self._real_cam.frame_ready.connect(
+                lambda img, _t: self.frame_ready.emit(img))
+            self._real_cam.error.connect(
+                lambda msg: self.frame_ready.emit(None))
+            self._real_cam.start()
+            while not self.isInterruptionRequested():
+                self.msleep(100)
+            self._real_cam.stop()
+            return
+        # 合成弯曲剪影臂(离线演示)
         import time
 
         import numpy as np
@@ -164,6 +182,7 @@ class ValidationWindow(QMainWindow):
         self._planning_thread: _PlanningThread | None = None
         self._execution_thread: _ExecutionThread | None = None
         self.valve_controller = None   # 真机阀(连接成功后有值;否则 Mock)
+        self.ndi_thread = None         # 真机 NDI(连接成功后有值;否则不用)
         self._valve_connect_thread: _ValveConnectThread | None = None
         configure_pyqtgraph()          # 任何 PlotWidget 之前,保证白底全局生效
         self._build_ui()
@@ -290,19 +309,25 @@ class ValidationWindow(QMainWindow):
         s.addWidget(apply_safety)
         root.addWidget(gb_safety)
 
-        # 卡4:硬件连接(真机阀/NDI —— 设计 spec §3.2 + §5 [Setup])
-        gb_hw = QGroupBox("硬件连接(真机)")
+        # 卡4:硬件连接(真机阀/相机/NDI —— 设计 spec §3.2 + §5 [Setup])
+        gb_hw = QGroupBox("硬件连接(真机/ Mock)")
         hw = QVBoxLayout(gb_hw); hw.setContentsMargins(8, 10, 8, 8)
         hw_form = QFormLayout()
-        self.hw_g1 = QLineEdit("")          # 组1 串口(COM),默认空 = 不接
-        self.hw_g1.setPlaceholderText("如 COM3")
-        self.hw_g2 = QLineEdit("")          # 组2 串口
-        self.hw_g2.setPlaceholderText("如 COM46")
+        # 相机来源:合成 Mock 或真实 RealSense(可单独选择,对齐 real_capture --mock-cam)
+        self.hw_camera_src = QComboBox()
+        self.hw_camera_src.addItems(["相机: 合成 Mock", "相机: 真实 RealSense"])
+        self.hw_camera_src.currentIndexChanged.connect(self._on_camera_src_changed)
+        self.hw_g1 = QLineEdit("COM3")      # 组1 串口(默认 COM3,对齐 real_capture)
+        self.hw_g2 = QLineEdit("COM46")     # 组2 串口(默认 COM46)
         self.hw_baud = QSpinBox(); self.hw_baud.setRange(4800, 115200)
         self.hw_baud.setValue(9600)
+        self.hw_ndi_port = QLineEdit("COM9")   # NDI 串口(默认 COM9)
+        self.hw_ndi_port.setPlaceholderText("如 COM9;留空 = 不用 NDI")
+        hw_form.addRow("相机来源", self.hw_camera_src)
         hw_form.addRow("组1 串口(阀,ch0-2)", self.hw_g1)
         hw_form.addRow("组2 串口(阀,ch3-5)", self.hw_g2)
         hw_form.addRow("baudrate", self.hw_baud)
+        hw_form.addRow("NDI 串口", self.hw_ndi_port)
         hw.addLayout(hw_form)
         hw_buttons = QHBoxLayout()
         self.hw_connect_btn = QPushButton("连接阀"); self.hw_connect_btn.setObjectName("primary")
@@ -310,10 +335,13 @@ class ValidationWindow(QMainWindow):
         self.hw_disconnect_btn = QPushButton("断开阀"); self.hw_disconnect_btn.setObjectName("danger")
         self.hw_disconnect_btn.setEnabled(False)
         self.hw_disconnect_btn.clicked.connect(self._disconnect_valve)
+        self.hw_ndi_btn = QPushButton("连接 NDI"); self.hw_ndi_btn.setObjectName("primary")
+        self.hw_ndi_btn.clicked.connect(self._connect_ndi)
         hw_buttons.addWidget(self.hw_connect_btn); hw_buttons.addWidget(self.hw_disconnect_btn)
+        hw_buttons.addWidget(self.hw_ndi_btn)
         hw_buttons.addStretch()
         hw.addLayout(hw_buttons)
-        self.hw_status = QLabel("未连接(Mock 执行仍可用)")
+        self.hw_status = QLabel("相机/阀/NDI 均可独立选 Mock 或真机(默认全部 Mock 可跑)")
         self.hw_status.setWordWrap(True)
         self.hw_status.setStyleSheet("color:#486581;font-size:11px;")
         hw.addWidget(self.hw_status)
@@ -502,10 +530,12 @@ class ValidationWindow(QMainWindow):
 
     def _start_camera(self) -> None:
         import numpy as np
-        self._camera_thread = _CameraThread(self)
+        use_real = (getattr(self, "hw_camera_src", None) is not None
+                    and self.hw_camera_src.currentIndex() == 1)
+        self._camera_thread = _CameraThread(self, use_real=use_real)
         self._camera_thread.frame_ready.connect(self._on_camera_frame)
         self._camera_thread.start()
-        self.camera_btn.setText("Camera 运行中")
+        self.camera_btn.setText("Camera 运行中" + ("(真实)" if use_real else "(Mock)"))
         self.camera_anchor_btn.setEnabled(True)
         self.warmup_btn.setEnabled(True)
         # 主显示区 + Observe 页 camera_view 都要帧(若存在)
@@ -513,6 +543,9 @@ class ValidationWindow(QMainWindow):
                                     else np.zeros((240, 320, 3)))
 
     def _on_camera_frame(self, bgr) -> None:
+        if bgr is None:   # 真实相机 error → 显示提示,不崩
+            self._log("ERROR: 相机错误(检查 RealSense 连接)")
+            return
         self._latest_frame = bgr
         self.main_display.set_frame(bgr)                       # 主显示区
         if hasattr(self, "camera_view") and self.camera_view is not None:
@@ -841,6 +874,42 @@ class ValidationWindow(QMainWindow):
         self.hw_connect_btn.setEnabled(True)
         self.hw_disconnect_btn.setEnabled(False)
         self._refresh()
+
+    def _on_camera_src_changed(self, index: int) -> None:
+        """相机来源切换:真实 RealSense 需安装 pyrealsense2 + 连接设备。"""
+        if index == 1:
+            self.hw_status.setText("相机: 真实 RealSense(需 pyrealsense2 + 连接设备;点 Start Camera 启动)")
+            self.hw_status.setStyleSheet("color:#F6AD55;font-size:11px;")
+        else:
+            self.hw_status.setText("相机: 合成 Mock(离线演示,无需硬件)")
+            self.hw_status.setStyleSheet("color:#486581;font-size:11px;")
+
+    def _connect_ndi(self) -> None:
+        """连接 NDI 追踪器(末端 mm 真值,只进评价不进模型)。后台线程避免阻塞。"""
+        port = self.hw_ndi_port.text().strip()
+        if not port:
+            self._error("请填 NDI 串口(如 COM9);留空 = 不用 NDI")
+            return
+        try:
+            from ..hardware.ndi import create_ndi_thread
+            self.ndi_thread = create_ndi_thread(port)
+            self.ndi_thread.ndi_data.connect(self._on_ndi_data)
+            self.ndi_thread.error.connect(
+                lambda msg: self._log(f"NDI 错误: {msg}"))
+            self.ndi_thread.start()
+            self.hw_status.setText(f"NDI 已连接({port}),末端 mm 只进评价")
+            self.hw_status.setStyleSheet("color:#38A169;font-size:11px;")
+            self._log(f"NDI 已连接: {port}(隐藏评价流)")
+        except Exception as error:
+            self._error(f"NDI 连接失败: {error}")
+
+    def _on_ndi_data(self, data: list, _t: float) -> None:
+        """NDI 末端位置 → 主显示区 NDI 图层(紫星);只显示,不进模型。"""
+        try:
+            if data and len(data) >= 3:
+                self.main_display.set_ndi_position((float(data[0]), float(data[1])))
+        except Exception:
+            pass
 
     def _load_anchor(self) -> None:
         self._load_session_json("anchor", Anchor.from_dict)
@@ -1189,9 +1258,11 @@ class ValidationWindow(QMainWindow):
             return
         try:
             value = read_json(path)
-            self.hw_g1.setText(str(value.get("group1", "")))
-            self.hw_g2.setText(str(value.get("group2", "")))
+            self.hw_g1.setText(str(value.get("group1", "COM3")))
+            self.hw_g2.setText(str(value.get("group2", "COM46")))
             self.hw_baud.setValue(int(value.get("baudrate", 9600)))
+            self.hw_ndi_port.setText(str(value.get("ndi_port", "COM9")))
+            self.hw_camera_src.setCurrentIndex(int(value.get("camera_src", 0)))
         except Exception as error:
             self._log(f"WARN: 加载硬件配置失败 {error}")
 
@@ -1203,6 +1274,8 @@ class ValidationWindow(QMainWindow):
                 "group1": self.hw_g1.text().strip(),
                 "group2": self.hw_g2.text().strip(),
                 "baudrate": self.hw_baud.value(),
+                "ndi_port": self.hw_ndi_port.text().strip(),
+                "camera_src": self.hw_camera_src.currentIndex(),
             })
         except Exception as error:
             self._log(f"WARN: 保存硬件配置失败 {error}")
