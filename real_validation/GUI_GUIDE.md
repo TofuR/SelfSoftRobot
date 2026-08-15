@@ -35,8 +35,13 @@ GUI 用五个 Tab 页串起"**加载模型 → 建立状态锚点 → 定义目�
 | | `Load Model` | 后台加载 checkpoint,显示 type/action_dim/nodes/H/K_train/K_safe/train_dt/action_scale_kpa/hash |
 | **安全配置(六通道)** | min/max/rise/fall/initial × 6 通道 | kPa 上下界 + 升/降压速率 + 初始动作,默认 max=150 kPa(对齐训练域) |
 | | `应用安全配置并使旧计划失效` | 写入 session 并落盘 safety.json,任何安全改动都会让旧计划失效 |
+| **硬件连接(真机)** | 组1 串口 / 组2 串口 / baudrate + `连接阀` | **真机执行必需**。填两组串口(COM)后点连接(后台线程,不卡 GUI)。连接成功 → 状态栏 `Hardware: REAL VALVE`,执行走真阀(QtValveTransport);失败/不连 → 回退 `Mock` |
+| | `断开阀` | 释放串口,执行回退 Mock |
+| | 配置持久化 | 串口/baudrate 保存到 `config/hardware.json`(gitignore 不入库),下次启动自动回填 |
 
-**这一步要产出**:一个 run 目录 + 一个已加载的模型 + 一份安全配置。
+**这一步要产出**:一个 run 目录 + 一个已加载的模型 + 一份安全配置(+ 可选:真机阀已连接)。
+
+> **真机接线需要什么**:串口阀两组 Modbus(组1=ch0-2,组2=ch3-5,4-20mA)+ 依赖 `requirements-hardware.txt`(pyserial/pyrealsense2/scikit-surgerynditracker)。相机/NDI 适配层在 `real_validation/hardware/`,Mock 流程不触碰。
 
 ### 2.2 Page 2 · Observe & Scene — 建立锚点、定义目标与障碍
 
@@ -156,8 +161,9 @@ session 状态机:`IDLE → PLANNING → READY → ARMED → EXECUTING → PAUSE
 
 | 能力 | 状态 |
 |---|---|
-| 执行链路 | **Mock**(MockCommandTransport);真机接线后改 `main_validation.py:765 _make_transport()` |
-| 相机 | **合成演示帧**;真机换 RealSenseCam |
+| 执行链路 | **Mock 默认**;Setup 页『硬件连接』填两组串口连真机阀后 → `Hardware: REAL VALVE`,执行走 QtValveTransport(线程安全桥接 real_capture 的 ValveController);失败/未连回退 Mock |
+| 相机 | **合成演示帧**(Mock);真机换 RealSenseCam(`hardware/camera.py` 适配层已就位,含指纹断言) |
+| NDI | `hardware/ndi.py` 适配层已就位(隐藏评价流,只进评价不进模型);真机接 COM 后启用 |
 | 在线锚定/warmup | 可用;**零历史起步**(默认勾选,免 warmup,⚠️ OOD 标注);Warmup 可选填真实历史;真机需带 manifest 的 checkpoint |
 | 场景编辑 | camera_view + scene_editor 已接;**骨架叠加显示**(青线+圆点,与训练同源);`obstacle_aabb` 支持解析但交互创建待后续 |
 | 目标类型 | 末端 target_point/circle、**全身 target_skeleton(可『点出目标骨架』交互创建)** + 圆障碍;多边形/AABB 障碍、多检查点重锚定待 P3/M4+ |
