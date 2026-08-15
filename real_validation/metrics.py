@@ -100,6 +100,23 @@ def _scene_metrics(observed: np.ndarray, scene: Scene, tip_node: int) -> dict:
     return result
 
 
+def evaluate_plan_scene(predicted_states, scene: Scene | None,
+                        tip_node: int = 0) -> dict:
+    """仅用**预测**形态算场景指标(计划是否达标 / 计划是否撞障碍)。
+
+    与 evaluate_prediction 不同:后者需要 observed_states 算 prediction-to-execution
+    gap(M5 真机闭环才有);本函数在 Mock/离线下就能算 —— 输入是 planner 输出的
+    predicted_states(像素坐标 K×N×2/3),检验"计划本身"的目标达成与碰撞。
+    """
+    predicted = _states(predicted_states, "predicted_states")
+    if tip_node < 0 or tip_node >= predicted.shape[1]:
+        raise ValueError("tip_node 越界")
+    result = {"steps": int(predicted.shape[0]), "nodes": int(predicted.shape[1])}
+    if scene is not None:
+        result.update(_scene_metrics(predicted, scene, tip_node))
+    return result
+
+
 def evaluate_command_safety(actions6, step_interval_s: float,
                             safety: SafetyPolicy) -> dict:
     actions = np.asarray(actions6, dtype=np.float64)

@@ -785,20 +785,47 @@ class ValidationWindow(QMainWindow):
         assert self.session is not None
         self.session.transition(SessionState.COMPLETED, "all commands acked")
         # P4:执行摘要 —— 命令安全 + jitter 统计(替代占位符)
-        from .metrics import evaluate_command_safety
+        from .metrics import evaluate_command_safety, evaluate_plan_scene
+        plan = self.session.plan
         actions6 = [tuple(r.applied6) for r in receipts]
         safety_metrics = evaluate_command_safety(
-            actions6, self.session.plan.step_interval_s if self.session.plan else 0.1,
+            actions6, plan.step_interval_s if plan else 0.1,
             self.session.safety)
         jitters = [getattr(r, "jitter_s", None) for r in receipts]
         jitters = [j for j in jitters if j is not None]
         jitter_summary = (f"jitter mean={sum(jitters) / len(jitters) * 1e3:.1f}ms "
                           f"max={max(jitters) * 1e3:.1f}ms" if jitters else "jitter 无记录")
+
+        # 打磨①:计划侧场景指标(predicted_states + scene,离线下即可算)
+        plan_scene_summary = ""
+        if plan and plan.predicted_states_path:
+            states_path = Path(plan.predicted_states_path)
+            if not states_path.is_absolute():
+                states_path = self.session.run_dir / states_path
+            if states_path.is_file():
+                try:
+                    import numpy as np
+                    with np.load(states_path) as data:
+                        key = "states_model" if "states_model" in data else "states_normalized"
+                        states = np.asarray(data[key], dtype=np.float32)
+                    scene_metrics = evaluate_plan_scene(
+                        states, self.session.scene, tip_node=0)
+                    plan_scene_summary = (
+                        f"末端目标距离: {scene_metrics.get('terminal_target_distance', float('nan')):.2f} px  "
+                        f"目标达成: {'✓' if scene_metrics.get('target_success') else '✗'}\n"
+                        f"最小障碍间距: {scene_metrics.get('minimum_obstacle_clearance', float('nan')):.2f} px  "
+                        f"碰撞: {'是' if scene_metrics.get('collision') else '否'}\n")
+                except Exception as error:
+                    plan_scene_summary = f"(计划场景指标不可用: {error})\n"
+
         self.results.setPlainText(
             f"执行完成:{len(receipts)} 条命令\n"
+            f"{plan_scene_summary}"
             f"压力越界:{safety_metrics['pressure_violation_count']}  "
             f"速率越界:{safety_metrics['slew_violation_count']}\n"
-            f"{jitter_summary}\n{self.session.run_dir / 'execution.csv'}")
+            f"{jitter_summary}\n"
+            f"prediction-to-execution gap: 待真机闭环(M5)\n"
+            f"{self.session.run_dir / 'execution.csv'}")
         self._refresh()
 
     def _execution_failed(self, error: str) -> None:

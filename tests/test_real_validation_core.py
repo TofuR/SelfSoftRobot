@@ -12,7 +12,9 @@ from real_validation.executor import ExecutionError, MockCommandTransport, PlanE
 from real_validation.models import (
     ActionPlan, Anchor, ModelDescriptor, SafetyPolicy, Scene, ScenePrimitive,
 )
-from real_validation.metrics import evaluate_command_safety, evaluate_prediction
+from real_validation.metrics import (
+    evaluate_command_safety, evaluate_plan_scene, evaluate_prediction,
+)
 from real_validation.observation_policy import ObservationPolicy
 from real_validation.observation_policy import ActionHistoryBuffer
 from real_validation.offline_anchor import anchor_from_npz
@@ -405,6 +407,24 @@ class ValidationCoreTest(unittest.TestCase):
         self.assertTrue(metrics["target_success"])
         self.assertFalse(metrics["collision"])
         self.assertEqual(len(metrics["error_by_k"]), 2)
+
+    def test_plan_scene_metrics_use_predicted_states_only(self):
+        # 打磨①:离线下用 predicted_states 即可算计划侧场景指标(无需 observed/gap)
+        predicted = np.zeros((2, 3, 2))
+        predicted[-1, 0] = (2.0, 0.0)              # 末端恰好到达目标中心
+        scene = Scene("plan", (
+            ScenePrimitive("target_circle", "model", {"center": [2, 0], "r": 0.1}),
+            ScenePrimitive("obstacle_circle", "model", {"center": [5, 5], "r": 1}),
+        ))
+        metrics = evaluate_plan_scene(predicted, scene, tip_node=0)
+        self.assertTrue(metrics["target_success"])
+        self.assertFalse(metrics["collision"])
+        self.assertEqual(metrics["steps"], 2)
+        self.assertEqual(metrics["nodes"], 3)
+        # 无 scene 时只返回步数/节点数,不崩
+        bare = evaluate_plan_scene(predicted, None)
+        self.assertEqual(bare["steps"], 2)
+        self.assertNotIn("target_success", bare)
 
     def test_command_safety_metrics(self):
         *_, safety, _ = fixtures()
