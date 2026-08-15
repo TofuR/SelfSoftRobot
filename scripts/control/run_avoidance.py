@@ -52,7 +52,9 @@ def main():
     from real_validation.contracts.models import (ActionPlan, Anchor, SafetyPolicy, Scene,
                                                   ScenePrimitive)
     from real_validation.planning.openloop_planner import OpenLoopShootingPlanner, ShootingConfig
-    from real_validation.runtime.anchors import anchor_from_npz
+    # 直接走轻量 offline_anchor(纯 contracts.models + numpy),避免经 runtime.anchors
+    # 门面 eager 拉入 live_anchor → perception → cv2 依赖图。
+    from real_validation.runtime.offline_anchor import anchor_from_npz
 
     # 1. 加载模型 + manifest(自动找同目录 deploy_manifest.json)
     from real_validation.runtime.model_runtime import ModelRuntime

@@ -1,1 +1,1 @@
-"""验证工作台 GUI(main_validation 等,Task 5 迁入)。"""
+"""验证工作台 GUI(主窗口 + 主题 + 交互控件)。入口见 real_validation.main。"""
