@@ -710,6 +710,10 @@ class ValidationWindow(QMainWindow):
         assert self.session is not None
         if not display_only:
             atomic_write_json(self.session.run_dir / "scene.json", self.session.scene.to_dict())
+        # 同步可视化:数值添加(_set_target/_add_obstacle)与加载 scene.json 也走这里,
+        # 若不刷 camera_view/scene_editor,右边可视化和原语列表不会更新(工具点加才更新)。
+        self.camera_view.set_scene(self.session.scene)
+        self.scene_editor.set_scene(self.session.scene)
         self.scene_summary.setPlainText(
             f"anchor={self.session.anchor.anchor_id if self.session.anchor else 'None'}\n"
             f"scene={self.session.scene.name}\nprimitives={len(self.session.scene.primitives)}\n"

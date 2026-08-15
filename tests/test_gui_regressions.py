@@ -109,6 +109,32 @@ class SceneSummaryRegressionTest(unittest.TestCase):
         finally:
             window.close()
 
+    def test_numeric_add_syncs_visualization(self):
+        # 打磨:数值添加(_set_target/_add_obstacle)后,右侧 camera_view 原语与
+        # scene_editor 列表必须同步更新(原先只有工具点加才刷新)。
+        from real_validation.main_validation import ValidationWindow
+        window = ValidationWindow()
+        window.session = ExperimentSession.create(
+            tempfile.mkdtemp(prefix="gui_regress_sync_"))
+        try:
+            self.assertEqual(len(window.camera_view._scene_items), 0)
+            self.assertEqual(window.scene_editor.list.count(), 0)
+            window.target_x.setValue(100)
+            window.target_y.setValue(200)
+            window.target_radius.setValue(5)
+            window._set_target()
+            # 数值添加后 camera_view 重绘 + scene_editor 列表同步
+            self.assertEqual(len(window.camera_view._scene_items), 1)
+            self.assertEqual(window.scene_editor.list.count(), 1)
+            window.obstacle_x.setValue(30)
+            window.obstacle_y.setValue(40)
+            window.obstacle_radius.setValue(8)
+            window._add_obstacle()
+            self.assertEqual(len(window.camera_view._scene_items), 2)
+            self.assertEqual(window.scene_editor.list.count(), 2)
+        finally:
+            window.close()
+
 
 if __name__ == "__main__":
     unittest.main()
