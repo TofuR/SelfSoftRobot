@@ -50,10 +50,11 @@ GUI 用五个 Tab 页串起"**加载模型 → 建立状态锚点 → 定义目�
 | **目标与障碍** | 目标 x/y/半径 + `设置末端目标` | 指定末端目标点(半径>0 则为目标区域) |
 | | 障碍 x/y/半径 + `添加圆障碍` | 指定 keep-out 圆形障碍 |
 | **实时相机与 Warmup** | `Start Camera (Mock)` | 启动实时取流(当前为合成演示帧;真机换 RealSense) |
-| | `Warmup(填动作历史)` | 用训练分布内动作填满 H 步历史(**模型从没见过零填充窗口,必须先 warmup 才能锚定**) |
-| | `从相机取流锚定` | 从当前帧经质量门控 → 分割 → 骨架 → 归一化,建立实时锚点 |
-| | 工具:`select` / `点加目标` / `点加障碍` | 在相机视图上直接点选/绘制目标与障碍(选中工具呈青底高亮) |
-| **场景编辑** | camera_view + scene_editor | 左侧图像/骨架/原语可视化,右侧原语列表(增删改/锁定);点选目标障碍在此直观落地 |
+| | `Warmup(填动作历史)` | 用训练分布内动作填满 H 步历史(可选;勾了零历史起步可跳过) |
+| | `零历史起步(免 warmup,首窗口 OOD)` | ⚠️ 勾选后用全 0 历史直接锚定,不需先 Warmup。模型训练从没见过零填充窗口,首窗口预测可能不准;运行几步后自动用本次真实动作累积历史,误差收敛。**默认勾选** |
+| | `从相机取流锚定` | 从当前帧经质量门控 → 分割 → 骨架 → 归一化,建立实时锚点(可零历史起步) |
+| | 工具:`select` / `点加目标` / **`点出目标骨架`** / `点加障碍` | 点选/绘制目标、障碍;**点出目标骨架**:依次点 N 个点连成期望软臂形状,双击完成(选中工具呈青底高亮) |
+| **场景编辑** | camera_view + scene_editor | 图像/骨架/目标/障碍可视化(青线+圆点 = 实时骨架,与训练同源),下方原语列表(增删改/锁定) |
 
 **这一步要产出**:一个锚点(anchor)+ 一份场景(目标 + 障碍)。第 3 页规划必需 anchor。
 
@@ -74,7 +75,16 @@ GUI 用五个 Tab 页串起"**加载模型 → 建立状态锚点 → 定义目�
 - 帧索引往前必须凑满 H=40 步历史 —— 选太靠前会报"缺少 N 步历史",把帧索引调大即可(示例数据 8172 帧,用 39+)。
 - 其它序列:把 transition npz 拷入 `real_validation/data/npz/`,或点 `…` 选择任意位置的文件。
 
-**另一种锚定方式(实时相机)**:`Start Camera (Mock)` → `Warmup(填动作历史)` → `从相机取流锚定`。需要带 manifest 的 checkpoint(当前示例未带,故推荐先走离线 NPZ 方式)。
+**另一种锚定方式(实时相机,零历史起步,免 warmup)**:
+```text
+1. Setup 页:  New Experiment → Load Model
+2. Observe 页: 实时相机卡 → Start Camera (Mock)
+3. 保持『零历史起步』勾选(默认)→ 直接点『从相机取流锚定』
+   —— 用全 0 历史起步(⚠️ OOD,首窗口可能不准),运行几步后自动用本次真实动作累积历史
+4. anchor_status 显示『已锚定 … 零历史起步(OOD)』
+```
+
+**关于"运行后自动累积历史"**:执行时(第 4 页)每次实际下发动作都会累积进本次实验的历史(`_history_buffer`),供后续滚动重锚定/重规划使用 —— 你不再需要手动从历史加载,历史由本次实验自己产出。
 
 ### 2.3 Page 3 · Plan — 逆规划 + 预检 + 预览
 
@@ -148,9 +158,10 @@ session 状态机:`IDLE → PLANNING → READY → ARMED → EXECUTING → PAUSE
 |---|---|
 | 执行链路 | **Mock**(MockCommandTransport);真机接线后改 `main_validation.py:765 _make_transport()` |
 | 相机 | **合成演示帧**;真机换 RealSenseCam |
-| 在线锚定/warmup | 可用(Mock 演示);真机需带 manifest 的 checkpoint |
-| 场景编辑 | camera_view + scene_editor 已接;`obstacle_aabb` 支持解析但交互创建待后续 |
-| 目标类型 | 末端 target_point/circle、**全身 target_skeleton**(已解锁,planner/metrics 均支持)+ 圆障碍;多边形/AABB 障碍、多检查点重锚定待 P3/M4+ |
+| 在线锚定/warmup | 可用;**零历史起步**(默认勾选,免 warmup,⚠️ OOD 标注);Warmup 可选填真实历史;真机需带 manifest 的 checkpoint |
+| 场景编辑 | camera_view + scene_editor 已接;**骨架叠加显示**(青线+圆点,与训练同源);`obstacle_aabb` 支持解析但交互创建待后续 |
+| 目标类型 | 末端 target_point/circle、**全身 target_skeleton(可『点出目标骨架』交互创建)** + 圆障碍;多边形/AABB 障碍、多检查点重锚定待 P3/M4+ |
+| 执行累积历史 | 执行时实际下发动作自动累积进本次实验历史(供滚动重锚定),不需手动加载历史 |
 | 离线锚定 | 示例数据已内置 `data/npz/`(15 节点,8172 帧);`checkpoints/current/best_model.pt` 已放置,可直接走通 Mock 流程 |
 | K_safe | 加载带认证表的模型后自动填充;`未认证` 时规划会被 preflight 阻断(fail-closed) |
 
