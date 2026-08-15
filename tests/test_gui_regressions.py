@@ -251,10 +251,9 @@ class CompactLayoutTest(unittest.TestCase):
         w = ValidationWindow()
         try:
             table = w.safety_table
-            row_h = table.verticalHeader().defaultSectionSize()
-            header_h = table.horizontalHeader().height()
-            # 6 行 + 表头应在一屏内(不再需滚动)
-            self.assertLessEqual(6 * row_h + header_h, table.minimumHeight() + 20)
+            actual_content = sum(table.verticalHeader().sectionSize(i) for i in range(6)) \
+                             + table.horizontalHeader().height()
+            self.assertLessEqual(actual_content, table.maximumHeight())   # 6 行内容必须装进最大高度,无滚动
             self.assertEqual(table.rowCount(), 6)
         finally:
             w.close()

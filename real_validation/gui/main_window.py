@@ -267,8 +267,6 @@ class ValidationWindow(QMainWindow):
         self.safety_table.setHorizontalHeaderLabels(["min", "max", "rise/s", "fall/s", "initial"])
         self.safety_table.verticalHeader().setDefaultSectionSize(24)
         self.safety_table.horizontalHeader().setDefaultSectionSize(92)
-        self.safety_table.setMinimumHeight(6 * 24 + 26)
-        self.safety_table.setMaximumHeight(6 * 24 + 26)
         self._safety_cells = []
         for channel in range(6):
             self.safety_table.setVerticalHeaderItem(channel, QTableWidgetItem(f"ch{channel}"))
@@ -278,6 +276,12 @@ class ValidationWindow(QMainWindow):
                 cell.setValue(default); self.safety_table.setCellWidget(channel, column, cell)
                 row.append(cell)
             self._safety_cells.append(row)
+        # 表头高度在 cell widget 填充后才有实际值;按实际内容定高,保证 6 行一次显示全
+        header_h = self.safety_table.horizontalHeader().height()
+        row_h = self.safety_table.verticalHeader().defaultSectionSize()
+        content_h = 6 * row_h + header_h + 4   # +4 边距余量
+        self.safety_table.setMinimumHeight(content_h)
+        self.safety_table.setMaximumHeight(content_h)
         s.addWidget(self.safety_table)
         apply_safety = QPushButton("应用安全配置并使旧计划失效")
         apply_safety.setObjectName("primary")
