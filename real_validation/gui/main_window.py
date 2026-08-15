@@ -186,13 +186,40 @@ class ValidationWindow(QMainWindow):
         safety_bar.addWidget(self.abort_button)
         layout.addLayout(safety_bar)
 
+        # ---- 左右两栏:左固定显示区 + 右 5 页 Tab ----
+        main_split = QSplitter(Qt.Horizontal)
+
+        # 左:主显示区(摄像头 + 多层叠加 + 图层开关)
+        left_panel = QWidget()
+        ll = QVBoxLayout(left_panel); ll.setContentsMargins(4, 4, 4, 4)
+        self.main_display = CameraViewWidget()
+        ll.addWidget(self.main_display, 1)
+        layer_row = QHBoxLayout()
+        self.layer_checks = {}
+        for key, label in (("skeleton", "骨架"), ("scene", "场景"),
+                           ("predicted", "预测"), ("actual", "实际"), ("ndi", "NDI")):
+            cb = QCheckBox(label)
+            cb.setChecked(key != "ndi")          # 默认 NDI 关
+            cb.toggled.connect(
+                lambda checked, k=key: self.main_display.set_layer_visible(k, checked))
+            self.layer_checks[key] = cb
+            layer_row.addWidget(cb)
+        layer_row.addStretch()
+        ll.addLayout(layer_row)
+        main_split.addWidget(left_panel)
+
+        # 右:tabs
         self.tabs = QTabWidget()
         self.tabs.addTab(self._setup_page(), "1 Setup")
         self.tabs.addTab(self._observe_page(), "2 Observe & Scene")
         self.tabs.addTab(self._plan_page(), "3 Plan")
         self.tabs.addTab(self._execute_page(), "4 Execute")
         self.tabs.addTab(self._results_page(), "5 Results")
-        layout.addWidget(self.tabs, 1)
+        main_split.addWidget(self.tabs)
+
+        main_split.setSizes([520, 860])
+        main_split.setStretchFactor(0, 0); main_split.setStretchFactor(1, 1)
+        layout.addWidget(main_split, 1)
         self.setCentralWidget(central)
 
     def _setup_page(self) -> QWidget:
@@ -462,16 +489,22 @@ class ValidationWindow(QMainWindow):
         self._refresh()
 
     def _start_camera(self) -> None:
+        import numpy as np
         self._camera_thread = _CameraThread(self)
         self._camera_thread.frame_ready.connect(self._on_camera_frame)
         self._camera_thread.start()
         self.camera_btn.setText("Camera 运行中")
         self.camera_anchor_btn.setEnabled(True)
         self.warmup_btn.setEnabled(True)
+        # 主显示区 + Observe 页 camera_view 都要帧(若存在)
+        self.main_display.set_frame(self._latest_frame if self._latest_frame is not None
+                                    else np.zeros((240, 320, 3)))
 
     def _on_camera_frame(self, bgr) -> None:
         self._latest_frame = bgr
-        self.camera_view.set_frame(bgr)
+        self.main_display.set_frame(bgr)                       # 主显示区
+        if hasattr(self, "camera_view") and self.camera_view is not None:
+            self.camera_view.set_frame(bgr)                    # Observe 锚定视图
         if self.runtime is not None:
             from ..perception.segmentation import segment_white_on_blue
             from ..perception.skeleton import extract_skeleton_2d
@@ -479,7 +512,9 @@ class ValidationWindow(QMainWindow):
             mask = segment_white_on_blue(bgr, self._gray(bgr))
             skeleton, _ = extract_skeleton_2d(mask, self.runtime.descriptor.n_nodes,
                                               tip_fix=True, return_info=True)
-            self.camera_view.set_skeleton(skeleton)
+            self.main_display.set_skeleton(skeleton)           # 主显示骨架层
+            if hasattr(self, "camera_view") and self.camera_view is not None:
+                self.camera_view.set_skeleton(skeleton)        # Observe 也显示
 
     def _gray(self, bgr):
         import numpy as np
@@ -970,6 +1005,16 @@ class ValidationWindow(QMainWindow):
                                                self.session.safety, self.session.run_dir)
                 except Exception as error:
                     self.plan_summary.appendPlainText(f"\nPreview unavailable: {error}")
+            # 主显示区叠加预测轨迹(读 predicted_states.npz)
+            if self.session and self.session.plan and self.session.plan.predicted_states_path:
+                p = Path(self.session.plan.predicted_states_path)
+                if not p.is_absolute():
+                    p = self.session.run_dir / p
+                if p.is_file():
+                    import numpy as np
+                    with np.load(p) as data:
+                        key = "states_model" if "states_model" in data else "states_normalized"
+                        self.main_display.set_predicted_states(np.asarray(data[key]))
         else:
             self.plan_summary.setPlainText("Preflight: BLOCKED\n" + "\n".join(
                 f"[{item.code}] {item.message}" for item in result.issues))

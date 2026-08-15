@@ -19,7 +19,7 @@ import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QSplitter
 
 from real_validation.contracts.models import Scene, ScenePrimitive
 from real_validation.core.session import ExperimentSession
@@ -217,6 +217,26 @@ class MainDisplayLayerTest(unittest.TestCase):
     def test_unknown_layer_raises(self):
         with self.assertRaises(ValueError):
             self.view.set_layer_visible("no_such_layer", True)
+
+
+class MainWindowLayoutTest(unittest.TestCase):
+    """Task 3:主窗口左右两栏 —— 左主显示区 + 右 5 页 Tab。"""
+
+    @classmethod
+    def setUpClass(cls):
+        _ensure_app()
+
+    def test_two_column_layout_with_main_display(self):
+        from real_validation.gui.main_window import ValidationWindow
+        w = ValidationWindow()
+        try:
+            splitters = w.findChildren(QSplitter)
+            horizontal = [s for s in splitters if s.orientation() == 1]  # Qt.Horizontal
+            self.assertTrue(horizontal, "应有一个水平 splitter 分左右两栏")
+            self.assertTrue(hasattr(w, "main_display"), "应有主显示视图")
+            self.assertIsNotNone(w.main_display)
+        finally:
+            w.close()
 
 
 class SceneEditorMultiSelectTest(unittest.TestCase):
