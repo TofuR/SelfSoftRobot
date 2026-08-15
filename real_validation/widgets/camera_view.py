@@ -24,6 +24,7 @@ class CameraViewWidget(QWidget):
     sig_image_clicked = pyqtSignal(int, int)      # (col, row) 图像像素
     target_picked = pyqtSignal(object)            # ScenePrimitive(target_*)
     obstacle_picked = pyqtSignal(object)          # ScenePrimitive(obstacle_*)
+    target_skeleton_picked = pyqtSignal(object)   # ScenePrimitive(target_skeleton) 功能③
     selection_changed = pyqtSignal(str)           # primitive_id
     geometry_edited = pyqtSignal(object)          # 编辑后的 Scene
 
@@ -43,6 +44,12 @@ class CameraViewWidget(QWidget):
                                              symbol="o", symbolSize=5, symbolBrush=_SKELETON_COLOR)
         self.anchor_scatter = pg.ScatterPlotItem(symbol="t", size=14, pen=pg.mkPen("#38A169", width=2))
         self.plot.addItem(self.anchor_scatter)
+
+        # 功能③:点出目标骨架 —— 已点节点预览(红 x,随点击累积)
+        self._skeleton_preview = pg.ScatterPlotItem(symbol="x", size=12,
+                                                    pen=pg.mkPen("#E53E3E", width=2))
+        self.plot.addItem(self._skeleton_preview)
+        self._skeleton_points: list[tuple[float, float]] = []
 
         self.tool = "select"
         self._scene: Scene | None = None
@@ -73,9 +80,11 @@ class CameraViewWidget(QWidget):
             self.anchor_scatter.setData(x=[], y=[])
 
     def set_tool(self, tool: str) -> None:
-        if tool not in {"select", "add_target", "add_obstacle"}:
+        if tool not in {"select", "add_target", "add_obstacle", "add_target_skeleton"}:
             raise ValueError(f"未知工具: {tool}")
         self.tool = tool
+        if tool != "add_target_skeleton":
+            self.clear_skeleton_points()   # 离开骨架工具清掉未提交的点
 
     def set_scene(self, scene: Scene) -> None:
         """清旧原语、按 scene 重绘。"""
@@ -92,6 +101,21 @@ class CameraViewWidget(QWidget):
     def _draw_primitive(self, p: ScenePrimitive):
         return scene_primitive_item(p, target_color=TARGET_COLOR)
 
+    # ---- 点出目标骨架(功能③) ----
+    def clear_skeleton_points(self) -> None:
+        self._skeleton_points = []
+        self._skeleton_preview.setData(x=[], y=[])
+
+    def commit_skeleton_target(self) -> None:
+        """把已点节点提交为 target_skeleton(双击完成)。至少 2 点。"""
+        if len(self._skeleton_points) < 2:
+            return
+        nodes = [[x, y] for x, y in self._skeleton_points]
+        self.target_skeleton_picked.emit(ScenePrimitive(
+            "target_skeleton", "model", {"nodes": nodes, "tolerance_px": 4.0},
+            name=f"target_skeleton_{len(self._scene_items)}"))
+        self.clear_skeleton_points()
+
     # ---- 鼠标 ----
     def _on_click(self, ev) -> None:
         if not self.plot.sceneBoundingRect().contains(ev.scenePos()):
@@ -100,6 +124,15 @@ class CameraViewWidget(QWidget):
         mapped = view.mapSceneToView(ev.scenePos())
         col, row = int(mapped.x()), int(mapped.y())
         self.sig_image_clicked.emit(col, row)
+        if self.tool == "add_target_skeleton":
+            if ev.double():
+                self.commit_skeleton_target()
+                return
+            self._skeleton_points.append((float(col), float(row)))
+            xs = [p[0] for p in self._skeleton_points]
+            ys = [p[1] for p in self._skeleton_points]
+            self._skeleton_preview.setData(x=xs, y=ys)
+            return
         if self.tool == "add_target":
             self.target_picked.emit(ScenePrimitive(
                 "target_point", "model", {"xy": [col, row], "node": 0},

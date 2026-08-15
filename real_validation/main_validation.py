@@ -322,10 +322,16 @@ class ValidationWindow(QMainWindow):
         self.tool_select_btn.clicked.connect(lambda: self._set_tool("select"))
         self.tool_target_btn = QPushButton("点加目标"); self.tool_target_btn.setCheckable(True)
         self.tool_target_btn.clicked.connect(lambda: self._set_tool("add_target"))
+        self.tool_skeleton_btn = QPushButton("点出目标骨架"); self.tool_skeleton_btn.setCheckable(True)
+        self.tool_skeleton_btn.setToolTip(
+            "点出目标骨架:依次点击 N 个点连成期望软臂形状,双击完成。\n"
+            "规划让机器人拟合这个目标骨架(全身目标)。")
+        self.tool_skeleton_btn.clicked.connect(lambda: self._set_tool("add_target_skeleton"))
         self.tool_obstacle_btn = QPushButton("点加障碍"); self.tool_obstacle_btn.setCheckable(True)
         self.tool_obstacle_btn.clicked.connect(lambda: self._set_tool("add_obstacle"))
         tool_row.addWidget(QLabel("工具:")); tool_row.addWidget(self.tool_select_btn)
-        tool_row.addWidget(self.tool_target_btn); tool_row.addWidget(self.tool_obstacle_btn)
+        tool_row.addWidget(self.tool_target_btn); tool_row.addWidget(self.tool_skeleton_btn)
+        tool_row.addWidget(self.tool_obstacle_btn)
         tool_row.addStretch()
         live.addLayout(tool_row)
         ll.addWidget(gb_live)
@@ -362,6 +368,7 @@ class ValidationWindow(QMainWindow):
         # 绑定(保持原样)
         self.camera_view.target_picked.connect(self._add_primitive)
         self.camera_view.obstacle_picked.connect(self._add_primitive)
+        self.camera_view.target_skeleton_picked.connect(self._add_primitive)  # 功能③
         self.scene_editor.scene_edited.connect(self._apply_scene_edit)
         self._camera_thread = None
         self._latest_frame = None
@@ -371,7 +378,9 @@ class ValidationWindow(QMainWindow):
 
     def _set_tool(self, tool: str) -> None:
         self.camera_view.set_tool(tool)
-        for btn, name in ((self.tool_select_btn, "select"), (self.tool_target_btn, "add_target"),
+        for btn, name in ((self.tool_select_btn, "select"),
+                          (self.tool_target_btn, "add_target"),
+                          (self.tool_skeleton_btn, "add_target_skeleton"),
                           (self.tool_obstacle_btn, "add_obstacle")):
             btn.setChecked(name == tool)
 

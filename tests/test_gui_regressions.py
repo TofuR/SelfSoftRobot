@@ -135,6 +135,44 @@ class SceneSummaryRegressionTest(unittest.TestCase):
         finally:
             window.close()
 
+    def test_click_skeleton_target_commits_on_double_click(self):
+        # 功能③:『点出目标骨架』—— 依次点击累积节点,双击提交 target_skeleton
+        import numpy as np
+        from PyQt5.QtCore import QPointF
+        from real_validation.main_validation import ValidationWindow
+        window = ValidationWindow()
+        window.session = ExperimentSession.create(
+            tempfile.mkdtemp(prefix="gui_regress_skel_"))
+        try:
+            view = window.camera_view
+            view.set_frame(np.zeros((240, 320, 3)))   # 设图像范围,mapViewToScene 才正确
+            vb = view.plot.getViewBox()
+
+            class _FakeEv:
+                def __init__(self, pos, double):
+                    self._pos, self._double = pos, double
+                def scenePos(self):
+                    return self._pos
+                def double(self):
+                    return self._double
+
+            def click(px, py, double=False):
+                view._on_click(_FakeEv(vb.mapViewToScene(QPointF(px, py)), double))
+
+            window._set_tool("add_target_skeleton")
+            click(100, 100)
+            click(150, 120)
+            click(180, 150)
+            self.assertEqual(len(view._skeleton_points), 3)
+            click(180, 150, double=True)   # 双击提交
+            self.assertEqual(len(view._skeleton_points), 0)   # 提交后清空
+            self.assertEqual(len(window.session.scene.primitives), 1)
+            primitive = window.session.scene.primitives[0]
+            self.assertEqual(primitive.kind, "target_skeleton")
+            self.assertEqual(len(primitive.geometry["nodes"]), 3)
+        finally:
+            window.close()
+
 
 if __name__ == "__main__":
     unittest.main()
