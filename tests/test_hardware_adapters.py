@@ -36,6 +36,10 @@ class ValveAdapterTest(unittest.TestCase):
 
 
 class CameraAdapterTest(unittest.TestCase):
+    def test_camera_module_does_not_import_real_capture(self):
+        # 相机驱动内部化后,导入 camera 不得再触碰 real_capture(自包含)
+        self.assertNotIn("real_capture", sys.modules)
+
     def test_fingerprint_mismatch_blocks(self):
         with self.assertRaises(camera.CameraHardwareError):
             camera.assert_camera_fingerprint(
