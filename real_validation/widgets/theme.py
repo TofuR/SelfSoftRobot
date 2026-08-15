@@ -27,6 +27,7 @@ ACCENT_HOVER = "#7F9CF5"
 ACCENT_PRESSED = "#5A67D8"
 OK_GREEN = "#38A169"      # 状态 OK
 WARN_ORANGE = "#F6AD55"   # 状态警告 / 过渡
+IDLE_BLUE = "#3182CE"     # 状态:已建实验待机(区别于未建实验的灰 no_session)
 
 FONT_FAMILY = '"Microsoft YaHei", "Noto Sans CJK SC", "PingFang SC", sans-serif'
 MONO_FAMILY = 'Consolas, "Microsoft YaHei", "Noto Sans CJK SC", monospace'
@@ -141,7 +142,7 @@ PGG_OPTS = dict(background=CARD, foreground=TEXT_MAIN)
 
 # SessionState.value -> 状态色块边框/文字色。SessionState 见 real_validation/session.py。
 STATE_BADGE_COLORS = {
-    "idle": TEXT_MUTED,
+    "idle": IDLE_BLUE,
     "planning": WARN_ORANGE,
     "ready": OK_GREEN,
     "armed": WARN_ORANGE,
