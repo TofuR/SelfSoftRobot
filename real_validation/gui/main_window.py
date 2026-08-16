@@ -248,7 +248,7 @@ class ValidationWindow(QMainWindow):
         self.tabs.addTab(self._results_page(), "5 Results")
         self.main_split.addWidget(self.tabs)
 
-        self.main_split.setSizes([520, 860])
+        self.main_split.setSizes([640, 760])
         self.main_split.setStretchFactor(0, 0); self.main_split.setStretchFactor(1, 1)
         layout.addWidget(self.main_split, 1)
         self.setCentralWidget(central)
@@ -1408,9 +1408,22 @@ class ValidationWindow(QMainWindow):
 
 
 def main() -> int:
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="实机验证工作台。相机/阀/NDI 在 Setup 页硬件连接卡选 Mock 或真实。")
+    parser.add_argument("--camera", default=None, choices=["mock", "real", "real2", "real3"],
+                        help="启动时预设相机来源: mock=合成(默认) / real=真实×1 / real2=×2 / real3=×3")
+    parser.add_argument("--real-camera", action="store_true",
+                        help="快捷方式: 等同 --camera real")
+    args, _ = parser.parse_known_args()
     app = QApplication(sys.argv)
     app.setStyleSheet(QSS)
     window = ValidationWindow(); window.show()
+    if args.real_camera and args.camera is None:
+        args.camera = "real"
+    if args.camera is not None:
+        cam_idx = {"mock": 0, "real": 1, "real2": 2, "real3": 3}[args.camera]
+        window.hw_camera_src.setCurrentIndex(cam_idx)
     return app.exec_()
 
 

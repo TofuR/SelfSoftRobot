@@ -1,7 +1,35 @@
 # 实机验证工作台 GUI 使用指南
 
-> 运行:`python -m real_validation.main`(或双击 `run_gui.bat`)。本目录随部署整体拷贝到 PC,**完全自包含**(不需 real_capture 并排部署),操作者机器上直接可用。
 > 对应设计文档:`docs/experiments/real_robot_validation_workbench_todo.md`、`docs/superpowers/specs/2026-07-28-real-validation-task-layer-ik-design.md`。
+
+## 0. 怎么启动 + 用真实相机
+
+**启动(任选一)**:
+```bash
+# 方式 A:在 real_validation/ 目录内
+python main.py
+
+# 方式 B:Windows 双击 run_gui.bat(内部已切到父目录)
+```
+
+**用真实相机(RealSense)—— 一行 CLI 即可**:
+```bash
+# 先装依赖(一次)
+python -m pip install -r requirements-hardware.txt   # 含 pyrealsense2
+
+# 启动并直接用真实相机(×1/×2/×3 台)
+python main.py --real-camera            # 或: --camera real
+python main.py --camera real2           # 两台
+python main.py --camera real3           # 三台
+```
+启动后 Setup 页硬件连接卡会预选真实相机;到第 2 页点 **Start Camera**,左栏主显示区显示真实画面 + 骨架叠加。
+
+**在 GUI 里手动选(不用 CLI)**:
+1. 启动 `python main.py`
+2. Setup 页 → **硬件连接**卡 → "相机来源"选 **"相机: 真实 ×1"**(或 ×2/×3)
+3. 第 2 页(Observe)→ 点 **Start Camera**
+
+> ⚠️ 相机/阀/NDI 在 Setup 页**各自独立可选 Mock 或真实**(对齐数据采集 GUI 的 `--mock-cam/--mock-valve/--mock-ndi`):默认全部 Mock(无需硬件即可跑通全流程),要真实就把对应项改成真实。真实相机需连接设备 + 装 pyrealsense2;真实阀需填 COM3/COM46;真实 NDI 需填 COM9 + 探头数。
 
 ---
 
