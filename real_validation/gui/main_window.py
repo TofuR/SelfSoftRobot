@@ -18,8 +18,8 @@ if __package__ in (None, ""):  # 支持复制目录后直接 ``python gui/main_w
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
-    QHBoxLayout, QLabel, QLineEdit,
+    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
+    QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter, QTabWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
@@ -215,7 +215,7 @@ class ValidationWindow(QMainWindow):
         # ---- 左右两栏:左固定显示区 + 右 5 页 Tab ----
         self.main_split = QSplitter(Qt.Horizontal)
 
-        # 左:主显示区(摄像头 + 多层叠加 + 图层开关)
+        # 左:主显示区(摄像头 + 多层叠加 + 图层开关 + 信息栏)
         left_panel = QWidget()
         ll = QVBoxLayout(left_panel); ll.setContentsMargins(4, 4, 4, 4)
         self.main_display = CameraViewWidget()
@@ -233,6 +233,10 @@ class ValidationWindow(QMainWindow):
             layer_row.addWidget(cb)
         layer_row.addStretch()
         ll.addLayout(layer_row)
+        # 信息栏:当前相机 / 骨架节点 / NDI 状态(紧凑,填充左栏底部不显空)
+        self.main_info = QLabel("相机: Mock | 骨架: - | NDI: 未连")
+        self.main_info.setStyleSheet("color:#486581;font-size:11px;padding:2px 4px;")
+        ll.addWidget(self.main_info)
         self.main_split.addWidget(left_panel)
 
         # 右:tabs
@@ -250,7 +254,8 @@ class ValidationWindow(QMainWindow):
         self.setCentralWidget(central)
 
     def _setup_page(self) -> QWidget:
-        page = QWidget(); root = QVBoxLayout(page); root.setSpacing(8)
+        # 2×2 网格:实验+模型 一行,安全+硬件 一行 —— 避免竖排拉太长
+        page = QWidget(); root = QGridLayout(page); root.setSpacing(8)
 
         # 卡1:实验与运行
         gb_exp = QGroupBox("实验与运行")
@@ -263,7 +268,7 @@ class ValidationWindow(QMainWindow):
         replay = QPushButton("Open Run (Replay)"); replay.clicked.connect(self._open_replay)
         buttons.addWidget(create); buttons.addWidget(replay); buttons.addStretch()
         exp.addLayout(buttons)
-        root.addWidget(gb_exp)
+        root.addWidget(gb_exp, 0, 0)
 
         # 卡2:模型与部署契约
         gb_model = QGroupBox("模型与部署契约")
@@ -285,7 +290,7 @@ class ValidationWindow(QMainWindow):
         self.model_summary = QPlainTextEdit(); self.model_summary.setReadOnly(True)
         self.model_summary.setMaximumHeight(110)
         m.addWidget(self.model_summary, 1)
-        root.addWidget(gb_model, 1)
+        root.addWidget(gb_model, 0, 1)
 
         # 卡3:安全配置(六通道 kPa / kPa·s⁻¹)
         gb_safety = QGroupBox("安全配置(六通道 kPa / kPa·s⁻¹)")
@@ -314,7 +319,7 @@ class ValidationWindow(QMainWindow):
         apply_safety.setObjectName("primary")
         apply_safety.clicked.connect(self._apply_safety)
         s.addWidget(apply_safety)
-        root.addWidget(gb_safety)
+        root.addWidget(gb_safety, 1, 0)
 
         # 卡4:硬件连接(真机阀/相机/NDI —— 设计 spec §3.2 + §5 [Setup])
         gb_hw = QGroupBox("硬件连接(真机/ Mock)")
@@ -361,7 +366,10 @@ class ValidationWindow(QMainWindow):
         self.hw_status.setWordWrap(True)
         self.hw_status.setStyleSheet("color:#486581;font-size:11px;")
         hw.addWidget(self.hw_status)
-        root.addWidget(gb_hw)
+        root.addWidget(gb_hw, 1, 1)
+        # 列/行拉伸:左右列均分宽度;第 0 行(实验+模型)小,第 1 行(安全+硬件)大
+        root.setColumnStretch(0, 1); root.setColumnStretch(1, 1)
+        root.setRowStretch(0, 2); root.setRowStretch(1, 3)
         return page
 
     def _observe_page(self) -> QWidget:
@@ -559,6 +567,7 @@ class ValidationWindow(QMainWindow):
         # 主显示区 + Observe 页 camera_view 都要帧(若存在)
         self.main_display.set_frame(self._latest_frame if self._latest_frame is not None
                                     else np.zeros((240, 320, 3)))
+        self._update_main_info()
 
     def _on_camera_frame(self, bgr) -> None:
         if bgr is None:   # 真实相机 error → 显示提示,不崩
@@ -596,6 +605,23 @@ class ValidationWindow(QMainWindow):
         frame = frames.get(self._current_cam_index)
         if frame is not None:
             self._on_camera_frame(frame)
+        self._update_main_info()
+
+    def _update_main_info(self) -> None:
+        """刷新左栏信息栏:相机来源 / 骨架节点 / NDI 状态。"""
+        cam_src = "Mock"
+        if getattr(self, "hw_camera_src", None) is not None:
+            src_idx = self.hw_camera_src.currentIndex()
+            cam_src = f"真实×{src_idx}" if src_idx > 0 else "Mock"
+        cam_show = f"#{self._current_cam_index + 1}" if self._current_cam_index > 0 else ""
+        nodes = "?"
+        if self.runtime is not None:
+            nodes = str(self.runtime.descriptor.n_nodes)
+        ndi = "未连"
+        if self.ndi_thread is not None and self.ndi_thread.isRunning():
+            ndi = f"已连×{self.hw_ndi_count.value()}"
+        self.main_info.setText(
+            f"相机: {cam_src}{cam_show} | 骨架: {nodes}节点 | NDI: {ndi}")
 
     def _gray(self, bgr):
         import numpy as np
@@ -837,6 +863,7 @@ class ValidationWindow(QMainWindow):
             self.k_safe.setToolTip("K_safe 来源: 手动。该模型无视野认证表,规划由 preflight 的 k_safe_uncertified 门保护。")
         self.model_summary.appendPlainText(f"K_safe 来源: {k_safe_source}")
         self._refresh()
+        self._update_main_info()
 
     def _apply_safety(self) -> None:
         if not self.session:
@@ -947,6 +974,7 @@ class ValidationWindow(QMainWindow):
             self.hw_status.setText(f"NDI 已连接({port}, {ndi_count} 探头),末端 mm 只进评价")
             self.hw_status.setStyleSheet("color:#38A169;font-size:11px;")
             self._log(f"NDI 已连接: {port} ×{ndi_count} 探头(隐藏评价流)")
+            self._update_main_info()
         except Exception as error:
             self._error(f"NDI 连接失败: {error}")
 
