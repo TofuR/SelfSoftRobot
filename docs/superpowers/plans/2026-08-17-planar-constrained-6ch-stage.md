@@ -2,7 +2,7 @@
 
 > 日期：2026-08-17  
 > 分支：`feat/planar-constrained-control`（从 `master` 创建）  
-> 状态：分析与实施计划；本提交不修改运行代码  
+> 状态：P1–P4 软件实施完成；等待真机 mapping、阈值、数据与任务验收
 > 定位：先验证单相机可可靠监督的双段形态控制与避障，再扩展到真实三维
 
 ## 1. 结论
@@ -311,3 +311,16 @@ tests/test_planar_actuation.py
 若平面性反复失败，最可能的问题依次是：通道 mapping 错误、两段绕轴装配不一致、阀/腔体
 响应不匹配、材料扭转耦合。此时保留本分支作为二维基线，继续使用
 `feat/real-3d-pipeline` 获取真实三维监督，而不是用单相机二维标签掩盖离面运动。
+
+## 10. 2026-08-17 实施记录
+
+已按层次独立提交：
+
+- `ba6252b`：采集 GUI、真/Mock Controller、Recorder 的等值投影、镜像、元数据和残差；
+- `ca9ebe7`：二维前处理的六维动作验证、NPZ equality/QC 元数据；
+- `13bdff8`：deploy manifest、四变量 Planner、preflight、warmup 和 ACK 执行守卫；
+- `6091457`：NDI 末端离面 p50/p95/max 质控工具。
+
+运行操作见 `docs/real_data/planar_constrained_6ch_workflow.md`。尚未完成的 P0/P5 都依赖真实硬件：
+通道 mapping、两段装配平面、QC 阈值、采集/训练、`K_safe` 认证和真实避障结果。软件通过不等于
+这些物理条件已经成立。

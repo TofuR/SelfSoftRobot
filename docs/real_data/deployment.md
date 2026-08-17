@@ -155,6 +155,7 @@ python scripts/utils/build_deploy_manifest.py \
 | 字段 | 来源 | 说明 |
 |---|---|---|
 | `action_scale_kpa` | `meta.json hi6` 经 `action_max_per_channel()` | kPa 上界(150);**复用该函数,不自己读 hi6** |
+| `channel_equalities` | `meta.json` | 可选 `[leader,follower]` 对；存在时要求六维模型和 identity channel map |
 | `train_dt_measured_s` | `frame_times.txt` 现算 `np.diff` | 实测 Δt(**禁止硬写 0.203125**) |
 | `mask_source` | `config.json data_dirs.sequence` 路径后缀 | 判断**完整路径**而非 basename(`.../train` 会丢后缀) |
 | `segment_params` | `segment_meta.json`(仅 white_on_blue) | SAM2/修复 mask 时 null |
@@ -202,6 +203,8 @@ python real_validation/perception_probe.py --source dir --frames-dir <帧目录>
 | `unsupported_obstacle` | scene 含 planner 未支持的障碍类型 |
 | `predicted_collision` | 预测轨迹侵入障碍(最小净距 < 0) |
 | `slew_rate` / `pressure_bound` | 压力越界 / 速率超限 |
+| `channel_equality_contract` | plan 与模型的等值关系不一致 |
+| `history_equality` / `safety_equality` | 历史或 linked 通道范围/速率/初值离开训练动作流形 |
 
 **执行态守卫**:EXECUTING 中锁页 1/2/3(防执行中改 scene 致执行记录与计划脱钩);`invalidate_model` 在模型加载失败时清旧 runtime。
 
@@ -217,7 +220,8 @@ python real_validation/perception_probe.py --source dir --frames-dir <帧目录>
 
 **P2 采集协议要点**:
 1. 固定相机位姿,**单独拍一张无臂静态背景**做配准参考帧(P1a 教训:中值背景混入臂运动假位移 ~3.4px)
-2. 先 1-DOF(ch0,0-150 kPa)验证链路;3D/6 通道留到标定三角化打通之后
+2. 先用单通道验证链路，再进入六通道等值约束的双段平面阶段；六通道独立三维运动仍留到
+   多视角/深度 GT 打通之后。平面阶段见 `planar_constrained_6ch_workflow.md`。
 3. 训练用 SAM2 mask;在线用 SAM2 前向流式(量化两者差异是开放项)
 4. 按序列划分 train/val/test,覆盖 loading/unloading/hold/反转/变速
 5. 目标形态取自录制帧(保证可达)

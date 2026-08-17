@@ -7,6 +7,10 @@
 > - `docs/archived/research/2026-07-14-mask-node-pipeline.md`(mask→node 每步算法 + QC 列含义)
 >
 > 相关文档:硬件与采集协议见 [`capture_setup.md`](capture_setup.md);模型与训练架构见 `CLAUDE.md`。
+>
+> 本文保留旧单通道序列的稳定处理说明。双段六腔但按等值对约束在平面内的当前实验，使用
+> [`planar_constrained_6ch_workflow.md`](planar_constrained_6ch_workflow.md)：骨架仍是单相机
+> 15 节点二维 GT，但动作、NPZ、模型和部署合同均保持六维。
 
 ---
 
