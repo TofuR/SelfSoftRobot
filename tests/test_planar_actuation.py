@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import importlib
 import json
 import os
 import sys
@@ -14,20 +15,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 _ROOT = Path(__file__).resolve().parents[1]
 _REAL_CAPTURE = _ROOT / "real_capture"
-if str(_REAL_CAPTURE) not in sys.path:
-    sys.path.insert(0, str(_REAL_CAPTURE))
 
 from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtWidgets import QApplication
 
-from recorder import ValveRecorder
-from valve_control import (
-    MockValveController,
-    ValveDriver,
-    apply_channel_equalities,
-    channel_equality_residuals,
-    normalize_channel_equalities,
-)
 from scripts.real.masks_to_transition_npz import (
     load_planarity_qc,
     save_npz,
@@ -71,6 +62,12 @@ def _ensure_app() -> QApplication:
     return _app
 
 
+def _capture_module(name: str):
+    if str(_REAL_CAPTURE) not in sys.path:
+        sys.path.insert(0, str(_REAL_CAPTURE))
+    return importlib.import_module(name)
+
+
 class _CameraStub(QObject):
     frame_ready = pyqtSignal(object, float)
 
@@ -93,12 +90,30 @@ class CaptureEqualityTest(unittest.TestCase):
     def setUpClass(cls):
         _ensure_app()
 
+    @classmethod
+    def tearDownClass(cls):
+        # real_validation 的硬件适配层必须保持自包含；采集测试不得把顶层硬件模块
+        # 泄漏给同进程中的 import-hygiene 测试。
+        for name in ("main_capture", "recorder", "valve_control", "modbus_manager",
+                     "realsense_cam", "hardware_threads", "nditracker"):
+            sys.modules.pop(name, None)
+        try:
+            sys.path.remove(str(_REAL_CAPTURE))
+        except ValueError:
+            pass
+
     def test_invalid_self_and_overlapping_pairs_fail(self):
+        normalize_channel_equalities = _capture_module(
+            "valve_control").normalize_channel_equalities
         for pairs in (((1, 1),), ((1, 2), (2, 3)), ((6, 1),)):
             with self.subTest(pairs=pairs), self.assertRaises(ValueError):
                 normalize_channel_equalities(pairs)
 
     def test_manual_random_sweep_and_replay_projection_uses_six_columns(self):
+        valve = _capture_module("valve_control")
+        ValveDriver = valve.ValveDriver
+        apply_channel_equalities = valve.apply_channel_equalities
+        channel_equality_residuals = valve.channel_equality_residuals
         pairs = ((1, 2), (4, 5))
         manual = apply_channel_equalities([10, 20, 99, 30, 40, 88], pairs)
         self.assertEqual(manual, [10, 20, 20, 30, 40, 40])
@@ -112,6 +127,7 @@ class CaptureEqualityTest(unittest.TestCase):
         self.assertEqual(replay, [1, 2, 2, 4, 5, 5])
 
     def test_controller_projects_before_rate_limit_and_rejects_rate_mismatch(self):
+        MockValveController = _capture_module("valve_control").MockValveController
         controller = MockValveController()
         controller.connect()
         controller.configure_channel_equalities(((1, 2), (4, 5)))
@@ -124,6 +140,8 @@ class CaptureEqualityTest(unittest.TestCase):
                 [100, 100, 90, 100, 100, 100], [100] * 6)
 
     def test_recorder_writes_equality_contract_and_command_residuals(self):
+        ValveRecorder = _capture_module("recorder").ValveRecorder
+        MockValveController = _capture_module("valve_control").MockValveController
         controller = MockValveController()
         controller.connect()
         recorder = ValveRecorder(_CameraStub(), _NdiStub(), controller)
@@ -157,7 +175,8 @@ class CaptureEqualityTest(unittest.TestCase):
                 recorder.shutdown()
 
     def test_gui_mirrors_and_locks_follower_controls(self):
-        from main_capture import CaptureWindow, N_CHAN
+        main_capture = _capture_module("main_capture")
+        CaptureWindow, N_CHAN = main_capture.CaptureWindow, main_capture.N_CHAN
 
         class TestWindow(CaptureWindow):
             def _load_config(self):
