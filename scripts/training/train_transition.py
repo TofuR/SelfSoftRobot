@@ -68,12 +68,19 @@ def build_parser():
     parser.add_argument("--tf_schedule", type=str, default="staircase",
                         choices=["linear", "staircase"],
                         help="[open_loop] 退火形状: staircase(前半 nominal/后半 tf_min) | linear")
+    parser.add_argument("--w_reprojection", type=float, default=None,
+                        help="可选多视角骨架重投影 loss 权重；旧数据默认不启用")
     return parser
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
     config = resolve_training_config(build_common_overrides(args))
+    if args.w_reprojection is not None:
+        if args.w_reprojection < 0:
+            raise ValueError("--w_reprojection 不能为负")
+        config.setdefault("loss_weights", {})[
+            "skeleton_reprojection"] = float(args.w_reprojection)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     action_dim = detect_action_dim(args.data_dir)
@@ -111,6 +118,11 @@ def main(argv=None):
         model_tag = "open_loop_transition"
         tf_info = (f"tf_ratio={args.tf_ratio}, anneal={args.tf_anneal_epochs}ep, "
                    f"tf_min={args.tf_min}, schedule={args.tf_schedule}")
+
+    if args.w_reprojection is not None:
+        active = spec.phases[0].active_losses
+        if "skeleton_reprojection" not in active:
+            active.append("skeleton_reprojection")
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"\nModel: {model_tag}（mode={args.mode}）")

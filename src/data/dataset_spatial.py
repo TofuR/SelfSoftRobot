@@ -49,6 +49,8 @@ class SpatialSequenceDataset(Dataset):
         self.norm_factor = (
             float(np.max(np.abs(np.concatenate(all_acts)))) if all_acts else 1.0
         )
+        if not np.isfinite(self.norm_factor) or self.norm_factor < 1e-8:
+            self.norm_factor = 1.0
 
         # 缓存数据
         self.action_dim = None
@@ -61,12 +63,28 @@ class SpatialSequenceDataset(Dataset):
             radii = raw['radii'].astype(np.float32) if 'radii' in raw else None
             if self.action_dim is None:
                 self.action_dim = actions.shape[1]
-            self.data_cache.append({
+            entry = {
                 'actions': actions,
                 'positions': positions,
                 'radii': radii,
                 'length': len(positions),
-            })
+            }
+            if 'position_confidence' in raw:
+                entry['position_confidence'] = raw['position_confidence'].astype(np.float32)
+            if 'positions_2d' in raw and 'visibility' in raw:
+                entry['positions_2d'] = raw['positions_2d'].astype(np.float32)
+                entry['visibility'] = raw['visibility'].astype(bool)
+                if 'projection_matrices' in raw:
+                    entry['projection_matrices'] = raw['projection_matrices'].astype(np.float32)
+                elif 'camera_params' in raw:
+                    from src.calibration.camera_params_format import projection_matrix
+                    H, W = int(raw['H']), int(raw['W'])
+                    entry['projection_matrices'] = np.stack([
+                        projection_matrix(row, H, W) for row in raw['camera_params']
+                    ]).astype(np.float32)
+                entry['image_size'] = np.asarray(
+                    [int(raw['H']), int(raw['W'])], np.float32)
+            self.data_cache.append(entry)
 
         # 构建 sample index: (seq_id, timestep)
         for seq_id, item in enumerate(self.data_cache):
@@ -275,4 +293,23 @@ class StateTransitionDataset(SpatialSequenceDataset):
             "action_windows": torch.from_numpy(np.stack(action_windows)).float(),  # (T, seq_len, D)
             "gt_skeletons": torch.from_numpy(np.stack(gt_skeletons)).float(),      # (T, N, 3)
             "init_skeleton": torch.from_numpy(init_skeleton).float(),              # (N, 3)
+            **self._episode_observation_fields(data, start_t),
         }
+
+    def _episode_observation_fields(self, data, start_t):
+        """真实3D数据可选的 confidence + 多视角投影监督；旧数据返回空字典。"""
+        stop = start_t + self.episode_len
+        result = {}
+        if 'position_confidence' in data:
+            result["position_confidence"] = torch.from_numpy(
+                data['position_confidence'][start_t:stop]).float()
+        if all(key in data for key in (
+                'positions_2d', 'visibility', 'projection_matrices', 'image_size')):
+            result["positions_2d"] = torch.from_numpy(
+                data['positions_2d'][start_t:stop]).float()
+            result["visibility"] = torch.from_numpy(
+                data['visibility'][start_t:stop]).bool()
+            result["projection_matrices"] = torch.from_numpy(
+                data['projection_matrices']).float()
+            result["image_size"] = torch.from_numpy(data['image_size']).float()
+        return result

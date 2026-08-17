@@ -182,19 +182,68 @@ class UnifiedTrainer:
         # 可选递增权重（dense_step_weight="linear"）：窗口早期 z 浅、信息量低，
         # 权重随步数递增，让最后几步（接近部署目标）贡献更大。默认等权。
         if "skeleton" in phase_spec.active_losses:
-            per_step_mse = ((pred_seq - gt_skeletons) ** 2).mean(dim=(2, 3))  # (B, T)
+            per_node_mse = ((pred_seq - gt_skeletons) ** 2).mean(dim=3)  # (B,T,N)
+            confidence = batch.get("position_confidence")
             weight_mode = getattr(phase_spec, "dense_step_weight", "uniform")
-            if weight_mode == "linear":
-                w = torch.arange(1, T + 1, device=device, dtype=per_step_mse.dtype) / T  # 1/T..1
-                skel = (per_step_mse * w).mean()
+            if confidence is not None:
+                confidence = confidence.to(device).clamp_min(0.0)
+                per_step_mse = ((per_node_mse * confidence).sum(dim=2)
+                                / confidence.sum(dim=2).clamp_min(1e-8))
+                valid_steps = confidence.sum(dim=2) > 0
+                if weight_mode == "linear":
+                    w = torch.arange(
+                        1, T + 1, device=device, dtype=per_step_mse.dtype) / T
+                    per_step_mse = per_step_mse * w
+                skel = ((per_step_mse * valid_steps).sum()
+                        / valid_steps.sum().clamp_min(1))
             else:
-                skel = per_step_mse.mean()
+                per_step_mse = per_node_mse.mean(dim=2)
+                if weight_mode == "linear":
+                    w = torch.arange(
+                        1, T + 1, device=device, dtype=per_step_mse.dtype) / T
+                    skel = (per_step_mse * w).mean()
+                else:
+                    skel = per_step_mse.mean()
             losses["skeleton"] = skel * self._get_loss_weight("skeleton", 1.0)
         if "spatial_smooth" in phase_spec.active_losses:
             pd = pred_seq[:, :, 1:, :] - pred_seq[:, :, :-1, :]
             gd = gt_skeletons[:, :, 1:, :] - gt_skeletons[:, :, :-1, :]
-            spatial = ((pd - gd) ** 2).mean()
+            per_edge_mse = ((pd - gd) ** 2).mean(dim=3)
+            confidence = batch.get("position_confidence")
+            if confidence is not None:
+                confidence = confidence.to(device).clamp_min(0.0)
+                edge_confidence = torch.minimum(
+                    confidence[:, :, 1:], confidence[:, :, :-1])
+                spatial = ((per_edge_mse * edge_confidence).sum()
+                           / edge_confidence.sum().clamp_min(1e-8))
+            else:
+                spatial = per_edge_mse.mean()
             losses["spatial_smooth"] = spatial * self._get_loss_weight("spatial_smooth", 1.0)
+
+        if "skeleton_reprojection" in phase_spec.active_losses:
+            required = ("positions_2d", "visibility", "projection_matrices", "image_size")
+            missing = [key for key in required if key not in batch]
+            if missing:
+                raise ValueError(f"启用 skeleton_reprojection 但数据缺少 {missing}")
+            target_2d = batch["positions_2d"].to(device)       # (B,T,V,N,2)
+            visible = batch["visibility"].to(device).bool()   # (B,T,V,N)
+            matrices = batch["projection_matrices"].to(device)  # (B,V,3,4)
+            image_size = batch["image_size"].to(device)       # (B,2) [H,W]
+            center = self.model.pc_center.reshape(1, 1, 1, 3).to(device)
+            scale = self.model.pc_scale.reshape(1, 1, 1, 3).to(device)
+            physical = pred_seq * scale + center
+            homogeneous = torch.cat(
+                [physical, torch.ones_like(physical[..., :1])], dim=-1)
+            projected = torch.einsum("bvij,btnj->btvni", matrices, homogeneous)
+            valid_depth = projected[..., 2] > 1e-8
+            uv = projected[..., :2] / projected[..., 2:3].clamp_min(1e-8)
+            mask = visible & valid_depth
+            diagonal = torch.linalg.vector_norm(
+                image_size, dim=1).reshape(-1, 1, 1, 1).clamp_min(1.0)
+            error_sq = ((uv - target_2d) ** 2).sum(dim=-1) / diagonal.square()
+            reprojection = (error_sq * mask).sum() / mask.sum().clamp_min(1)
+            losses["skeleton_reprojection"] = (
+                reprojection * self._get_loss_weight("skeleton_reprojection", 1.0))
 
         # 监控量（不进 total，但写 loss_log.csv）：z 范数轨迹（漂移预警）+ 有效 tf_ratio。
         # 均存为 tensor——主循环 set_postfix 对每个非 total 值调 .item()，float 会崩。
