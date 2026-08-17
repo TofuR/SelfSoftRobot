@@ -19,11 +19,13 @@
 输出（每个序列目录，对齐 capture_to_npz schema）
 -------------------------------------------------
   cam0/00000.png ...      每个相机一个目录（cv2 缺失则跳过，frame_times 同步少写）
+  depth0/00000.png ...    仅启用深度的相机存在；对齐 RGB 的 uint16 原始深度
   frame_times.txt         每帧一行 相对秒           (--frame-times)
   actions6.csv            t_sec, c0..c5             (--actions --actions-has-timestamps)
   ndi.csv                 t_sec + 每个探头 11 列位姿/质量
   commands.csv            命令时间、ACK、最终六通道命令、通信状态
   samples.csv             抓帧时间、总体/逐相机 frame_age、各 NDI age/quality
+  camera_times.csv        每拍各相机 RGB/depth timestamp、age 与 RGBD skew
   meta.json               运行元信息
   summary.csv             (可选) 按帧对齐汇总
 """
@@ -157,7 +159,11 @@ class ValveRecorder(QObject):
         self._frame_t = 0.0
         self._latest_frames = [None] * len(self.cams)
         self._frame_ts = [0.0] * len(self.cams)
+        self._latest_depths = [None] * len(self.cams)
+        self._depth_ts = [0.0] * len(self.cams)
+        self._depth_scales = [None] * len(self.cams)
         self._camera_slots = []
+        self._depth_slots = []
         self._latest_ndi = [float("nan")] * 11
         self._ndi_t = 0.0
 
@@ -167,14 +173,17 @@ class ValveRecorder(QObject):
         self.seq_dir = ""
         self._cam_dir = ""          # cam0 兼容别的脚本
         self._cam_dirs = []
+        self._depth_dirs = []
         self._f_frame = None
         self._f_act6 = None
         self._f_ndi = None
         self._f_cmd = None
         self._f_sample = None
+        self._f_camera_times = None
         self._act6_writer = None
         self._cmd_writer = None
         self._sample_writer = None
+        self._camera_times_writer = None
         self._meta = {}
         self._frame_idx = 0
         self._driver = None
@@ -213,10 +222,17 @@ class ValveRecorder(QObject):
 
     def _connect_cameras(self, cams):
         self._camera_slots = []
+        self._depth_slots = []
         for index, camera in enumerate(cams):
             slot = lambda image, t, i=index: self._on_cam(i, image, t)
             camera.frame_ready.connect(slot, Qt.QueuedConnection)
             self._camera_slots.append(slot)
+            depth_slot = None
+            if getattr(camera, "has_depth", False) and hasattr(camera, "depth_ready"):
+                depth_slot = lambda depth, t, scale, i=index: self._on_depth(
+                    i, depth, t, scale)
+                camera.depth_ready.connect(depth_slot, Qt.QueuedConnection)
+            self._depth_slots.append(depth_slot)
 
     def set_cameras(self, cams):
         """录制前替换相机线程集合；录制中禁止变更，避免帧索引失配。"""
@@ -226,15 +242,24 @@ class ValveRecorder(QObject):
         cams = list(cams)
         if not cams:
             raise ValueError("至少需要一个相机线程")
-        for camera, slot in zip(self.cams, self._camera_slots):
+        for camera, slot, depth_slot in zip(
+                self.cams, self._camera_slots, self._depth_slots):
             try:
                 camera.frame_ready.disconnect(slot)
             except (TypeError, RuntimeError):
                 pass
+            if depth_slot is not None:
+                try:
+                    camera.depth_ready.disconnect(depth_slot)
+                except (TypeError, RuntimeError):
+                    pass
         self.cams = cams
         self.cam = cams[0]
         self._latest_frames = [None] * len(cams)
         self._frame_ts = [0.0] * len(cams)
+        self._latest_depths = [None] * len(cams)
+        self._depth_ts = [0.0] * len(cams)
+        self._depth_scales = [None] * len(cams)
         self._latest_frame = None
         self._frame_t = 0.0
         self.save_thread.set_max_pending(max(2, 8 // len(cams)))
@@ -285,6 +310,13 @@ class ValveRecorder(QObject):
         for camera_dir in self._cam_dirs:
             os.makedirs(camera_dir, exist_ok=True)
         self._cam_dir = self._cam_dirs[0]
+        self._depth_dirs = [
+            os.path.join(seq_dir, f"depth{i}")
+            if getattr(camera, "has_depth", False) else None
+            for i, camera in enumerate(self.cams)]
+        for depth_dir in self._depth_dirs:
+            if depth_dir:
+                os.makedirs(depth_dir, exist_ok=True)
         self.seq_dir = seq_dir
         self.t0 = time.monotonic()
         self._frame_idx = 0
@@ -341,8 +373,30 @@ class ValveRecorder(QObject):
             + [f"frame_age{i}" for i in range(len(self.cams))]
             + [f"ndi{i}_age" for i in range(self._ndi_count)]
             + [f"ndi{i}_quality" for i in range(self._ndi_count)])
+        self._f_camera_times = open(
+            os.path.join(seq_dir, "camera_times.csv"), "w", newline="")
+        self._camera_times_writer = csv.writer(self._f_camera_times)
+        camera_fields = ["frame_idx", "t_grab"]
+        for i, camera in enumerate(self.cams):
+            camera_fields += [f"cam{i}_rgb_t", f"cam{i}_rgb_age"]
+            if getattr(camera, "has_depth", False):
+                camera_fields += [f"cam{i}_depth_t", f"cam{i}_depth_age",
+                                  f"cam{i}_rgbd_skew"]
+        self._camera_times_writer.writerow(camera_fields)
 
+        camera_sources = []
+        for camera in self.cams:
+            if hasattr(camera, "source_metadata"):
+                camera_sources.append(camera.source_metadata())
+            else:
+                camera_sources.append({
+                    "kind": type(camera).__name__,
+                    "serial": getattr(camera, "serial", None),
+                    "has_depth": bool(getattr(camera, "has_depth", False)),
+                    "depth_scale_m": getattr(camera, "depth_scale_m", None),
+                })
         self._meta = {
+            "schema_version": 2,
             "t0_monotonic": self.t0,
             "t0_wall": time.time(),
             "start_iso": _now_iso(),
@@ -354,6 +408,7 @@ class ValveRecorder(QObject):
             "active_channel": self._active_channel,
             "camera_count": len(self.cams),
             "camera_serials": [getattr(camera, "serial", None) for camera in self.cams],
+            "camera_sources": camera_sources,
             "ndi_count": self._ndi_count,
             "random_seed": random_seed,
             "pre_generate_steps": int(pre_generate_steps),
@@ -447,15 +502,29 @@ class ValveRecorder(QObject):
                       for t in self._frame_ts]
         bad_cameras = [i for i, (frame, age) in enumerate(zip(frames, frame_ages))
                        if frame is None or age > self._max_frame_age]
-        if cv2 is None or bad_cameras:
+        depth_ages = [max(0.0, now_abs - t) if t > 0 else float("inf")
+                      for t in self._depth_ts]
+        rgbd_skews = [abs(rgb_t - depth_t) if rgb_t > 0 and depth_t > 0
+                      else float("inf")
+                      for rgb_t, depth_t in zip(self._frame_ts, self._depth_ts)]
+        bad_depths = [i for i, camera in enumerate(self.cams)
+                      if getattr(camera, "has_depth", False)
+                      and (self._latest_depths[i] is None
+                           or depth_ages[i] > self._max_frame_age
+                           or rgbd_skews[i] > 1e-3)]
+        if cv2 is None or bad_cameras or bad_depths:
             if not self._warned_no_frame:
                 self._warned_no_frame = True
-                self.log.emit(f"⚠ 相机帧无效/过期（camera={bad_cameras}，"
+                self.log.emit(f"⚠ 相机帧无效/过期（rgb={bad_cameras}, depth={bad_depths}，"
                               f"age={[round(a, 3) for a in frame_ages]}），"
                               "本拍不写入训练样本。")
             return
         image_items = [(os.path.join(self._cam_dirs[i], f"{idx:05d}.png"), frame)
                        for i, frame in enumerate(frames)]
+        for i, depth_dir in enumerate(self._depth_dirs):
+            if depth_dir:
+                image_items.append((os.path.join(depth_dir, f"{idx:05d}.png"),
+                                    self._latest_depths[i]))
         if not self.save_thread.save_many(image_items):
             self.log.emit("⚠ 图像写入队列已满，本拍所有视角一起丢弃以避免内存增长。")
             return
@@ -489,6 +558,16 @@ class ValveRecorder(QObject):
                 + ["nan" if not isinstance(x, (int, float)) or not math.isfinite(float(x)) else f"{float(x):.6f}"
                    for x in ndi_quality])
             self._f_sample.flush()
+            camera_row = [idx, f"{t_grab:.6f}"]
+            for i, camera in enumerate(self.cams):
+                rgb_rel = self._frame_ts[i] - self.t0
+                camera_row += [f"{rgb_rel:.6f}", f"{frame_ages[i]:.6f}"]
+                if getattr(camera, "has_depth", False):
+                    depth_rel = self._depth_ts[i] - self.t0
+                    camera_row += [f"{depth_rel:.6f}", f"{depth_ages[i]:.6f}",
+                                   f"{rgbd_skews[i]:.6f}"]
+            self._camera_times_writer.writerow(camera_row)
+            self._f_camera_times.flush()
         except Exception as e:
             self.log.emit(f"日志写失败，安全停止: {e}")
             self.stop_recording()
@@ -545,14 +624,17 @@ class ValveRecorder(QObject):
         for command_id in list(self._pending_commands):
             self._finalize_command(command_id)
         frames = self._frame_idx
-        for f in (self._f_frame, self._f_act6, self._f_ndi, self._f_cmd, self._f_sample):
+        for f in (self._f_frame, self._f_act6, self._f_ndi, self._f_cmd,
+                  self._f_sample, self._f_camera_times):
             try:
                 if f is not None:
                     f.close()
             except Exception:
                 pass
-        self._f_frame = self._f_act6 = self._f_ndi = self._f_cmd = self._f_sample = None
+        self._f_frame = self._f_act6 = self._f_ndi = self._f_cmd = None
+        self._f_sample = self._f_camera_times = None
         self._act6_writer = self._cmd_writer = self._sample_writer = None
+        self._camera_times_writer = None
         self._meta.update(stop_iso=_now_iso(), frames=int(frames))
         try:
             with open(os.path.join(self.seq_dir, "meta.json"), "w") as fh:
@@ -574,6 +656,15 @@ class ValveRecorder(QObject):
             self._frame_t = float(t_abs)
             self.preview_frame.emit(img)  # 兼容旧的单相机预览订阅者
         self.preview_frame_updated.emit(index, img)
+
+    @pyqtSlot(int, np.ndarray, float, float)
+    def _on_depth(self, index: int, depth: np.ndarray, t_abs: float,
+                  depth_scale_m: float):
+        if index < 0 or index >= len(self._latest_depths):
+            return
+        self._latest_depths[index] = depth
+        self._depth_ts[index] = float(t_abs)
+        self._depth_scales[index] = float(depth_scale_m)
 
     @pyqtSlot(list, float)
     def _on_ndi(self, pose: list, t_abs: float):

@@ -1,7 +1,7 @@
 # 六通道气压阀 · NDI 末端 · 相机  同步采集（real_capture）
 
 > 自包含的实物数据采集程序：用 **Modbus 6 通道电流型比例阀（4–20mA，0–500kPa）** 驱动软臂，
-> **NDI Aurora 电磁导航** 读末端 3D 位姿，**RealSense 多相机**取图像，各视角在**动作门控**下时间同步，
+> **NDI Aurora 电磁导航** 读末端 3D 位姿，RealSense RGB(D) 与普通 OpenCV RGB 相机取图，各视角在**动作门控**下采样对齐，
 > 产出 `scripts/real/capture_to_npz.py` 直接能吃的 raw 数据 → 训练状态转移/形状模型。
 
 与旧 `docs/ref/Main UI-plc/`（1-DOF 单通道）的关系：本项目自包含、可 git 提交（旧目录在
@@ -11,7 +11,7 @@
 | 文件 | 作用 |
 |---|---|
 | `modbus_manager.py` | Modbus RTU 协议 + 2 组×3 通道控制（原样复制，仅把 `import serial` 改成可选） |
-| `realsense_cam.py` | 单台 RealSense RGB 捕获线程（按序列号选择，+ mock 合成剪影帧） |
+| `realsense_cam.py` / `camera_sources.py` | RealSense RGB(D)、普通 OpenCV RGB 与 mock 相机源 |
 | `nditracker.py` | NDI Aurora 封装 `ndi_load` / 多探头位姿读取 |
 | `hardware_threads.py` | `NdiThread`（真）+ `MockNdiThread`（合成末端轨迹） |
 | `valve_control.py` | `ValveController`（6 维→2 组）+ `MockValveController` + `ValveDriver`（随机/扫描） |
@@ -30,7 +30,9 @@ python main_capture.py --mock
 python main_capture.py --group1 COM3 --group2 COM46 --ndi COM9
 ```
 1. **连接 Modbus**（两组串口；2 组 × 3 通道 = 6 路）→ **连接 NDI**（末端串口）；相机已自动开预览。
-2. GUI「相机」分组设置相机数和序列号（逗号分隔；空白表示自动选择），点击「应用/重连」；右侧可选择单路或平铺预览。
+2. GUI「相机」可继续设置 RealSense 数量/序列号，也可填写来源描述，例如
+   `realsense-depth:SERIAL_A,opencv:0`；普通 UVC 相机不需要厂商 SDK。
+   多台 RealSense 必须逐台填写且不能重复序列号；`--mock-cam`/`--mock` 会明确覆盖持久化的真机来源。
 3. **设通道范围**：每个通道 `min/max`（kPa）。**单通道**：只给目标通道设范围，其余 5 路 `min=max=0`。
 4. 模式选 **Manual** / **Random** / **Sweep** / **Replay**；设置动作间隔、稳定等待、每通道
    rise/fall 速率上限（kPa/s，填 0 表示不限速），Random 可填 seed 和预生成步数，Replay 选择已有 `actions6.csv`。
@@ -56,12 +58,14 @@ t=0.20s  下一拍
 | 文件 | 内容 | 去向 |
 |---|---|---|
 | `cam0/00000.png … camN/00000.png` | 每个相机一个零填充帧目录，同一索引为同一拍 | `--view-dirs` |
+| `depth0/00000.png` | 仅 depth 源存在；与 RGB 对齐的原始 `uint16` 深度 | 深度弱监督/质控 |
 | `frame_times.txt` | 每帧一行 相对秒 | `--frame-times` |
 | `actions6.csv` | `t_sec, c0..c5`（首行表头） | `--actions --actions-has-timestamps` |
 | `ndi.csv` | `t_sec + ndi0_* ... ndiN_*`（每探头 11 列） | → `tip.npz` → `--ndi-tip` |
 | `commands.csv` | 命令时间、ACK、最终命令、分组通信状态 | 通信 QC / 复现 |
 | `samples.csv` | `t_grab`、总体/逐相机 `frame_age`、各 NDI age/quality | 数据质量筛选 |
-| `meta.json` | t0 / 相机数量与序列号 / 模式 / seed / 速率 / NDI 数量 / age 阈值 / 帧数 | 复现 |
+| `camera_times.csv` | 每路 RGB/depth 时间、age 与 RGBD skew | 动态同步质控 |
+| `meta.json` | schema v2 / 相机来源与 depth scale / 模式 / seed / 速率 / 帧数 | 复现 |
 | `summary.csv` | **(可选)** 按帧对齐：6 路气压 + NDI xyz + 图像名 | 人眼检查 |
 
 > 保存路径默认 `<main_capture.py 所在目录>/data/raw/seq_<时间戳>`（按 **py 文件位置**解析，不依赖运行 cwd；
@@ -79,7 +83,7 @@ python scripts/real/capture_to_npz.py \
   --actions data/raw/seq_XXXX/actions6.csv --actions-has-timestamps \
   --frame-times data/raw/seq_XXXX/frame_times.txt \
   --ndi-tip data/raw/seq_XXXX/tip.npz \
-  --planar-lift --clean-nan --out data/real_seq/seq_XXXX.npz
+  --planar-lift --n-nodes 15 --clean-nan --out data/real_seq/seq_XXXX.npz
 # 3) 训练（GT 单步状态转移）
 CUDA_VISIBLE_DEVICES=1 python scripts/training/train_gt_transition.py --data_dir data/real_seq
 ```
@@ -98,4 +102,5 @@ CUDA_VISIBLE_DEVICES=1 python scripts/training/train_gt_transition.py --data_dir
 - NDI 失锁（quality NaN）记 NaN/空，`--clean-nan` + `tip.npz` 插值会补。
 - 退出请用窗口关闭（安全停所有线程 + 关 Modbus + 落盘）。
 - 真机依赖：`pyserial`（Modbus）、`pyrealsense2`（相机）、`scipy` + `scikit-surgerynditracker`（NDI）。
+- 普通 USB/UVC 相机通过 `opencv:0`、`opencv:1` 或设备路径接入，不需要厂商 SDK。
   未装时 mock / 仅部分硬件模式仍可运行（`import` 都是可选的）。

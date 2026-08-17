@@ -1,7 +1,9 @@
 # realsense_cam.py
-"""RealSense RGB 捕获线程（只取 color stream；capture_to_npz 不吃深度）。
+"""RealSense RGB / 可选对齐深度捕获线程。
 
 每帧发 `frame_ready(np.ndarray BGR, float monotonic_time)`。
+启用深度时额外发 `depth_ready(np.ndarray uint16, float monotonic_time,
+float depth_scale_m)`；RGB 与 depth 来自同一个 frameset，并先对齐到 color。
 带 `mock` 模式：合成一条随时间弯曲的"剪影臂"，无需相机即可跑通
 GUI + recorder + capture_to_npz 整条链路（验收 §8 冒烟清单）。
 
@@ -36,8 +38,14 @@ def _mock_frame(phase: float, w: int, h: int) -> np.ndarray:
     return img
 
 
+def _mock_depth(color: np.ndarray) -> np.ndarray:
+    """与 mock RGB 对齐的毫米深度：背景 1.5m，暗臂 1.0m。"""
+    gray = color.mean(axis=2)
+    return np.where(gray < 100, 1000, 1500).astype(np.uint16)
+
+
 class RealSenseCam(QThread):
-    """Color-stream 捕获线程。
+    """Color-stream + 可选 aligned-depth 捕获线程。
 
     Signals:
         frame_ready(np.ndarray img_bgr, float t_monotonic)
@@ -45,11 +53,12 @@ class RealSenseCam(QThread):
     """
 
     frame_ready = pyqtSignal(np.ndarray, float)
+    depth_ready = pyqtSignal(np.ndarray, float, float)
     error = pyqtSignal(str)
 
     def __init__(self, width: int = 640, height: int = 480, fps: int = 30,
                  exposure_us: int = 0, gain: int = 0, mock: bool = False,
-                 serial=None, parent=None):
+                 serial=None, enable_depth: bool = False, parent=None):
         super().__init__(parent)
         self.width = int(width)
         self.height = int(height)
@@ -58,7 +67,22 @@ class RealSenseCam(QThread):
         self.gain = int(gain)
         self.mock = bool(mock)
         self.serial = str(serial) if serial else None
+        self.enable_depth = bool(enable_depth)
+        self.has_depth = self.enable_depth
+        self.source_kind = "mock" if self.mock else "realsense"
+        self.depth_scale_m = 0.001 if self.enable_depth else None
         self._running = True
+
+    def source_metadata(self):
+        return {
+            "kind": self.source_kind,
+            "serial": self.serial,
+            "has_depth": self.has_depth,
+            "depth_scale_m": self.depth_scale_m,
+            "width": self.width,
+            "height": self.height,
+            "fps": self.fps,
+        }
 
     @staticmethod
     def list_devices():
@@ -98,16 +122,32 @@ class RealSenseCam(QThread):
                 cfg.enable_device(self.serial)
             cfg.enable_stream(rs.stream.color, self.width, self.height,
                               rs.format.bgr8, self.fps)
+            if self.enable_depth:
+                cfg.enable_stream(rs.stream.depth, self.width, self.height,
+                                  rs.format.z16, self.fps)
             pipe = rs.pipeline(ctx)
             prof = pipe.start(cfg)
+            align = rs.align(rs.stream.color) if self.enable_depth else None
+            if self.enable_depth:
+                self.depth_scale_m = float(
+                    prof.get_device().first_depth_sensor().get_depth_scale())
             self._apply_exposure(prof, rs)
             while self._running:
                 frames = pipe.wait_for_frames(1000)  # 短超时，stop() 能尽快响应
+                if align is not None:
+                    frames = align.process(frames)
                 cf = frames.get_color_frame()
                 if not cf:
                     continue
                 img = np.array(cf.get_data())  # 强制拷贝，脱离 RealSense 复用的帧 buffer（避免跨线程叠影）
-                self.frame_ready.emit(img, time.monotonic())
+                stamp = time.monotonic()
+                if self.enable_depth:
+                    df = frames.get_depth_frame()
+                    if not df:
+                        continue
+                    depth = np.array(df.get_data()).copy()
+                    self.depth_ready.emit(depth, stamp, float(self.depth_scale_m))
+                self.frame_ready.emit(img, stamp)
         except Exception as e:  # pragma: no cover - 硬件异常
             self.error.emit(f"RealSense 采集异常: {e}")
         finally:
@@ -137,7 +177,10 @@ class RealSenseCam(QThread):
         phase = 0.0
         while self._running:
             t = time.monotonic()
-            self.frame_ready.emit(_mock_frame(phase, self.width, self.height), t)
+            color = _mock_frame(phase, self.width, self.height)
+            if self.enable_depth:
+                self.depth_ready.emit(_mock_depth(color), t, 0.001)
+            self.frame_ready.emit(color, t)
             phase += period
             slack = period - (time.monotonic() - t)
             if slack > 0:

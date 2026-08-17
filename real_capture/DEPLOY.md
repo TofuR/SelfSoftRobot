@@ -108,6 +108,10 @@ python main_capture.py --group1 /dev/ttyUSB0 --group2 /dev/ttyUSB1 --ndi /dev/tt
 # 4) 多相机：序列号按设备管理器/RealSense Viewer 查询，逗号分隔
 python main_capture.py --camera-count 2 --camera-serials 123456789,987654321 \
                        --group1 /dev/ttyUSB0 --group2 /dev/ttyUSB1 --ndi /dev/ttyUSB2
+
+# 5) 一台 RealSense RGBD + 一台普通 USB RGB
+python main_capture.py --camera-sources realsense-depth:123456789,opencv:0 \
+                       --group1 /dev/ttyUSB0 --group2 /dev/ttyUSB1 --ndi /dev/ttyUSB2
 ```
 
 `--mock` = `--mock-cam --mock-valve --mock-ndi`，三个可任意组合混选。
@@ -133,7 +137,9 @@ GUI「主通道」下拉有 `ch0..ch5` + `全部 (all)`——**这是同一个�
 
 1. 「Modbus 连接」填组1/组2 串口 + 波特/从站 → 点「**组1 连接**」（默认只连组1 即可控制 ch0-2）；需要 ch3-5 再点「**组2 连接**」。**再点一次同一按钮 = 断开该组**（安全释放串口，不必关程序）。
 2. 「主通道」选 `ch0`（单通道起步）→ 确认 min/max（默认 `0–200`）。未连的组对应的通道会自动灰锁。
-3. 在「**相机**」分组选择相机数量和序列号；空序列号表示自动选择当前设备。点击「应用/重连」后，右侧可选择单路预览或平铺全部视角。
+3. 在「**相机**」分组选择 RealSense 数量/序列号，或用来源描述混合
+   `realsense-depth:SERIAL,opencv:0`。多台 RealSense 必须使用唯一非空序列号；
+   非法配置不会断开当前相机。点击「应用/重连」后预览各视角。
 4. （可选）点「**连接 NDI**」（再点 = 断开，安全释放 Aurora）。
 5. 填「保存目录」、选「模式」（手动 / 随机游走 / 往返扫描 / Replay）、「动作间隔」`0.2` s、「稳定等待」`0.19` s。
 6. 「▶ 开始采集」→ 采够后「■ 停止采集」。
@@ -146,12 +152,14 @@ GUI「主通道」下拉有 `ch0..ch5` + `全部 (all)`——**这是同一个�
 | 文件 | 内容 | 下游用途 |
 |---|---|---|
 | `cam0/00000.png ... camN/00000.png` | 每个相机一个目录；同一编号为同步拍 | `--view-dirs` |
+| `depth0/00000.png` | 仅 depth 源存在；与 RGB 对齐的原始 uint16 深度 | 深度弱监督/质控 |
 | `frame_times.txt` | 每帧一行 相对秒 | `--frame-times` |
 | `actions6.csv` | `t_sec, c0..c5`（**首行表头**） | `--actions --actions-has-timestamps` |
 | `ndi.csv` | `t_sec + ndi0_* ... ndiN_*`（首行表头；失锁写 `nan`） | → `tip.npz` → `--ndi-tip` |
 | `commands.csv` | 命令时间、ACK、最终命令、分组通信状态 | 通信 QC / 复现 |
 | `samples.csv` | `t_grab`、总体/逐相机 `frame_age`、各 NDI age/quality | 数据质量筛选 |
-| `meta.json` / `summary.csv` | 运行元信息（含相机数量/序列号）/ 按帧对齐汇总 | 人眼核对 |
+| `camera_times.csv` | 每路 RGB/depth 时间、age 与 RGBD skew | 同步质控 |
+| `meta.json` / `summary.csv` | schema v2、相机来源/depth scale / 按帧汇总 | 人眼核对 |
 
 ---
 
