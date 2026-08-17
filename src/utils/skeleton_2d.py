@@ -1,76 +1,30 @@
 """skeleton_2d.py — 2D 骨架提取与 3D→2D 投影工具。
 
+⚠️ 骨架提取的**唯一实现**已移至 real_validation/perception/skeleton.py
+（部署产物持有实现；本文件是薄壳，签名与行为完全不变）。
+本文件仍保留需要 torch 的投影/loss 工具，因为 perception 包不依赖 torch。
+
 提供:
-  - 从二值图像提取 2D 中心线/骨架
+  - 从二值图像提取 2D 中心线/骨架（re-export）
   - 将 3D 骨架点投影到相机像素坐标
   - 计算 2D 投影骨架 loss（Phase 1 监督信号）
 """
 
-import numpy as np
 import torch
 
+from real_validation.perception.skeleton import (  # noqa: F401  薄壳 re-export
+    _perpendicular_tip_fix,
+    batch_extract_skeleton_2d,
+    extract_skeleton_2d,
+)
 
-def extract_skeleton_2d(binary_img, n_points=31):
-    """从二值图像提取 2D 中心线骨架。
-
-    对图像每一行（从底到顶）计算白色像素的质心列坐标，
-    然后沿弧长均匀重采样到 n_points 个点。
-
-    Args:
-        binary_img: (H, W) 二值图像，1=前景。
-        n_points: 采样点数。
-
-    Returns:
-        skeleton_2d: (n_points, 2) 像素坐标 [col, row]，从底部到顶部排列。
-                     若图像无前景，返回全零。
-    """
-    H, W = binary_img.shape
-    coords = []
-
-    for row in range(H - 1, -1, -1):
-        white_cols = np.where(binary_img[row] > 0.5)[0]
-        if len(white_cols) > 0:
-            center_col = white_cols.mean()
-            coords.append([center_col, float(row)])
-
-    if len(coords) < 2:
-        return np.zeros((n_points, 2), dtype=np.float32)
-
-    coords = np.array(coords, dtype=np.float32)
-
-    # 沿弧长均匀重采样
-    diffs = np.diff(coords, axis=0)
-    seg_lens = np.sqrt((diffs ** 2).sum(axis=1))
-    cum_len = np.concatenate([[0.0], np.cumsum(seg_lens)])
-    total_len = cum_len[-1]
-
-    if total_len < 1e-6:
-        return np.zeros((n_points, 2), dtype=np.float32)
-
-    target_lens = np.linspace(0, total_len, n_points)
-
-    resampled = np.zeros((n_points, 2), dtype=np.float32)
-    resampled[:, 0] = np.interp(target_lens, cum_len, coords[:, 0])
-    resampled[:, 1] = np.interp(target_lens, cum_len, coords[:, 1])
-
-    return resampled
-
-
-def batch_extract_skeleton_2d(images, n_points=31):
-    """批量提取 2D 骨架。
-
-    Args:
-        images: (T, H, W) 二值图像序列。
-        n_points: 采样点数。
-
-    Returns:
-        skeletons: (T, n_points, 2) 像素坐标。
-    """
-    T = images.shape[0]
-    skeletons = np.zeros((T, n_points, 2), dtype=np.float32)
-    for t in range(T):
-        skeletons[t] = extract_skeleton_2d(images[t], n_points)
-    return skeletons
+__all__ = [
+    "_perpendicular_tip_fix",
+    "batch_extract_skeleton_2d",
+    "extract_skeleton_2d",
+    "project_3d_to_2d",
+    "compute_2d_skeleton_loss",
+]
 
 
 def project_3d_to_2d(points_3d, eye, center, up, focal, H, W):

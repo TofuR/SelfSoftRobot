@@ -119,14 +119,30 @@ SelfSoftRobot/
 │   │   ├── train_spatial_sequence.py #  SpatialSequence 薄包装
 │   │   ├── train_pc_spatial.py      #   PCSpatial 薄包装
 │   │   ├── train_open_loop_transition.py # OpenLoopTransition 窗口开环（热启动 gt_transition + tf 退火）
-│   │   └── train_gt_transition.py   #   GTObservedTransition 薄包装（主线）
+│   │   ├── train_gt_transition.py   #   GTObservedTransition 薄包装（主线）
+│   │   ├── train_transition.py      #   ★ 实物统一入口（--mode gt|open_loop，取代旧 train_gt/open_loop_transition）
 │   │       # (train_state_transition.py / _s1.py 已归档至 docs/archived/trainers/，被 train_gt/open_loop_transition 取代)
 │   ├── evaluation/
 │   │   ├── evaluate_3d.py           #   3D 几何评估脚本
+│   │   ├── evaluate_shape.py        #   形态评估（chamfer/hausdorff/f-score）
 │   │   ├── visualize_3d_shape.py    #   3D SDF/mesh 可视化
 │   │   ├── visualize_predictions.py #   预测对比/动画可视化
 │   │   ├── eval_rollout.py          #   StateTransition 闭环 rollout 评估（自回归，未来扩展）
-│   │   └── eval_gt_transition.py    #   GTObservedTransition 观测驱动评估（主线）
+│   │   ├── eval_gt_transition.py    #   GTObservedTransition 观测驱动评估（主线）
+│   │   ├── eval_real_quant.py       #   ★ 实物定量评估（末端 NDI mm + 形态 px + open_loop drift_by_k）
+│   │   ├── visualize_real_overlay.py #  ★ 实物：模型预测叠真实照片（原图+mask+GT+预测骨架）
+│   │   └── inspect_real_data.py     #   ★ 实物：骨架数据网格诊断（9 帧 2D + 3D 预览）
+│   ├── real/                        # ★ 实物数据流水线（免标定 2D，详见 §8）
+│   │   ├── masks_to_transition_npz.py #  mask → 免标定 2D npz（tip_fix + 离群插值 + action 归一[0,1]）
+│   │   ├── clean_transition_npz.py  #   静态段共识清洗（绝对位置锚定，修分割抖动/关节偏移）
+│   │   ├── repair_masks.py          #   mask 级修复（独立轨道，逐行宽共识，产 masks_repaired/）
+│   │   ├── composite_frames.py      #   批量 原图+mask+骨架 叠图（含 montage）
+│   │   ├── compare_skeleton_methods.py # 7 法末端 corner 对比（独立真值+bend 分层）
+│   │   ├── skeleton_to_shape.py     #   node→形态 半径偏移基线（骨架+常数半径 r→IoU 对比 mask）
+│   │   ├── segment_rd.py / segment_batch.py # white_on_blue 分割（R&D / 批量）
+│   │   ├── capture_to_npz.py        #   采集原始数据 → npz
+│   │   ├── inspect_capture.py       #   采集数据检查
+│   │   └── calibrate_cameras.py     #   多视角标定（另一条标定→3D 三角化路径，非本工作流主线）
 │   ├── testing/
 │   │   └── verify_unified_trainer.py #  统一训练器验证（5 模型 forward+backward）
 │   ├── experiments/                 # 实验脚本
@@ -1589,3 +1605,106 @@ python scripts/evaluation/visualize_3d_shape.py \
 - **全 GT 驱动窗口框架（当前主线）**：GTObservedTransition（`model_gt_transition.py`）继承 StateTransition，固化"前一状态恒真实"（TF=1.0）+ z 在状态窗口 K 步演化（K=episode_len=40）+ dense supervision（每步预测都算 loss，给无 GT 的 z 直接梯度）。样本自包含可打乱（z 不跨样本）。这是当前部署主线；StateTransition 的纯自回归 rollout 退为未来扩展（无法每步观测时）。
 - **dense supervision 无泄漏**：状态窗口的 s 既作输入又作 GT label 是标准 teacher forcing——预测 ŝ_{j+1} 只用 ≤s_j 的历史，GT s_{j+1} 不在预测路径。部署时无 GT 不算 loss，直接用最后一步预测 ŝ_t。
 - **GPU 选择约定**：测试/冒烟实验用 cuda1 或 cuda3（如 `CUDA_VISIBLE_DEVICES=3`），避免占用 cuda0。
+
+---
+
+## 8. 实物数据（免标定 2D）工作流
+
+> 这是项目的**第二条数据路线**（与 §1–7 的 sim PyElastica 多视角标定路线并列）。完整细节见
+> [`docs/research/2026-07-10-real-data-2d-workflow.md`](research/2026-07-10-real-data-2d-workflow.md)。
+
+### 8.1 定位与与 sim 路线的区别
+
+实物平台：1-DOF 双段软体臂，单相机，**免相机标定**（无棋盘格、无三角化）。
+
+| 维度 | sim 路线（§1–7，仍有效） | 实物路线（本节，新） |
+|------|------------------------|--------------------|
+| 仿真/采集 | PyElastica 物理仿真 + PyVista 渲染 | 真实相机采集（RealSense D400） |
+| 标定 | 多视角相机标定 + 度量 3D 内参 | **免标定**，无度量 3D / 内参 |
+| state 表示 | 3D 节点坐标 `positions (T,3,31)` | **2D 图像骨架 `[col,row,0]`**（像素，z≈0 平面假设） |
+| 监督 | 体渲染 / 3D SDF 直接监督 | 2D 骨架回归（无体渲染） |
+| 度量验证 | 仿真 GT 直接对比 | **NDI 6DOF tracker** 独立度量（末端 mm） |
+| 相机矩阵投影 | 用（有内参 + 度量 3D） | **不用**（免标定管线无度量 3D；表示本身在图像平面） |
+
+学一个状态转移模型 `ŝ_t = F(s_{t-1}, a_t)`，其中 **state = 2D 图像骨架**（像素）、**action = 归一化气压** ∈[0,1]。
+末端毫米精度用独立采集的 **NDI** 验证。GT-observed（每步观测）与 open-loop（开环 rollout）在同一网络上对比。
+
+### 8.2 流程命令（端到端）
+
+```bash
+# ① mask → 免标定 2D npz（2D 骨架 [col,row,0] + tip_fix + 离群插值 + action 归一[0,1]）
+python scripts/real/masks_to_transition_npz.py --seq real_capture/data/raw/<seq>
+#   可降节点：--n-points 21（默认 31，全流水线按 N 分数自适应）
+
+# ② 静态段共识清洗（动作段保留真实弯曲，静态段跨帧中位共识）
+python scripts/real/clean_transition_npz.py --seq <seq>           # → data/real_seq/<seq>_clean/
+
+# ③ 训练（统一入口，--mode gt|open_loop；训练吃 ..._clean/train）
+CUDA_VISIBLE_DEVICES=1 python scripts/training/train_transition.py \
+    --mode gt --data_dir data/real_seq/<seq>_clean/train
+# open_loop（热启动自最新 gt）：--mode open_loop
+
+# ④ 定量评估（末端 NDI mm + 形态 px + open_loop drift_by_k）
+CUDA_VISIBLE_DEVICES=1 python scripts/evaluation/eval_real_quant.py \
+    --checkpoint train_log/gt_transition/exp_*/phase_gt_transition/model/best_model.pt \
+    --data_dir data/real_seq/<seq>_clean/train
+
+# ⑤ 可视化（模型预测叠真实照片：原图+mask+GT 骨架+预测骨架同框）
+CUDA_VISIBLE_DEVICES=1 python scripts/evaluation/visualize_real_overlay.py \
+    --checkpoint train_log/gt_transition/exp_*/phase_gt_transition/model/best_model.pt \
+    --data_dir data/real_seq/<seq>_clean/train
+```
+
+### 8.3 关键脚本（一句话说明）
+
+| 脚本 | 作用 |
+|------|------|
+| `scripts/real/masks_to_transition_npz.py` | mask → 免标定 2D npz（逐行质心 + 弧长重采样 + `tip_fix` 垂直尖端切片修 corner + 离群插值 + action 归一） |
+| `scripts/real/clean_transition_npz.py` | 静态段共识清洗（绝对位置锚定关节，修分割抖动 / 关节偏移 / mask 缺块；动作段保留） |
+| `scripts/real/repair_masks.py` | mask 级修复（独立轨道，逐行宽共识，产 `masks_repaired/`，不重骨架化） |
+| `scripts/real/composite_frames.py` | 批量 原图+mask+骨架 叠图（10214 帧 + montage） |
+| `scripts/real/compare_skeleton_methods.py` | 7 法末端 corner 对比（独立真值 + bend 分层） |
+| `scripts/real/skeleton_to_shape.py` | node→形态 半径偏移基线（骨架 + 常数半径 r → IoU 对比 mask） |
+| `scripts/training/train_transition.py` | 统一训练入口（`--mode gt\|open_loop`，取代旧 `train_gt/open_loop_transition`） |
+| `scripts/evaluation/eval_real_quant.py` | 定量评估（① 末端 NDI mm ② 像素部署 tip/node/chamfer/hausdorff/procrustes ③ 分段+按 action 分箱 ④ drift_by_k） |
+| `scripts/evaluation/visualize_real_overlay.py` | 模型预测叠真实照片（`(col,row)` 直接画像素、丢 z） |
+| `scripts/evaluation/inspect_real_data.py` | 骨架数据网格诊断（9 帧 2D + 3D 预览） |
+
+底层支撑模块：`src/utils/skeleton_2d.py`（2D 骨架 + `_perpendicular_tip_fix`）、`src/evaluation/transition_metrics.py`（窗口开环 rollout + drift_by_k）、`src/evaluation/shape_metrics.py`（chamfer/hausdorff/f-score）。
+
+### 8.4 坐标空间澄清（关键）
+
+| 量 | 空间 | 来源 |
+|---|---|---|
+| 骨架 GT / 模型预测 / mask | **像素 `[col,row]`, z≈0** | 图像（免标定管线） |
+| NDI 末端 | **毫米 `[x,y,z]`**（tracker 帧） | NDI 传感器（独立度量） |
+| drift_by_k | 无量纲（归一化空间） | rollout/onestep MSE 比 |
+
+- **预测是 px，不是 mm。** 模型 forward 在归一化空间运算，反归一化回 **像素** `[col,row,z]`；z 通道 `pc_scale≈eps` 使其恒≈0（平面 1-DOF 假设）。
+- **整体形态误差只能算 px**（31 节点只有图像 GT，无度量 GT）；**末端误差 px + mm 都能算**（末端有 NDI 度量 GT）。
+- **px↔mm 对应（免相机标定）**：NDI 末端 `(x,y,z mm)` 与图像骨架 `node0 (col,row px)` 是同一物理点逐帧配对，用全部帧 **(GT node0 px ↔ NDI x,y mm)** 最小二乘拟合 **2D 仿射** `A: (col,row,1)→(x,y)`。拟合残差 RMS = 标定噪声底；模型末端像素经同一 `A`→mm 与 NDI 比 → 末端毫米误差。
+- **不用相机矩阵投影**：免标定管线无度量 3D / 内参，表示本身活在图像平面；相机矩阵是给 sim（度量 3D + 内参）用的，对实物是二次变换、会扭曲。
+
+**实测**（GT 模型 `exp_20260709_5`，2500 帧）：NDI 仿射标定底 **0.74 mm**；GT 模型末端 mean **0.77 mm** / median 0.57 / p90 1.4 mm → 底亚毫米、模型已到噪声底。
+
+### 8.5 模块化（A/B 快速对比）
+
+| 想对比 | 改什么 | 影响范围 |
+|---|---|---|
+| 骨架节点数 | `masks_to_transition_npz --n-points N` | 关节检测/静态共识/末端修复/训练/评估全部按 N 分数自适应（已验证 N=31/21/15 同一物理关节与末端） |
+| 末端修复 | `--tip-fix` / `--no-tip-fix` | 骨架提取是否修 corner（npz、composite） |
+| 骨架化方法 | `scripts/real/compare_skeleton_methods.py` | 7 法末端 corner 对比 |
+| gt vs open_loop | `train_transition --mode` + `eval_real_quant --mode` | 部署语义 + drift |
+
+> 节点索引全部按 N 的分数（关节搜索 ~0.25–0.85·N、静态共识 ~0.4·N、动作段 ~0.6·N、末端修复 body 节点 ~0.10/0.25·N），故降节点**不需手调任何魔法数**。
+
+### 8.6 实物硬件与数据布局
+
+**硬件**（纠正旧 doc 的"电磁阀"假设）：驱动 = TwinCAT PLC（pyads，`192.168.50.56.1.1:851`）+ 电机推注射器（**电机位置 mm 才是真实控制量**）；气压 = Arduino 读 I2C 传感器（COM4@9600）；相机 = Intel RealSense D400；末端度量 = NDI 6DOF tracker（`ndi.csv`: `t_sec,x,y,z mm` + 姿态）。采集程序在 `docs/ref/Main UI-plc/`。
+
+```
+real_capture/data/raw/<seq>/{cam0/<NNNNN>.png, actions6.csv, ndi.csv, frame_times.txt, meta.json}
+  + derived/<seq>/{masks, masks_repaired, overlay}
+  + data/real_seq/<seq>[_clean]/{train,val}/*.npz   positions:(T,3,N) actions:(T,1) ∈[0,1]
+```
+

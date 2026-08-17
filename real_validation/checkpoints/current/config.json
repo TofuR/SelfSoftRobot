@@ -1,0 +1,12 @@
+{
+  "model": "OpenLoopTransitionModel",
+  "action_dim": 1,
+  "window_size": 40,
+  "hidden_dim": 128,
+  "n_scales": 4,
+  "encoder_type": "fractional",
+  "n_nodes": 15,
+  "z_dim": 16,
+  "episode_len": 40,
+  "checkpoint_placeholder": "copy best_model.pt from exp_20260714_8"
+}

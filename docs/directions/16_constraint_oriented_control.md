@@ -1,9 +1,11 @@
 # 方向：约束导向控制（Constraint-Oriented Control）
 
-> 状态：规划中（设计已定，工程待实现）
+> 状态：**部分实现**（方向1 视野认证 ✓ + 方向2 可微逆规划 ✓ 已验证；设计详见正文，工程落地进行中）
 > 优先级：高（把科学问题 12 §B 接上工程控制闭环，项目独有卖点）
 > 前置：前向状态转移骨架模型（[14](14_gt_observed_transition.md) / [15](15_open_loop_windowed_transition.md)）已可用且可微
-> 最后更新：2026-06-19
+> 部署模型：**open_loop**（[15](15_open_loop_windowed_transition.md)，形状控制部署目标；gt 仅训练基础/精度上界，见下方"实现进展"）
+> 脚本：`scripts/evaluation/eval_horizon.py`（方向1）· `scripts/control/inverse_plan.py`（方向2）
+> 最后更新：2026-07-14
 
 ---
 
@@ -50,6 +52,101 @@
 - `src/utils/sdf_utils.compute_gt_sdf(query_points, skeleton, radius) = min_seg(point_to_segment_distance) − radius`，对 skeleton 可微（已验证 grad norm ≈ 11.5）。`<0` 管内 / `>0` 管外，做穿透惩罚天然可微。
 
 收缩性：`s_t = s_{t-1} + delta_scale·tanh(delta_head(...))`，`delta_scale` 收缩保证 action→skeleton 映射 Lipschitz 有界 → 利于 K 步反传收敛。
+
+---
+
+## 实现进展（2026-07-14）：视野认证 + 逆规划已验证
+
+> 部署模型确定为 **open_loop**（[15](15_open_loop_windowed_transition.md)），非 gt——形状控制需"给定动作 → 预测形状"的规划能力，gt 每步观测只适合作训练基础/精度上界（详见 [[open-loop-deployment-target]] 记忆）。下用 open_loop checkpoint（SAM2-clean 数据，action_dim=1，N=15，episode_len=40）实测。
+
+### 方向1：纯自回归视野认证（`scripts/evaluation/eval_horizon.py`）
+
+逆规划把候选动作序列喂前向模型 rollout 评估——若模型漂移，规划动作无法迁移到真机。故先认证前向模型能否当"规划级仿真器"。8 种子纯自回归 rollout（1 帧 GT 种子，之后不再观测，300 步）：
+
+| 模型 | drift@300步 | K_max@5px | K_max@10px | K_max@drift3× | z_norm 轨迹 |
+|---|---|---|---|---|---|
+| **open_loop** | **1.7×** ✓ | 51 步 | **124 步** | 135 步 | 0.00→0.00（惰性） |
+| gt（对照） | 272× ✗ | 53 | 91 | 9 | 0.00→0.66 |
+
+**结论**：open_loop 是可用规划仿真器（drift 仅 1.7×）；gt 不可用（272× 爆炸）——直接证实部署选 open_loop。可信视野 **K_max ≈ 50（紧，~5px 均值节点）~120（松，~10px）**，远超训练 episode_len=40（泛化良好）。**诚实警告**：open_loop 的 z 惰性（≈0），稳定性部分源于 z 坍缩——对规划良性（要的是稳定仿真器），但对"z 建模迟滞"的故事是警告。图：`output/horizon/horizon_comparison.png`。
+
+### 方向2：可微逆规划（`scripts/control/inverse_plan.py`，shooting 法）
+
+给定 s_init + s_target，动作序列 `requires_grad`，K 步 rollout（带梯度）后 backprop 进动作，Adam + 投影到真实动作范围 + 多起点。reach 任务 t500→t540（目标 = t_init+K，GT 可验证）：
+
+| 方案 | 末态 vs s_target（均值节点 px / 末端 px） |
+|---|---|
+| 初始差距 s_init→s_target | 2.29 / 6.48 |
+| do-nothing（重复末动作） | 8.16 / 22.27（漂移远离目标） |
+| GT-actions（真实动作 rollout） | 2.69 / 0.81（模型保真上界） |
+| **planner（优化动作）** | **3.07 / 5.09** |
+
+**结论**：planner 到达目标 3.07px（均值节点），**0.38× of do-nothing（2.6× 更优）**，接近 GT-actions 保真上界（3.07 vs 2.69，+14%）——证明在 open_loop 仿真器上逆规划有效。图：`output/inverse_plan/plan_trajectory.png`。末端误差（5.09px）高于 GT-actions（0.81px）因 loss 等权所有节点、末端未加权（tip-weighted loss 可改善）。
+
+### 关键关系：方向1 认证仿真器，方向2 在其上规划
+
+方向2 的可靠性**完全依赖**方向1：规划 = 在仿真器里优化动作序列，若仿真器漂移则动作无法迁移真机。**K_max 是方向2 规划视野的硬上限**（K ≤ K_max 才可信，故本方向 §序列级里原写的 `K ≤ 40` 偏保守，实测可放到 ~120）。z 的长程稳定性是核心（规划时 z 无 GT 完全自演化）。这就是"方向1 是方向2 基础"的精确定义，也是把"步数惩罚"接进 loss 的依据（惩罚 K > K_max 的解）。
+
+
+
+## 方法与验证详解（问答 + 可视化）
+
+> 回答："认证怎么做 / gt 为何失败 / 没连机器人怎么验证 / 一次能推多久 / 方法到底如何"。
+
+### Q1·纯自回归视野认证具体怎么做？
+
+模拟的正是部署场景"观测一次真实姿态，之后只靠动作往前推"：
+
+1. 取 1 帧 GT 骨架作种子 ŝ_0 = positions[t0]（这一帧"看了一眼"真实图像）；
+2. 之后 k=1..K 步：每步只喂【动作窗口 + 上一步模型自己的预测 ŝ_{k-1} + 演化的 z】，**不再看任何真实图像**；
+3. 记录每步 ŝ_k 与真实 positions[t0+k] 的误差 → error-by-k 曲线；
+4. **K_max** = 误差首次越过容差的步数 = "模型能可信地往前推多久"；
+5. 多种子（8 个不同 t0）聚合，统计稳健。
+
+**可视化** `output/viz/horizon_rollout_grid.png`：预测臂（色）叠在真实臂（灰虚线）上，k=1→300（0.2s→61s）。open_loop 行预测臂始终贴合真实臂；gt 行 k>40 后预测臂飞走。`horizon_rollout_{open_loop,gt}.gif` 是动画版。脚本 `scripts/evaluation/viz_control.py`。
+
+### Q2·为什么 gt 不能用、open_loop 能用？（你的直觉对：训练信息泄漏）
+
+**核心是 train/inference gap（teacher forcing 的代价）**：
+
+- **gt 训练 TF=1.0**：每一步的 s_{t-1} **永远喂真实值**。模型从没见过"自己的预测当输入"，没机会学"从带误差的状态自我修正"。
+- **gt 开环推理**：必须喂自己的预测 → 输入落到训练分布外（带误差的 s）→ 小误差被放大 → 300 步漂移 **272×**。
+- **open_loop 训练 TF=0**（退火到 0）：窗口内**故意喂模型自己的预测** → 模型显式学习了"在自身预测分布下保持稳定" → 300 步漂移仅 **1.7×**。
+
+**你的判断完全正确**：gt 训练时"给的信息太多"，反而没学到开环所需的能力。这就是 open_loop 是**部署目标**、gt 退为**训练基础**的根本原因——要在自身预测上跑的，必须在自身预测上训。
+
+### Q3·没连接机器人，逆规划怎么验证？（关键诚实点）
+
+**前向模型 = 从真实数据学出来的"机器人仿真器"**（10214 帧真实物理，学到了 action+形状 → 下一帧形状 的映射），故可用它代替真机做规划。验证分三层：
+
+| 层 | 做什么 | 结果 | 说明 |
+|---|---|---|---|
+| ① 模型保真（GT-actions 基线） | 把**真实录制时的实际动作**喂模型 rollout，比真实目标形状 | 末端 **0.81px** ≈ NDI 噪声底 | **模型对真实物理保真** → 仿真器可信 |
+| ② 规划器 | 在可信仿真器里优化动作序列 | 末端 **3.07px** | 找到一条模型认为能到目标的动作 |
+| ③ 对照（do-nothing） | 不规划，重复末动作 | 8.16px（更差） | 证明规划器确实在做事 |
+
+**但这是"模型内验证"——规划与评估用同一个模型**。① 部分打破循环（GT-actions 来自真实物理，模型能复现 → 证明模型可信），但 **planner 自己优化的动作还没上真机验证过**。真机验证 = 把规划动作发到 PLC → 真机执行 → RealSense+NDI 测真实形状 → 比 target。**这是部署阶段，需硬件闭环，当前未做**。我们在 **val 集**（模型没训练过的真实轨迹）上跑，提供一层泛化保证（非纯过拟合）。
+
+**可视化** `output/viz/plan_reach_compare.png`：三面板 planner / GT-actions / do-nothing 的 s_init→轨迹→s_target。`plan_reach.gif`：planner 逐步驱动 init→target 的动画。
+
+### Q4·时间换算（0.2s/帧）
+
+实测 `real_capture/.../frame_times.txt`：dt = **0.203s**（≈5fps），总录 10214 帧 ≈ 34.6 分钟。
+
+| 视野 | 步数 | 秒 |
+|---|---|---|
+| 训练 episode_len | 40 | 8.1s |
+| K_max @ 紧（5px 均值节点） | 51 | 10s |
+| K_max @ 松（10px） | 124 | 25s |
+| 认证最长 | 300 | 61s |
+
+→ **单次开环规划可信 ~10–25s**。更长机动需 **receding horizon（滚动重规划）**：每执行 N < K_max 步后重新观测 + 重规划。
+
+### 这些方法究竟怎么样？（诚实评估）
+
+- **方向1（视野认证）**：open_loop 作仿真器，**25s 内可信**，单次规划够用。隐患：z 惰性（≈0），稳定性部分来自 z 坍缩而非真迟滞记忆——对规划良性，但削弱了"z 建模迟滞"的论文卖点。
+- **方向2（逆规划）**：reach 3.07px（均值）/ 5.09px（末端），接近模型保真上界（GT-actions 2.69px），**证明"学习仿真器上做逆规划"可行**。短板：末端精度需 tip-weighted loss；速度慢（40 步 BPTT ~1s/iter，实时需 CMA-ES / 并行 / L-BFGS）；**未上真机**。
+- **下一步优先级**：① 真机闭环验证（最重要，证明迁移）→ ② receding horizon（长机动）→ ③ 可达性校验（mode C，本方向原设计）→ ④ tip 加权 + 速度优化。
 
 ---
 
@@ -141,7 +238,7 @@ rollout 复用 `eval_rollout.rollout_windowed_one_sequence`，把"喂 GT 动作�
 
 ## 落地优先级（按 ROI × 风险加权）
 
-1. **立即（1 周内，零风险）**：mode (C) 可达性残差报告 + mode (A1) 端点到达原型。forward 模型已可微、per-frame MSE~1e-8 已达，反演立即可跑——这是把"科学问题 B（T* 可逆性）"接上"工程控制闭环"的最快路径。
+1. **立即（1 周内，零风险）**：✅ mode (A1) 端点到达原型**已实现**（`scripts/control/inverse_plan.py`，shooting 法，reach 3.07px / 0.38× do-nothing，见上方"实现进展"）。✅ 视野认证已实现（`scripts/evaluation/eval_horizon.py`，K_max ~50-120）。⏳ mode (C) 可达性残差报告待做——这是把"科学问题 B（T* 可逆性）"接上"工程控制闭环"的下一步。
 2. **短期（1–2 周）**：mode (A2) 无碰撞轨迹优化（接 [05 Phase 1](05_skeleton_to_shape_conversion.md) 变半径后的碰撞查询）。
 3. **中期（1 月）**：mode (A3) Jacobian 控制 + soft-min 几何修复。
 4. **论文级**：mode (B) 视觉描述符目标 + 在线校正（实物）+ 与 [12 §A/B](12_scientific_problems_soft_robot_self_modeling.md) 记忆信道的联合实验。

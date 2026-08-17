@@ -5,9 +5,9 @@
   - 连接 Modbus（2 组 × 3 通道 = 6 路电流型比例阀，0–500kPa）；
   - 6 通道目标/min/max 控制（**单通道模式**：把其余 5 路 min=max=0 即只动 1 路，向后兼容）；
   - 连接 NDI Aurora 电磁导航，实时末端 x/y/z + 轨迹；
-  - 相机实时预览（RealSense，可 mock）；
+  - 相机实时预览（1–8 台 RealSense，可 mock，支持序列号选择和单路/平铺预览）；
   - 动作门控采集：动作每 `action_interval`（默认 0.2s）下发一次，等 `settle`（默认 0.19s）
-    软臂稳定后抓一帧 + NDI 末端，三者同索引落盘；
+    软臂稳定后抓全部相机帧 + NDI 末端，同一拍分别落盘到 cam0...camN；
   - 后处理：生成 tip.npz + 调 capture_to_npz 出训练用 .npz / 导出汇总 CSV；
   - 设置持久化（real_capture_config.ini，跨机器不踩绝对路径坑）；
   - **mock 任意组合**：--mock-cam / --mock-valve / --mock-ndi 单选或混选；--mock = 三个全开。
@@ -42,7 +42,7 @@ from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout,
     QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPlainTextEdit,
-    QPushButton, QSizePolicy, QSplitter, QVBoxLayout, QWidget)
+    QPushButton, QSizePolicy, QSpinBox, QSplitter, QVBoxLayout, QWidget)
 
 from recorder import ValveRecorder, build_ndi_tip_npz, export_summary_csv
 from realsense_cam import RealSenseCam
@@ -101,29 +101,38 @@ class CaptureWindow(QMainWindow):
 
     def __init__(self, mock_cam=False, mock_valve=False, mock_ndi=False,
                  group1="COM3", group2="COM46", ndi_port="COM9", baudrate=9600,
-                 slave_addr=1, fps=30):
+                 slave_addr=1, fps=30, ndi_count=2, camera_count=1,
+                 camera_serials=""):
         super().__init__()
         self.mock_cam = bool(mock_cam)
         self.mock_valve = bool(mock_valve)
         self.mock_ndi = bool(mock_ndi)
+        self.ndi_count = max(1, int(ndi_count))
+        self.camera_count = max(1, int(camera_count))
+        self.camera_serials = []
+        self.camera_serials_text = str(camera_serials or "")
         self.fps = int(fps)
         self.project_root = _detect_project_root()
         self._cfg_path = os.path.join(SCRIPT_DIR, "real_capture_config.ini")
         self._npz_proc = None
+        self._hardware_started = False
+        self._latest_preview_frames = []
+        self._camera_preview_labels = []
 
         self.setWindowTitle("六通道阀 · NDI · 相机  同步采集  ·  "
                             + ("MOCK" if (mock_cam or mock_valve or mock_ndi) else "HARDWARE"))
         self.resize(1380, 880)
 
         # ---- 硬件/核心（每个组件按需 mock，可任意组合）----
-        self.cam = RealSenseCam(mock=mock_cam, fps=fps)
+        self.cams = self._make_cameras()
+        self.cam = self.cams[0]  # 兼容旧代码
 
         if mock_ndi:
             from hardware_threads import MockNdiThread
-            self.ndi = MockNdiThread()
+            self.ndi = MockNdiThread(ndi_count=self.ndi_count)
         else:
             from hardware_threads import NdiThread
-            self.ndi = NdiThread(port=ndi_port)
+            self.ndi = NdiThread(port=ndi_port, ndi_count=self.ndi_count)
 
         if mock_valve:
             from valve_control import MockValveController
@@ -132,7 +141,8 @@ class CaptureWindow(QMainWindow):
             from valve_control import ValveController
             self.controller = ValveController({1: group1, 2: group2}, baudrate, slave_addr)
 
-        self.core = ValveRecorder(self.cam, self.ndi, self.controller)
+        self.core = ValveRecorder(self.cam, self.ndi, self.controller, cams=self.cams)
+        self.core.set_ndi_count(self.ndi_count)
 
         # ---- 数据缓存（曲线）----
         self._p_buf = np.zeros((N_CHAN, PLOT_LEN))
@@ -147,11 +157,18 @@ class CaptureWindow(QMainWindow):
         # 避免切到单通道把 inactive 显示归零后 _save_config 把配置永久写成 0（review #2）。
         self._cfg_lo = [P_MIN] * N_CHAN
         self._cfg_hi = [DEFAULT_MAX] * N_CHAN
+        self._cfg_rise = [100.0] * N_CHAN
+        self._cfg_fall = [100.0] * N_CHAN
+        self.max_frame_age = 0.5
+        self.max_ndi_age = 0.5
+        self._rise_sb = []
+        self._fall_sb = []
 
         self._build_ui()
         self._connect_core()
         self.log_signal.connect(self._log)
         self._load_config()
+        self._apply_camera_config()
         self._on_active_changed()                # 按 restored 主通道：缓存→显示→锁定→曲线显隐
 
         # CLI 覆盖（仅端口类参数）
@@ -159,20 +176,48 @@ class CaptureWindow(QMainWindow):
         self.le_ndi.setText(ndi_port)
         self.sb_baud.setValue(int(baudrate)); self.sb_slave.setValue(int(slave_addr))
 
-        # 相机立即开（预览）；mock 阀默认连组1（默认使用 modbus1）；mock NDI 立即起
-        self.cam.start()
+        # 相机立即开（预览）；mock 阀两组都连，方便直接验证 six-channel/all 模式
+        for camera in self.cams:
+            camera.start()
+        self._hardware_started = True
         if mock_valve:
             self.controller.connect_group(1)
+            self.controller.connect_group(2)
         if mock_ndi:
             self.ndi.start()
             self._sync_ndi_button()
 
-        mocked = [n for n, m in (("相机", mock_cam), ("阀/Modbus", mock_valve), ("NDI", mock_ndi)) if m]
+        mocked = [n for n, m in ((f"相机×{len(self.cams)}", mock_cam),
+                                 ("阀/Modbus", mock_valve), ("NDI", mock_ndi)) if m]
         if mocked:
             self._log(f"就绪。MOCK 组件：{' + '.join(mocked)}（这些用假数据，其余用真硬件）")
         else:
             self._log("就绪。（全部真硬件，需先连接 Modbus / NDI）")
         self._log("单通道用法：把不用的 5 路 min=max=0，只给目标通道设范围。")
+
+    def _parse_camera_serials(self, text=None):
+        raw = self.camera_serials_text if text is None else text
+        return [part.strip() for part in str(raw).split(",")
+                if part.strip() and part.strip().lower() != "auto"]
+
+    def _make_cameras(self):
+        serials = self._parse_camera_serials()
+        if self.mock_cam:
+            serials = [None] * self.camera_count
+        elif not serials:
+            serials = RealSenseCam.list_devices()[:self.camera_count]
+        serials = serials[:self.camera_count]
+        if len(serials) < self.camera_count:
+            if self.camera_count == 1:
+                serials.append(None)
+            else:
+                # 多相机不能让多个 pipeline 都打开默认设备；缺失设备用无效序列号
+                # 占位并明确报错，避免静默采集重复视角。
+                serials.extend(f"__missing_camera_{i}__"
+                               for i in range(len(serials), self.camera_count))
+        self.camera_serials = serials
+        return [RealSenseCam(mock=self.mock_cam, fps=self.fps, serial=serial)
+                for serial in serials]
 
     # ===================== UI 构建 =====================
     def _build_ui(self):
@@ -203,48 +248,74 @@ class CaptureWindow(QMainWindow):
         ll.addWidget(gb)
 
         # ---- 6 通道阀控制 ----
-        gb = QGroupBox("阀控制（目标/min/max，kPa；范围 0–500）")
+        gb = QGroupBox("阀控制（目标/min/max，kPa；rise/fall 为命令速率上限 kPa/s，0=不限速）")
         g = QGridLayout(gb)
         g.addWidget(QLabel("通道"), 0, 0); g.addWidget(QLabel("目标"), 0, 1)
         g.addWidget(QLabel("min"), 0, 2); g.addWidget(QLabel("max"), 0, 3)
+        g.addWidget(QLabel("rise/s"), 0, 4); g.addWidget(QLabel("fall/s"), 0, 5)
         for i in range(N_CHAN):
             g.addWidget(QLabel(f"ch{i}"), i + 1, 0)
             t = QDoubleSpinBox(); t.setRange(P_MIN, P_MAX); t.setDecimals(1); t.setSingleStep(5.0)
             mn = QDoubleSpinBox(); mn.setRange(P_MIN, P_MAX); mn.setDecimals(1); mn.setSingleStep(5.0)
             mx = QDoubleSpinBox(); mx.setRange(P_MIN, P_MAX); mx.setDecimals(1); mx.setSingleStep(5.0)
+            rise = QDoubleSpinBox(); rise.setRange(0.0, 5000.0); rise.setDecimals(1); rise.setSingleStep(10.0); rise.setValue(100.0)
+            fall = QDoubleSpinBox(); fall.setRange(0.0, 5000.0); fall.setDecimals(1); fall.setSingleStep(10.0); fall.setValue(100.0)
             if i == 0:                                   # 默认 ch0 有范围，其余钉 0（单通道）
                 t.setValue(0.0); mn.setValue(0.0); mx.setValue(DEFAULT_MAX)
             else:
                 t.setValue(0.0); mn.setValue(0.0); mx.setValue(0.0)
             g.addWidget(t, i + 1, 1); g.addWidget(mn, i + 1, 2); g.addWidget(mx, i + 1, 3)
+            g.addWidget(rise, i + 1, 4); g.addWidget(fall, i + 1, 5)
             # 先设值再接线：初始化 setValue 不触发 _on_range_changed（此时 cb_active 尚未创建）
             t.valueChanged.connect(self._on_target_changed)
             mn.valueChanged.connect(self._on_range_changed)   # min/max 改动实时同步驱动（录制中也生效）
             mx.valueChanged.connect(self._on_range_changed)
+            rise.valueChanged.connect(self._on_rate_changed)
+            fall.valueChanged.connect(self._on_rate_changed)
             self._target_sb.append(t); self._min_sb.append(mn); self._max_sb.append(mx)
+            self._rise_sb.append(rise); self._fall_sb.append(fall)
         row = QHBoxLayout()
         row.addWidget(QLabel("主通道")); self.cb_active = QComboBox()
         self.cb_active.addItems([f"ch{i}" for i in range(N_CHAN)] + ["全部 (all)"])
         self.cb_active.setToolTip(
             "单通道 chN：其余 5 路 min/max/target 自动归零并锁定（防误改），气压图只画主通道 1 条线。\n"
             "『全部(all)』：放开 6 路范围可改，气压图画 6 条线。\n"
-            "legacy pressure.csv：单通道记主通道；all 模式记 ch0（6 路全量始终在 actions6.csv）。")
+            "采集动作统一写 actions6.csv；命令 ACK/质量写 commands.csv、samples.csv。")
         self.cb_active.currentIndexChanged.connect(self._on_active_changed)
         row.addWidget(self.cb_active)
         self.btn_send = QPushButton("立即下发目标"); self.btn_send.clicked.connect(self._on_send)
         self.btn_zero = QPushButton("全部归零"); self.btn_zero.clicked.connect(self._on_zero)
         row.addWidget(self.btn_send); row.addWidget(self.btn_zero)
-        g.addLayout(row, N_CHAN + 1, 0, 1, 4)
+        g.addLayout(row, N_CHAN + 1, 0, 1, 6)
         ll.addWidget(gb)
 
         # ---- NDI ----
         gb = QGroupBox("NDI 末端（Aurora 电磁导航）")
         g = QGridLayout(gb)
         g.addWidget(QLabel("串口"), 0, 0); self.le_ndi = QLineEdit("COM1"); g.addWidget(self.le_ndi, 0, 1)
+        g.addWidget(QLabel("探头数"), 0, 2); self.sb_ndi_count = QSpinBox(); self.sb_ndi_count.setRange(1, 8); self.sb_ndi_count.setValue(self.ndi_count); self.sb_ndi_count.valueChanged.connect(self._on_ndi_count_changed); g.addWidget(self.sb_ndi_count, 0, 3)
         self.btn_ndi = QPushButton("连接 NDI"); self.btn_ndi.setStyleSheet("background:#2CB1BC;color:white")
-        self.btn_ndi.clicked.connect(self._toggle_ndi); g.addWidget(self.btn_ndi, 0, 2)
+        self.btn_ndi.clicked.connect(self._toggle_ndi); g.addWidget(self.btn_ndi, 0, 4)
         self.lbl_ndi = QLabel("末端: x=--  y=--  z=--  (失锁时 NaN)"); self.lbl_ndi.setStyleSheet("color:#334E68")
-        g.addWidget(self.lbl_ndi, 1, 0, 1, 3)
+        g.addWidget(self.lbl_ndi, 1, 0, 1, 5)
+        ll.addWidget(gb)
+
+        # ---- 多相机 ----
+        gb = QGroupBox("相机（RealSense，多视角同步）")
+        g = QGridLayout(gb)
+        g.addWidget(QLabel("相机数"), 0, 0)
+        self.sb_camera_count = QSpinBox(); self.sb_camera_count.setRange(1, 8)
+        self.sb_camera_count.setValue(self.camera_count)
+        g.addWidget(self.sb_camera_count, 0, 1)
+        g.addWidget(QLabel("序列号（逗号分隔，空=自动）"), 0, 2)
+        self.le_camera_serials = QLineEdit(self.camera_serials_text)
+        g.addWidget(self.le_camera_serials, 0, 3)
+        self.btn_camera_apply = QPushButton("应用/重连")
+        self.btn_camera_apply.clicked.connect(self._apply_camera_config)
+        g.addWidget(self.btn_camera_apply, 0, 4)
+        self.lbl_camera = QLabel("相机预览：cam0")
+        self.lbl_camera.setStyleSheet("color:#334E68")
+        g.addWidget(self.lbl_camera, 1, 0, 1, 5)
         ll.addWidget(gb)
 
         # ---- 采集 ----
@@ -253,18 +324,31 @@ class CaptureWindow(QMainWindow):
         g.addWidget(QLabel("保存目录"), 0, 0); self.le_seq = QLineEdit("data/raw"); g.addWidget(self.le_seq, 0, 1, 1, 2)
         self.btn_browse = QPushButton("…"); self.btn_browse.setFixedWidth(34); self.btn_browse.clicked.connect(self._on_browse); g.addWidget(self.btn_browse, 0, 3)
         g.addWidget(QLabel("模式"), 1, 0); self.cb_mode = QComboBox()
-        self.cb_mode.addItems(["手动录制 (Manual)", "自动随机游走 (Random)", "自动往返扫描 (Sweep)"])
+        self.cb_mode.addItems(["手动录制 (Manual)", "自动随机游走 (Random)",
+                               "自动往返扫描 (Sweep)", "actions6.csv 回放 (Replay)"])
         g.addWidget(self.cb_mode, 1, 1, 1, 2)
         self.cb_ts = QCheckBox("自动时间戳命名"); self.cb_ts.setChecked(True); g.addWidget(self.cb_ts, 1, 3)
         g.addWidget(QLabel("动作间隔(s)"), 2, 0); self.sb_interval = QDoubleSpinBox(); self.sb_interval.setRange(0.05, 5.0); self.sb_interval.setSingleStep(0.05); self.sb_interval.setValue(0.20); g.addWidget(self.sb_interval, 2, 1)
         g.addWidget(QLabel("稳定等待(s)"), 2, 2); self.sb_settle = QDoubleSpinBox(); self.sb_settle.setRange(0.0, 4.0); self.sb_settle.setSingleStep(0.01); self.sb_settle.setValue(0.19); g.addWidget(self.sb_settle, 2, 3)
-        g.addWidget(QLabel("备注"), 3, 0); self.le_note = QLineEdit(""); g.addWidget(self.le_note, 3, 1, 1, 3)
+        g.addWidget(QLabel("random seed"), 3, 0); self.sb_seed = QSpinBox(); self.sb_seed.setRange(0, 2147483647); self.sb_seed.setValue(0); self.sb_seed.setSpecialValueText("自动"); g.addWidget(self.sb_seed, 3, 1)
+        g.addWidget(QLabel("预生成步数"), 3, 2); self.sb_steps = QSpinBox(); self.sb_steps.setRange(0, 1000000); self.sb_steps.setValue(0); self.sb_steps.setSpecialValueText("在线"); g.addWidget(self.sb_steps, 3, 3)
+        g.addWidget(QLabel("Replay 文件"), 4, 0); self.le_replay = QLineEdit(""); g.addWidget(self.le_replay, 4, 1, 1, 2)
+        self.btn_replay = QPushButton("…"); self.btn_replay.setFixedWidth(34); self.btn_replay.clicked.connect(self._on_browse_replay); g.addWidget(self.btn_replay, 4, 3)
+        g.addWidget(QLabel("最大 frame age(s)"), 5, 0)
+        self.sb_max_frame_age = QDoubleSpinBox(); self.sb_max_frame_age.setRange(0.0, 60.0)
+        self.sb_max_frame_age.setDecimals(3); self.sb_max_frame_age.setSingleStep(0.05)
+        self.sb_max_frame_age.setValue(0.5); g.addWidget(self.sb_max_frame_age, 5, 1)
+        g.addWidget(QLabel("最大 NDI age(s)"), 5, 2)
+        self.sb_max_ndi_age = QDoubleSpinBox(); self.sb_max_ndi_age.setRange(0.0, 60.0)
+        self.sb_max_ndi_age.setDecimals(3); self.sb_max_ndi_age.setSingleStep(0.05)
+        self.sb_max_ndi_age.setValue(0.5); g.addWidget(self.sb_max_ndi_age, 5, 3)
+        g.addWidget(QLabel("备注"), 6, 0); self.le_note = QLineEdit(""); g.addWidget(self.le_note, 6, 1, 1, 3)
         row = QHBoxLayout()
         self.btn_start = QPushButton("▶ 开始采集"); self.btn_start.setStyleSheet("background:#2CB1BC;color:white"); self.btn_start.clicked.connect(self._on_start)
         self.btn_stop = QPushButton("■ 停止采集"); self.btn_stop.setStyleSheet("background:#667EEA;color:white"); self.btn_stop.setEnabled(False); self.btn_stop.clicked.connect(self._on_stop)
         row.addWidget(self.btn_start); row.addWidget(self.btn_stop)
-        g.addLayout(row, 4, 0, 1, 4)
-        self.lbl_rec = QLabel("未录制"); self.lbl_rec.setStyleSheet("color:#888"); g.addWidget(self.lbl_rec, 5, 0, 1, 4)
+        g.addLayout(row, 7, 0, 1, 4)
+        self.lbl_rec = QLabel("未录制"); self.lbl_rec.setStyleSheet("color:#888"); g.addWidget(self.lbl_rec, 8, 0, 1, 4)
         ll.addWidget(gb)
 
         # ---- 后处理 ----
@@ -272,7 +356,7 @@ class CaptureWindow(QMainWindow):
         g = QGridLayout(gb)
         g.addWidget(QLabel("camera_params(npz)"), 0, 0); self.le_camparam = QLineEdit("config/real_camera_params.npz"); g.addWidget(self.le_camparam, 0, 1, 1, 2)
         g.addWidget(QLabel("灰度阈值"), 1, 0); self.sb_thresh = QDoubleSpinBox(); self.sb_thresh.setRange(0, 255); self.sb_thresh.setDecimals(0); self.sb_thresh.setValue(60); g.addWidget(self.sb_thresh, 1, 1)
-        self.cb_planar = QCheckBox("单相机--planar-lift"); self.cb_planar.setChecked(True); g.addWidget(self.cb_planar, 1, 2)
+        self.cb_planar = QCheckBox("单相机 planar-lift（多相机自动三角化）"); self.cb_planar.setChecked(True); g.addWidget(self.cb_planar, 1, 2)
         self.btn_npz = QPushButton("⚡ 生成 npz（tip.npz + capture_to_npz）"); self.btn_npz.clicked.connect(self._on_gen_npz); g.addWidget(self.btn_npz, 2, 0, 1, 3)
         self.btn_summary = QPushButton("📋 导出汇总 CSV（按帧对齐 6路气压+NDI）"); self.btn_summary.clicked.connect(self._on_summary); g.addWidget(self.btn_summary, 3, 0, 1, 3)
         ll.addWidget(gb)
@@ -281,10 +365,22 @@ class CaptureWindow(QMainWindow):
         # ---------- 右：可视化 ----------
         right = QWidget()
         rl = QVBoxLayout(right)
-        self.preview = QLabel("相机预览"); self.preview.setAlignment(Qt.AlignCenter)
-        self.preview.setMinimumHeight(220); self.preview.setStyleSheet("background:#222;color:#aaa")
-        self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        rl.addWidget(self.preview, 3)
+        preview_toolbar = QHBoxLayout()
+        preview_toolbar.addWidget(QLabel("预览布局"))
+        self.cb_camera_view = QComboBox()
+        self.cb_camera_view.currentIndexChanged.connect(self._on_camera_view_changed)
+        preview_toolbar.addWidget(self.cb_camera_view)
+        preview_toolbar.addStretch(1)
+        rl.addLayout(preview_toolbar)
+        self.preview_container = QWidget()
+        self.preview_container.setMinimumHeight(220)
+        self.preview_container.setStyleSheet("background:#222;color:#aaa")
+        self.preview_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.preview_grid = QGridLayout(self.preview_container)
+        self.preview_grid.setContentsMargins(2, 2, 2, 2)
+        self.preview_grid.setSpacing(3)
+        rl.addWidget(self.preview_container, 3)
+        self._rebuild_camera_preview(self.camera_count)
         self.p_plot = pg.PlotWidget(
             title="6 路气压 (kPa)",
             axisItems={"left": _CleanAxis(orientation="left"),
@@ -314,7 +410,8 @@ class CaptureWindow(QMainWindow):
     # ===================== 信号接线 =====================
     def _connect_core(self):
         self.core.log.connect(self._log)
-        self.core.preview_frame.connect(self._on_preview)
+        self.core.preview_frames.connect(self._on_preview_frames)
+        self.core.preview_frame_updated.connect(self._on_preview_frame_updated)
         self.core.pressure_status.connect(self._on_pressure)
         self.core.ndi_status.connect(self._on_ndi)
         self.core.connection_changed.connect(self._on_conn)
@@ -322,6 +419,131 @@ class CaptureWindow(QMainWindow):
         self.core.recording_started.connect(self._on_rec_started)
         self.core.recording_status.connect(self._on_rec_status)
         self.core.recording_stopped.connect(self._on_rec_stopped)
+
+    def _rebuild_camera_preview(self, count):
+        """在固定预览容器内重建相机格子；容器尺寸不随相机数量改变。"""
+        while self.preview_grid.count():
+            item = self.preview_grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self._camera_preview_labels = []
+        self.cb_camera_view.blockSignals(True)
+        self.cb_camera_view.clear()
+        self.cb_camera_view.addItem("平铺全部")
+        self.cb_camera_view.addItems([f"cam{i}" for i in range(max(1, int(count)))])
+        self.cb_camera_view.blockSignals(False)
+        for i in range(max(1, int(count))):
+            label = QLabel(f"cam{i} 等待图像")
+            label.setAlignment(Qt.AlignCenter)
+            label.setStyleSheet("background:#222;color:#aaa;border:1px solid #555")
+            self._camera_preview_labels.append(label)
+        self._layout_camera_preview()
+
+    def _layout_camera_preview(self):
+        for label in self._camera_preview_labels:
+            label.hide()
+        if not self._camera_preview_labels:
+            return
+        selected = self.cb_camera_view.currentIndex()
+        if selected <= 0:
+            count = len(self._camera_preview_labels)
+            columns = max(1, int(np.ceil(np.sqrt(count))))
+            rows = int(np.ceil(count / columns))
+            for i, label in enumerate(self._camera_preview_labels):
+                self.preview_grid.addWidget(label, i // columns, i % columns)
+                label.show()
+            for row in range(rows):
+                self.preview_grid.setRowStretch(row, 1)
+            for col in range(columns):
+                self.preview_grid.setColumnStretch(col, 1)
+            self.lbl_camera.setText(f"相机预览：平铺全部（{count} 路）")
+        else:
+            i = min(selected - 1, len(self._camera_preview_labels) - 1)
+            self.preview_grid.addWidget(self._camera_preview_labels[i], 0, 0)
+            self.preview_grid.setRowStretch(0, 1)
+            self.preview_grid.setColumnStretch(0, 1)
+            self._camera_preview_labels[i].show()
+            self.lbl_camera.setText(f"相机预览：cam{i}")
+        self._refresh_camera_preview()
+
+    def _on_camera_view_changed(self, _index):
+        self._layout_camera_preview()
+
+    def _set_camera_label(self, label, frame, index):
+        if frame is None:
+            label.setText(f"cam{index} 等待图像")
+            label.setPixmap(QPixmap())
+            return
+        try:
+            rgb = np.ascontiguousarray(frame[:, :, ::-1])
+            h, w = rgb.shape[:2]
+            qimg = QImage(rgb.data, w, h, w * 3, QImage.Format_RGB888).copy()
+            pix = QPixmap.fromImage(qimg).scaled(max(1, label.width() - 4),
+                                                  max(1, label.height() - 4),
+                                                  Qt.KeepAspectRatio,
+                                                  Qt.FastTransformation)
+            label.setPixmap(pix)
+        except Exception as exc:
+            label.setText(f"cam{index} 预览失败: {exc}")
+
+    def _refresh_camera_preview(self):
+        for i, label in enumerate(self._camera_preview_labels):
+            frame = (self._latest_preview_frames[i]
+                     if i < len(self._latest_preview_frames) else None)
+            self._set_camera_label(label, frame, i)
+
+    def _on_preview_frames(self, frames):
+        self._latest_preview_frames = list(frames)
+        self._refresh_camera_preview()
+
+    def _on_preview_frame_updated(self, index, frame):
+        if index < 0 or index >= len(self._camera_preview_labels):
+            return
+        while len(self._latest_preview_frames) < len(self._camera_preview_labels):
+            self._latest_preview_frames.append(None)
+        self._latest_preview_frames[index] = frame
+        selected = self.cb_camera_view.currentIndex()
+        if selected <= 0 or selected == index + 1:
+            self._set_camera_label(self._camera_preview_labels[index], frame, index)
+
+    def _apply_camera_config(self):
+        """应用相机数量/序列号；录制中由 recorder 拒绝，避免样本视角变化。"""
+        if not hasattr(self, "sb_camera_count"):
+            return False
+        count = max(1, int(self.sb_camera_count.value()))
+        serial_text = self.le_camera_serials.text().strip()
+        self.camera_count = count
+        self.camera_serials_text = serial_text
+        old_cams = list(getattr(self, "cams", []))
+        if getattr(self.core, "recording", False):
+            self._log("⚠ 录制中不能修改相机，请先停止采集。")
+            return False
+        for camera in old_cams:
+            try:
+                if camera.isRunning():
+                    camera.stop()
+            except Exception as exc:
+                self._log(f"⚠ 关闭旧相机失败: {exc}")
+        self.cams = self._make_cameras()
+        self.cam = self.cams[0]
+        self.core.set_cameras(self.cams)
+        self._latest_preview_frames = [None] * len(self.cams)
+        self._rebuild_camera_preview(len(self.cams))
+        if hasattr(self, "log_box"):
+            available = [s for s in self.camera_serials
+                         if s and not str(s).startswith("__missing_camera_")]
+            if not self.mock_cam and count > len(available):
+                self._log(f"⚠ 请求 {count} 台相机，但只发现/配置 {len(available)} 个序列号；"
+                          "请检查设备连接和序列号。")
+            self._log(f"相机配置已应用：{len(self.cams)} 台，序列号="
+                      f"{available or ['自动']}。")
+        # 点击应用时立即启动新线程；初始化阶段由 __init__ 统一启动。
+        if getattr(self, "_hardware_started", False):
+            for camera in self.cams:
+                camera.start()
+        return True
 
     # ===================== 配置持久化（跨机器安全）=====================
     def _load_config(self):
@@ -333,6 +555,15 @@ class CaptureWindow(QMainWindow):
             self.le_g1.setText(c.get("group1", self.le_g1.text()))
             self.le_g2.setText(c.get("group2", self.le_g2.text()))
             self.le_ndi.setText(c.get("ndi_port", self.le_ndi.text()))
+            self.camera_count = max(1, int(c.get("camera_count", self.camera_count)))
+            self.sb_camera_count.setValue(self.camera_count)
+            self.camera_serials_text = c.get("camera_serials", self.camera_serials_text)
+            self.le_camera_serials.setText(self.camera_serials_text)
+            self.ndi_count = max(1, int(c.get("ndi_count", self.ndi_count)))
+            self.sb_ndi_count.setValue(self.ndi_count)
+            self.core.set_ndi_count(self.ndi_count)
+            if hasattr(self.ndi, "ndi_count"):
+                self.ndi.ndi_count = self.ndi_count
             self.sb_baud.setValue(float(c.get("baudrate", self.sb_baud.value())))
             self.sb_slave.setValue(float(c.get("slave_addr", self.sb_slave.value())))
             saved = c.get("seq_dir", None)
@@ -343,12 +574,23 @@ class CaptureWindow(QMainWindow):
             self.cb_mode.setCurrentIndex(int(c.get("mode", self.cb_mode.currentIndex())))
             self.sb_interval.setValue(float(c.get("action_interval", self.sb_interval.value())))
             self.sb_settle.setValue(float(c.get("settle", self.sb_settle.value())))
+            self.sb_seed.setValue(int(c.get("random_seed", self.sb_seed.value())))
+            self.sb_steps.setValue(int(c.get("pre_generate_steps", self.sb_steps.value())))
+            self.le_replay.setText(c.get("replay_file", self.le_replay.text()))
+            self.max_frame_age = max(0.0, float(c.get("max_frame_age", self.max_frame_age)))
+            self.max_ndi_age = max(0.0, float(c.get("max_ndi_age", self.max_ndi_age)))
+            self.sb_max_frame_age.setValue(self.max_frame_age)
+            self.sb_max_ndi_age.setValue(self.max_ndi_age)
             self._guard = True                  # 恢复 active/cfg 期间禁止 _on_active_changed/_on_range_changed 回灌
             try:
                 self.cb_active.setCurrentIndex(int(c.get("active_channel", self.cb_active.currentIndex())))
                 for i in range(N_CHAN):          # 只填持久化缓存；spinbox 显示由后续 _on_active_changed 按 mode 刷
                     self._cfg_lo[i] = float(c.get(f"lo{i}", self._cfg_lo[i]))
                     self._cfg_hi[i] = float(c.get(f"hi{i}", self._cfg_hi[i]))
+                    self._cfg_rise[i] = float(c.get(f"rise{i}", self._cfg_rise[i]))
+                    self._cfg_fall[i] = float(c.get(f"fall{i}", self._cfg_fall[i]))
+                    self._rise_sb[i].setValue(self._cfg_rise[i])
+                    self._fall_sb[i].setValue(self._cfg_fall[i])
             finally:
                 self._guard = False
             self.le_camparam.setText(c.get("cam_param", self.le_camparam.text()))
@@ -364,9 +606,17 @@ class CaptureWindow(QMainWindow):
             cp["capture"] = {
                 "group1": self.le_g1.text(), "group2": self.le_g2.text(),
                 "ndi_port": self.le_ndi.text(),
+                "camera_count": str(self.sb_camera_count.value()),
+                "camera_serials": self.le_camera_serials.text(),
+                "ndi_count": str(self.sb_ndi_count.value()),
                 "baudrate": str(int(self.sb_baud.value())), "slave_addr": str(int(self.sb_slave.value())),
                 "seq_dir": self.le_seq.text(), "mode": str(self.cb_mode.currentIndex()),
                 "action_interval": str(self.sb_interval.value()), "settle": str(self.sb_settle.value()),
+                "random_seed": str(self.sb_seed.value()),
+                "pre_generate_steps": str(self.sb_steps.value()),
+                "replay_file": self.le_replay.text(),
+                "max_frame_age": str(self.sb_max_frame_age.value()),
+                "max_ndi_age": str(self.sb_max_ndi_age.value()),
                 "active_channel": str(self.cb_active.currentIndex()),
                 "cam_param": self.le_camparam.text(), "threshold": str(int(self.sb_thresh.value())),
                 "auto_timestamp": "1" if self.cb_ts.isChecked() else "0",
@@ -375,6 +625,8 @@ class CaptureWindow(QMainWindow):
             for i in range(N_CHAN):              # 从持久化缓存写（不被单通道显示归零污染，review #2）
                 cp["capture"][f"lo{i}"] = str(self._cfg_lo[i])
                 cp["capture"][f"hi{i}"] = str(self._cfg_hi[i])
+                cp["capture"][f"rise{i}"] = str(self._cfg_rise[i])
+                cp["capture"][f"fall{i}"] = str(self._cfg_fall[i])
             with open(self._cfg_path, "w", encoding="utf-8") as f:
                 cp.write(f)
         except Exception as e:
@@ -385,14 +637,13 @@ class CaptureWindow(QMainWindow):
         self.log_box.appendPlainText(text)
 
     def _on_preview(self, img: np.ndarray):
-        if not self.preview.isVisible():
-            return
-        rgb = np.ascontiguousarray(img[:, :, ::-1])   # BGR -> RGB
-        h, w = rgb.shape[:2]
-        qimg = QImage(rgb.data, w, h, w * 3, QImage.Format_RGB888).copy()
-        pix = QPixmap.fromImage(qimg).scaled(self.preview.width() - 4, self.preview.height() - 4,
-                                             Qt.KeepAspectRatio, Qt.FastTransformation)
-        self.preview.setPixmap(pix)
+        """兼容旧的单帧预览信号。新界面使用 _on_preview_frames。"""
+        self._on_preview_frames([img])
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_camera_preview_labels"):
+            self._refresh_camera_preview()
 
     def _on_pressure(self, p6: list):
         p6 = list(p6)[:N_CHAN] + [0.0] * (N_CHAN - len(p6))
@@ -404,7 +655,12 @@ class CaptureWindow(QMainWindow):
     def _on_ndi(self, pose: list):
         x, y, z = (pose[0], pose[1], pose[2]) if len(pose) >= 3 else (float("nan"),) * 3
         q = pose[10] if len(pose) > 10 else float("nan")
-        self.lbl_ndi.setText(f"末端: x={x:.1f}  y={y:.1f}  z={z:.1f}  quality={q:.2f}")
+        parts = [f"ndi0: ({x:.1f},{y:.1f},{z:.1f}) q={q:.2f}"]
+        for i in range(1, self.ndi_count):
+            base = i * 11
+            if len(pose) >= base + 11:
+                parts.append(f"ndi{i}: ({pose[base]:.1f},{pose[base+1]:.1f},{pose[base+2]:.1f}) q={pose[base+10]:.2f}")
+        self.lbl_ndi.setText(" | ".join(parts))
         if np.isfinite(x) and np.isfinite(y):
             pt = np.array([[float(x)], [float(y)]])
             self._xy_trail = np.hstack([self._xy_trail, pt])[:, -PLOT_LEN:]
@@ -468,6 +724,15 @@ class CaptureWindow(QMainWindow):
                 self._cfg_hi[i] = self._max_sb[i].value()
         self.core.update_ranges(self._current_lo(), self._current_hi())
 
+    def _on_rate_changed(self):
+        if self._guard:
+            return
+        for i in range(N_CHAN):
+            if self._rise_sb[i].isEnabled():
+                self._cfg_rise[i] = self._rise_sb[i].value()
+            if self._fall_sb[i].isEnabled():
+                self._cfg_fall[i] = self._fall_sb[i].value()
+
     def _on_active_changed(self, idx=None):
         """主通道切换（一个功能两种实现）：
         - 单通道 chN：chN 设默认范围(0..DEFAULT_MAX)、target=0 并同步其缓存；其余 5 路 min/max/target
@@ -528,7 +793,8 @@ class CaptureWindow(QMainWindow):
                 enabled = (i == idx)
             else:
                 enabled = True
-            for sb in (self._min_sb[i], self._max_sb[i], self._target_sb[i]):
+            for sb in (self._min_sb[i], self._max_sb[i], self._target_sb[i],
+                       self._rise_sb[i], self._fall_sb[i]):
                 sb.setEnabled(enabled)
         for i, curve in enumerate(self.p_curves):
             if i not in avail:
@@ -600,6 +866,16 @@ class CaptureWindow(QMainWindow):
             self._on_connect_ndi()
             self._sync_ndi_button()
 
+    def _on_ndi_count_changed(self, value):
+        if self.ndi.isRunning():
+            self._log("⚠ NDI 运行中不能修改探头数，请先断开 NDI。")
+            self.sb_ndi_count.blockSignals(True)
+            self.sb_ndi_count.setValue(self.ndi_count)
+            self.sb_ndi_count.blockSignals(False)
+            return
+        self.ndi_count = max(1, int(value))
+        self.core.set_ndi_count(self.ndi_count)
+
     def _sync_ndi_button(self):
         running = self.ndi.isRunning()
         self.btn_ndi.setText("断开 NDI" if running else "连接 NDI")
@@ -610,14 +886,16 @@ class CaptureWindow(QMainWindow):
     def _on_connect_ndi(self):
         if self.ndi.isRunning():
             self._log("NDI 已在运行。"); return
+        self.ndi_count = max(1, int(self.sb_ndi_count.value()))
+        self.core.set_ndi_count(self.ndi_count)
         old = self.ndi
         # 重建全新线程（mock 也重建）：取最新端口 + 保证断开后能重连（旧线程 stop 后 _running=False 不可复用）
         if not self.mock_ndi:
             from hardware_threads import NdiThread
-            self.ndi = NdiThread(port=self.le_ndi.text().strip())
+            self.ndi = NdiThread(port=self.le_ndi.text().strip(), ndi_count=self.ndi_count)
         else:
             from hardware_threads import MockNdiThread
-            self.ndi = MockNdiThread()
+            self.ndi = MockNdiThread(ndi_count=self.ndi_count)
         self.ndi.ndi_data.connect(self.core._on_ndi)
         # ⚠ 同步更新 recorder 引用，否则 shutdown() 停到旧线程 → 真 Aurora _tracker 永不关闭
         self.core.ndi = self.ndi
@@ -637,11 +915,15 @@ class CaptureWindow(QMainWindow):
     def _on_send(self):
         if not self.controller.connected:
             self._log("⚠ 先连接 Modbus。"); return
+        idx = self.cb_active.currentIndex()
+        self.controller.set_required_groups({1} if idx < 3 else {2} if idx < N_CHAN else {1, 2})
         self.controller.set_pressures(self._current_targets())
 
     def _on_zero(self):
         if not self.controller.connected:
             self._log("⚠ 先连接 Modbus。"); return
+        idx = self.cb_active.currentIndex()
+        self.controller.set_required_groups({1} if idx < 3 else {2} if idx < N_CHAN else {1, 2})
         for sb in self._target_sb:
             sb.setValue(0.0)
         self.controller.zero_all()
@@ -652,13 +934,15 @@ class CaptureWindow(QMainWindow):
             self.le_seq.setText(d)
 
     def _on_start(self):
-        mode = ["manual", "random", "sweep"][self.cb_mode.currentIndex()]
-        # 真阀：手动/自动都要求先连 Modbus。未连接时 set_pressures 会跳过下发却把目标值
-        # 记进 actions6.csv → 阀不动但数据像在动 = 静默污染训练数据。mock 阀恒 connected 不受影响。
-        if not self.mock_valve and not self.controller.connected:
-            self._log("⚠ 录制前请先【连接 Modbus】（手动/自动均需）。未连接时气压不会下发，但会被记进 actions6.csv。"); return
-        if mode in ("random", "sweep") and not self.controller.connected:
-            self._log("自动驱动需要先连接 Modbus。"); return
+        mode = ["manual", "random", "sweep", "replay"][self.cb_mode.currentIndex()]
+        active_idx = self.cb_active.currentIndex()
+        required_groups = ({1} if active_idx < 3 else {2} if active_idx < N_CHAN else {1, 2})
+        connected = set(getattr(self.controller, "connected_groups", set()))
+        if not required_groups.issubset(connected):
+            self._log(f"⚠ 当前模式需要控制组 {sorted(required_groups)}，已连接 {sorted(connected)}。")
+            return
+        if mode == "replay" and not self.le_replay.text().strip():
+            self._log("⚠ Replay 模式请先选择 actions6.csv。"); return
         base = self.le_seq.text().strip()
         if not base:
             self._log("请填写保存目录。"); return
@@ -667,13 +951,25 @@ class CaptureWindow(QMainWindow):
         seq = base
         if self.cb_ts.isChecked():
             seq = os.path.join(base, "seq_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
-        active_idx = self.cb_active.currentIndex()
-        # all 模式下 legacy pressure.csv 无单一主通道 → 记 ch0（6 路全量始终在 actions6.csv）
-        active_for_legacy = active_idx if active_idx < N_CHAN else 0
+        self.ndi_count = max(1, int(self.sb_ndi_count.value()))
+        self.core.set_ndi_count(self.ndi_count)
+        self.controller.set_required_groups(required_groups)
         self.core.set_manual_target(self._current_targets())
         self.core.start_recording(seq, mode, self._current_lo(), self._current_hi(),
                                   self.sb_interval.value(), self.sb_settle.value(),
-                                  active_for_legacy, self.le_note.text().strip())
+                                  active_idx if active_idx < N_CHAN else 0,
+                                  self.le_note.text().strip(),
+                                  [sb.value() for sb in self._rise_sb],
+                                  [sb.value() for sb in self._fall_sb],
+                                  (self.sb_seed.value() or None), self.sb_steps.value(),
+                                  self.le_replay.text().strip() or None,
+                                  required_groups, self.sb_max_frame_age.value(),
+                                  self.sb_max_ndi_age.value())
+
+    def _on_browse_replay(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择 actions6.csv", self.le_seq.text(), "CSV (*.csv);;All files (*)")
+        if path:
+            self.le_replay.setText(path)
 
     def _on_stop(self):
         self.core.stop_recording()
@@ -697,11 +993,17 @@ class CaptureWindow(QMainWindow):
 
     def _on_gen_npz(self):
         seq = self._seq_abspath()
-        cam0 = os.path.join(seq, "cam0")
+        view_dirs = []
+        for i in range(8):
+            camera_dir = os.path.join(seq, f"cam{i}")
+            if not os.path.isdir(camera_dir):
+                break
+            view_dirs.append(camera_dir)
         act = os.path.join(seq, "actions6.csv")
         ft = os.path.join(seq, "frame_times.txt")
-        if not os.path.isdir(cam0):
-            self._log(f"找不到帧目录 {cam0}，先采集或改保存目录。"); return
+        if not view_dirs:
+            self._log(f"找不到相机帧目录 {os.path.join(seq, 'cam0')}，先采集或改保存目录。")
+            return
         for need, path in (("actions6.csv", act), ("frame_times.txt", ft)):
             if not os.path.isfile(path):
                 self._log(f"找不到 {need}（{path}）。"); return
@@ -720,13 +1022,15 @@ class CaptureWindow(QMainWindow):
         if not os.path.isabs(cam_param):
             cam_param = os.path.join(self.project_root, cam_param)
         out_npz = os.path.join(os.path.dirname(seq), os.path.basename(seq) + ".npz")
-        cmd = [sys.executable, script, "--view-dirs", cam0, "--camera-params", cam_param,
+        cmd = [sys.executable, script, "--view-dirs", *view_dirs, "--camera-params", cam_param,
                "--method", "backlight", "--gray-thresh", str(int(self.sb_thresh.value())),
                "--dt", f"{1.0 / self.fps:.4f}",
                "--actions", act, "--actions-has-timestamps", "--frame-times", ft,
                "--clean-nan", "--out", out_npz]
-        if self.cb_planar.isChecked():
+        if self.cb_planar.isChecked() and len(view_dirs) == 1:
             cmd.append("--planar-lift")
+        elif self.cb_planar.isChecked() and len(view_dirs) > 1:
+            self._log("多相机已自动使用三角化，忽略 planar-lift 选项。")
         if tip:
             cmd += ["--ndi-tip", tip]
         self._log("生成 npz：" + " ".join(cmd))
@@ -775,6 +1079,10 @@ def main():
     p.add_argument("--group1", default="COM55", help="Modbus 组1 串口")
     p.add_argument("--group2", default="COM56", help="Modbus 组2 串口")
     p.add_argument("--ndi", default="COM1", dest="ndi_port", help="NDI 串口")
+    p.add_argument("--ndi-count", type=int, default=2, help="NDI 探头数量")
+    p.add_argument("--camera-count", type=int, default=None, help="RealSense 相机数量（GUI 可修改）")
+    p.add_argument("--camera-serials", default=None,
+                   help="RealSense 序列号，逗号分隔；留空自动选择")
     p.add_argument("--baudrate", type=int, default=9600)
     p.add_argument("--slave", type=int, default=1, dest="slave_addr")
     p.add_argument("--fps", type=int, default=30)
@@ -787,7 +1095,16 @@ def main():
     app = QApplication(sys.argv)
     win = CaptureWindow(mock_cam=mock_cam, mock_valve=mock_valve, mock_ndi=mock_ndi,
                         group1=args.group1, group2=args.group2, ndi_port=args.ndi_port,
-                        baudrate=args.baudrate, slave_addr=args.slave_addr, fps=args.fps)
+                        baudrate=args.baudrate, slave_addr=args.slave_addr, fps=args.fps,
+                        ndi_count=args.ndi_count,
+                        camera_count=args.camera_count or 1,
+                        camera_serials=args.camera_serials or "")
+    if args.camera_count is not None or args.camera_serials is not None:
+        if args.camera_count is not None:
+            win.sb_camera_count.setValue(max(1, args.camera_count))
+        if args.camera_serials is not None:
+            win.le_camera_serials.setText(args.camera_serials)
+        win._apply_camera_config()
     win.show()
     sys.exit(app.exec_())
 

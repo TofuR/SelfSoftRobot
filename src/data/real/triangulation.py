@@ -2,9 +2,10 @@
 
 输入每视角的 2D 骨架 (V,N,31,2) [col,row] + camera_params(V,10)，逐节点三角化出
 世界系 3D 骨架 (N,31,3)。投影矩阵由 camera_params_format.projection_matrix 重建，
-与 src/utils/skeleton_2d.py::project_3d_to_2d 投影约定完全一致。
+与 src/utils/skeleton_2d.py::project_3d_to_2d 投影约定完全一致（该投影函数留在 src/）。
 
-2D 骨架由 src/utils/skeleton_2d.extract_skeleton_2d 提供（实物管线复用，零重复）。
+2D 骨架由 real_validation/perception/skeleton.extract_skeleton_2d 提供
+（唯一实现，src/utils/skeleton_2d.py 为其薄壳）。
 """
 
 import numpy as np
@@ -49,7 +50,8 @@ def triangulate_skeletons(skeletons_2d, camera_params, H, W):
 
     Args:
         skeletons_2d: (V, N, 31, 2) [col,row]，或 list[V] of (N,31,2)。
-            全 0 的 2D 点（extract_skeleton_2d 无前景时的返回）视为无效。
+            全 0 的 2D 点（perception.skeleton.extract_skeleton_2d 无前景时的返回）
+            视为无效。
         camera_params: (V, 10)。
         H, W: 图像尺寸（构 K 的主点 cx=W/2, cy=H/2）。
 

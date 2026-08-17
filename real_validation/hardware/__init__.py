@@ -1,0 +1,12 @@
+"""真机硬件适配层(设计 spec §3.2)。
+
+驱动已自包含移植进本包(不再经 sys.path 桥接 real_capture)。真机接线才 import;
+Mock 流程不触碰本包。**本包不进 real_validation/__init__.py 闭包**(保持包根
+stdlib-only;真机依赖 pyserial/pyrealsense2/scikit-surgerynditracker 只在
+requirements-hardware.txt)。
+"""
+
+from .profile import BackendMode, DeviceState, HardwareProfile, required_groups_for_channels
+
+__all__ = ["BackendMode", "DeviceState", "HardwareProfile",
+           "required_groups_for_channels"]

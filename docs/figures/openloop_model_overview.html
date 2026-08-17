@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>窗口开环状态转移模型 OpenLoopTransitionModel — 模型思想</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         max-width: 1180px; margin: 0 auto; padding: 2em 1.5em; color: #222; line-height: 1.6; }
+  h1 { font-size: 1.7em; border-bottom: 3px solid #2c5aa0; padding-bottom: .3em; }
+  h2 { font-size: 1.35em; color: #2c5aa0; margin-top: 2em; border-left: 5px solid #2c5aa0; padding-left: .5em; }
+  h3 { font-size: 1.08em; color: #444; margin-top: 1.4em; }
+  .tldr { background: #eef5ff; border: 1px solid #bcd; border-radius: 8px; padding: 1em 1.3em; margin: 1em 0; }
+  .tldr b { color: #2c5aa0; }
+  .cap { text-align: center; color: #666; font-size: .92em; margin: .2em 0 1.6em; }
+  svg { width: 100%; height: auto; display: block; margin: .5em auto; }
+  .fig { background: #fff; border: 1px solid #dde3ec; border-radius: 10px; padding: 1em; margin: 1.2em 0; }
+  .legend { display: flex; flex-wrap: wrap; gap: .6em 1.4em; justify-content: center;
+            font-size: .86em; color: #444; margin: .4em 0 .2em; }
+  .legend span { display: inline-flex; align-items: center; gap: .35em; }
+  .chip { width: 14px; height: 14px; border-radius: 3px; display: inline-block; border: 1.5px solid; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: .9em; margin: 1em 0; }
+  .card { background: #f8fbff; border: 1px solid #cdd8e8; border-radius: 8px; padding: .8em 1em; }
+  .card h4 { margin: 0 0 .3em; color: #2c5aa0; font-size: 1em; }
+  .card p { margin: 0; font-size: .9em; color: #333; }
+  code { background: #f0f0f0; padding: .1em .35em; border-radius: 3px; font-size: .92em; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: .93em; }
+  th, td { border: 1px solid #ccc; padding: .5em .7em; text-align: left; }
+  th { background: #2c5aa0; color: #fff; text-align: center; }
+  tr:nth-child(even) { background: #f6f8fb; }
+  .good { color: #1a7d1a; font-weight: bold; }
+  .bad  { color: #c0392b; font-weight: bold; }
+  .me   { background: #eef5ff; }
+  .key { background: #eaffea; border-left: 4px solid #4a4; padding: .6em 1em; margin: 1em 0; border-radius: 4px; }
+  .warn{ background: #fff6e6; border-left: 4px solid #e0a030; padding: .6em 1em; margin: 1em 0; border-radius: 4px; }
+  .footer { color: #888; font-size: .85em; margin-top: 3em; border-top: 1px solid #ddd; padding-top: 1em; }
+</style></head><body>
+
+<h1>窗口开环状态转移模型 — 模型思想</h1>
+<div style="color:#666">模型 <code>OpenLoopTransitionModel</code> · 分支 feat/real-data-transition · 实物免标定路线 · 数据 seq_20260627_163921_n15_sam2_clean</div>
+
+<div class="tldr">
+<b>一句话</b>: 软体臂有<b>迟滞</b>(同一气压, 加载/卸载历史不同 → 形状不同), 所以"动作→形状"不是单值函数, 而是依赖历史的<b>泛函</b>。
+本模型用<b>闭环状态转移</b> <code>s_t = F(s_{t-1}, a_t, z_{t-1})</code> 建模它: 用上一步形状 + 当前动作 + 一个<b>可学习迟滞潜变量 z</b> 预测下一步形状;
+预测的是<b>增量</b> <code>s_{t-1}+Δ</code> 且带收缩, 保证开环 rollout 不发散;
+部署语义是<b>"观测一次 → 开环预测 K 步"</b>——每 K 步用 1 帧真实观测重新锚定绝对位姿, 把累积漂移约束在 K 步内。
+</div>
+
+<h2>① 单步前向: 一个状态转移步的内部数据流</h2>
+<div class="cap">蓝=动作/时序 · 红=可学习迟滞潜变量 z(无真值, 端到端学) · 绿=形状状态路径 · 紫=沿臂空间传播 · 橙=增量输出</div>
+<div class="fig">
+<svg viewBox="0 0 1180 540" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#44566b"/></marker>
+    <marker id="arrR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker>
+    <marker id="arrFb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7f8c9b"/></marker>
+  </defs>
+
+  <!-- ============ Lane A: 动作 ============ -->
+  <text x="30" y="28" font-size="13" fill="#2980b9" font-weight="bold">动作 lane</text>
+  <g><rect x="30" y="55" width="150" height="54" rx="8" fill="#e8f4fd" stroke="#2980b9" stroke-width="1.5"/>
+     <text x="105" y="78" text-anchor="middle">动作窗口 aw_t</text>
+     <text x="105" y="97" text-anchor="middle" font-size="11" fill="#555">(B, K, D) 最近 K 步气压</text></g>
+  <g><rect x="220" y="55" width="180" height="54" rx="8" fill="#e8f4fd" stroke="#2980b9" stroke-width="1.5"/>
+     <text x="310" y="78" text-anchor="middle">时序编码器 TemporalEncoder</text>
+     <text x="310" y="97" text-anchor="middle" font-size="11" fill="#555">fractional / EMA / GRU / …</text></g>
+  <g><rect x="430" y="55" width="180" height="54" rx="8" fill="#dbeefe" stroke="#2980b9" stroke-width="1.5"/>
+     <text x="520" y="76" text-anchor="middle">cond (B, hidden)</text>
+     <text x="520" y="94" text-anchor="middle" font-size="11" fill="#555">当前动作编码 · 每步重算 · 无记忆</text></g>
+  <line x1="180" y1="82" x2="216" y2="82" stroke="#44566b" stroke-width="1.6" marker-end="url(#arr)"/>
+  <line x1="400" y1="82" x2="426" y2="82" stroke="#44566b" stroke-width="1.6" marker-end="url(#arr)"/>
+
+  <!-- ============ Lane B: 迟滞潜变量 z ============ -->
+  <text x="30" y="200" font-size="13" fill="#c0392b" font-weight="bold">迟滞潜变量 z lane</text>
+  <g><rect x="30" y="215" width="150" height="54" rx="8" fill="#fde8ef" stroke="#c0392b" stroke-width="1.5"/>
+     <text x="105" y="238" text-anchor="middle">z_{t-1} (B, z_dim)</text>
+     <text x="105" y="257" text-anchor="middle" font-size="11" fill="#555">上一步潜状态</text></g>
+  <g><rect x="220" y="207" width="200" height="70" rx="8" fill="#fde8ef" stroke="#c0392b" stroke-width="1.5"/>
+     <text x="320" y="229" text-anchor="middle">GRUCell  Φ_z</text>
+     <text x="320" y="247" text-anchor="middle" font-size="11">z_t = Φ_z( [cond, s_{t-1}], z_{t-1} )</text>
+     <text x="320" y="265" text-anchor="middle" font-size="11" fill="#555">门控 · 有界 · 编码迟滞(无真值)</text></g>
+  <g><rect x="450" y="215" width="160" height="54" rx="8" fill="#fde8ef" stroke="#c0392b" stroke-width="1.5"/>
+     <text x="530" y="240" text-anchor="middle">z_proj</text>
+     <text x="530" y="258" text-anchor="middle" font-size="11" fill="#555">加性注入每节点</text></g>
+  <line x1="180" y1="242" x2="216" y2="242" stroke="#c0392b" stroke-width="1.6" marker-end="url(#arrR)"/>
+  <line x1="420" y1="242" x2="446" y2="242" stroke="#c0392b" stroke-width="1.6" marker-end="url(#arrR)"/>
+  <!-- cond -> z-cell (down) -->
+  <path d="M520,109 L520,160 L320,160 L320,205" fill="none" stroke="#c0392b" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arrR)"/>
+  <text x="330" y="155" font-size="10.5" fill="#c0392b">cond</text>
+  <!-- s_{t-1} -> z-cell flatten (up from lane C) -->
+  <path d="M105,375 L105,300 L260,300 L260,278" fill="none" stroke="#c0392b" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arrR)"/>
+  <text x="112" y="312" font-size="10.5" fill="#c0392b">flatten(s_{t-1})</text>
+
+  <!-- ============ Lane C: 形状状态 ============ -->
+  <text x="30" y="362" font-size="13" fill="#27ae60" font-weight="bold">形状状态 lane</text>
+  <g><rect x="30" y="375" width="150" height="46" rx="8" fill="#eafaf1" stroke="#27ae60" stroke-width="1.5"/>
+     <text x="105" y="403" text-anchor="middle">s_{t-1} (B, N, 3)</text></g>
+  <g><rect x="30" y="430" width="150" height="40" rx="8" fill="#eef7f1" stroke="#27ae60" stroke-width="1.3"/>
+     <text x="105" y="455" text-anchor="middle" font-size="11">s_{t-2} (前两步)</text></g>
+  <g><rect x="220" y="383" width="180" height="46" rx="8" fill="#eafaf1" stroke="#27ae60" stroke-width="1.5"/>
+     <text x="310" y="411" text-anchor="middle">v = s_{t-1} − s_{t-2}</text></g>
+  <g><rect x="430" y="378" width="180" height="56" rx="8" fill="#eafaf1" stroke="#27ae60" stroke-width="1.5"/>
+     <text x="520" y="400" text-anchor="middle">状态编码器 StateEncoder</text>
+     <text x="520" y="420" text-anchor="middle" font-size="11" fill="#555">[s_{t-1}, v] → h₀ (空间GRU种子)</text></g>
+  <line x1="180" y1="406" x2="216" y2="406" stroke="#27ae60" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="105" y1="430" x2="105" y2="416" stroke="#27ae60" stroke-width="1.3" marker-end="url(#arr)"/>
+  <line x1="400" y1="406" x2="426" y2="406" stroke="#27ae60" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ============ 汇聚: 沿臂空间 GRU ============ -->
+  <g><rect x="670" y="120" width="250" height="150" rx="10" fill="#f4ecf7" stroke="#8e44ad" stroke-width="1.8"/>
+     <text x="795" y="145" text-anchor="middle" font-weight="bold" fill="#6c3483">沿臂空间 GRU (base → tip)</text>
+     <text x="795" y="166" text-anchor="middle" font-size="11.5">悬臂因果: 基座→末端逐节点传播</text>
+     <text x="795" y="190" text-anchor="middle" font-size="11.5">种子: h₀</text>
+     <text x="795" y="212" text-anchor="middle" font-size="11.5">逐节点输入:</text>
+     <text x="795" y="232" text-anchor="middle" font-size="11.5">cond + z_proj + z_embed(ζ)</text>
+     <text x="795" y="252" text-anchor="middle" font-size="10.5" fill="#555">ζ = 沿中心线位置 [-1,1]</text></g>
+
+  <!-- cond -> sgru -->
+  <path d="M610,82 L640,82 L640,150 L666,150" fill="none" stroke="#44566b" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="628" y="120" font-size="10.5" fill="#555">cond</text>
+  <!-- z_proj -> sgru -->
+  <path d="M610,242 L640,242 L640,220 L666,220" fill="none" stroke="#c0392b" stroke-width="1.5" marker-end="url(#arrR)"/>
+  <text x="618" y="236" font-size="10.5" fill="#c0392b">z_proj</text>
+  <!-- h0 -> sgru (up) -->
+  <path d="M610,406 L640,406 L640,262 L666,262" fill="none" stroke="#27ae60" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="618" y="360" font-size="10.5" fill="#27ae60">h₀ 种子</text>
+
+  <!-- 增量头 + 收缩 -->
+  <g><rect x="670" y="300" width="250" height="58" rx="8" fill="#fef9e7" stroke="#e08e0b" stroke-width="1.5"/>
+     <text x="795" y="323" text-anchor="middle">增量头 + 收缩</text>
+     <text x="795" y="345" text-anchor="middle" font-size="11.5">Δ = clamp(δ_scale, ≤1.0) · tanh( delta_head )</text></g>
+  <line x1="795" y1="270" x2="795" y2="298" stroke="#44566b" stroke-width="1.6" marker-end="url(#arr)"/>
+
+  <!-- 输出 (s_t 与 z_t 都喂回) -->
+  <g><rect x="670" y="384" width="250" height="74" rx="8" fill="#fef9e7" stroke="#e08e0b" stroke-width="1.8"/>
+     <text x="795" y="406" text-anchor="middle" font-weight="bold">输出</text>
+     <text x="795" y="427" text-anchor="middle" font-size="12">s_t = s_{t-1} + Δ &#160;(B, N, 3)</text>
+     <text x="795" y="447" text-anchor="middle" font-size="11" fill="#c0392b">+ z_t (B, z_dim)</text></g>
+  <line x1="795" y1="358" x2="795" y2="382" stroke="#44566b" stroke-width="1.6" marker-end="url(#arr)"/>
+
+  <!-- s_{t-1} 残差加到输出 (绕底部, 避开 lane C 的 v/StateEncoder 框) -->
+  <path d="M30,398 L15,398 L15,506 L695,506 L695,458" fill="none" stroke="#27ae60" stroke-width="1.4" stroke-dasharray="5 3" marker-end="url(#arr)"/>
+  <text x="355" y="500" text-anchor="middle" font-size="10.5" fill="#27ae60">s_{t-1} 残差连接 (只预测增量 Δ)</text>
+
+  <!-- 自回归反馈: 输出 (s_t, z_t) 经自循环喂回为下一步输入 (s_{t-1}, z_{t-1}) -->
+  <path d="M920,430 C1018,430 1018,400 920,400" fill="none" stroke="#7f8c9b" stroke-width="1.7" stroke-dasharray="6 4" marker-end="url(#arrFb)"/>
+  <text x="1030" y="380" font-size="11" fill="#7f8c9b" font-style="italic">↻ 自回归 rollout</text>
+  <text x="1030" y="397" font-size="10.5" fill="#7f8c9b">(s_t, z_t) →</text>
+  <text x="1030" y="412" font-size="10.5" fill="#7f8c9b">下一步 (s_{t-1}, z_{t-1})</text>
+
+</svg>
+</div>
+
+<div class="legend">
+  <span><i class="chip" style="background:#e8f4fd;border-color:#2980b9"></i>动作 / 时序编码(cond, 无记忆)</span>
+  <span><i class="chip" style="background:#fde8ef;border-color:#c0392b"></i>迟滞潜变量 z (GRUCell, 有记忆, 无真值)</span>
+  <span><i class="chip" style="background:#eafaf1;border-color:#27ae60"></i>形状状态路径 (s, 速度 v, 种子 h₀)</span>
+  <span><i class="chip" style="background:#f4ecf7;border-color:#8e44ad"></i>沿臂空间 GRU (base→tip)</span>
+  <span><i class="chip" style="background:#fef9e7;border-color:#e08e0b"></i>增量输出 Δ + s_t</span>
+  <span><i class="chip" style="background:#fff;border-color:#7f8c9b"></i>·····&gt; 自回归反馈</span>
+</div>
+
+<h2>② 部署思想: "观测一次 → 开环预测 K 步"</h2>
+<p>整序列 rollout 会无界累积误差; 纯每步观测(gt)又假设永远能观测。本模型取中间:<b>每 K 步用 1 帧真实观测重新锚定绝对位姿</b>, 窗口内 K 步纯自回归(喂自身预测 + 真实未来动作), 把漂移约束在 K 步内(锯齿·有界)。</p>
+<div class="fig">
+<svg viewBox="0 0 1180 360" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
+  <defs>
+    <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#44566b"/></marker>
+  </defs>
+
+  <!-- 漂移曲线 (锯齿, 每窗口复位) -->
+  <text x="30" y="34" font-size="12.5" fill="#444" font-weight="bold">漂移(距上次观测的误差):</text>
+  <path d="M70,70 L70,60 L180,66 L260,62 L260,55 L380,64 L470,60 L470,53 L590,63 L680,59 L680,52 L800,62 L890,58 L890,51 L1010,61 L1100,57"
+        fill="none" stroke="#e08e0b" stroke-width="2"/>
+  <text x="560" y="50" font-size="11" fill="#e08e0b">窗口内上升 · 锚点处回落(锯齿·有界)</text>
+
+  <!-- 锚点竖线 -->
+  <line x1="70"   y1="78" x2="70"   y2="300" stroke="#d4ac0d" stroke-width="1.4" stroke-dasharray="5 4"/>
+  <line x1="470"  y1="78" x2="470"  y2="300" stroke="#d4ac0d" stroke-width="1.4" stroke-dasharray="5 4"/>
+  <line x1="890"  y1="78" x2="890"  y2="300" stroke="#d4ac0d" stroke-width="1.4" stroke-dasharray="5 4"/>
+
+  <!-- 窗口1 -->
+  <g><rect x="70" y="150" width="170" height="64" rx="8" fill="#fff6da" stroke="#d4ac0d" stroke-width="1.6" stroke-dasharray="6 3"/>
+     <text x="155" y="173" text-anchor="middle" font-weight="bold" fill="#9a7d0a">GT 观测种子</text>
+     <text x="155" y="193" text-anchor="middle" font-size="11">s_seed = 真实骨架</text>
+     <text x="155" y="208" text-anchor="middle" font-size="11">z₀ = z_init(aw)</text></g>
+  <text x="270" y="186" font-size="12" fill="#444">→ K 步自回归 rollout</text>
+  <g><circle cx="330" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/><circle cx="360" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/>
+     <circle cx="390" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/><circle cx="420" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/>
+     <text x="420" y="208" text-anchor="middle" font-size="10.5" fill="#555">…喂自身预测 + 真实未来动作</text></g>
+
+  <!-- 窗口2 -->
+  <g><rect x="470" y="150" width="170" height="64" rx="8" fill="#fff6da" stroke="#d4ac0d" stroke-width="1.6" stroke-dasharray="6 3"/>
+     <text x="555" y="173" text-anchor="middle" font-weight="bold" fill="#9a7d0a">重新观测锚定</text>
+     <text x="555" y="193" text-anchor="middle" font-size="11">位姿漂移在此清零</text></g>
+  <g><circle cx="670" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/><circle cx="700" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/>
+     <circle cx="730" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/><circle cx="760" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/>
+     <circle cx="790" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/><circle cx="820" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/></g>
+
+  <!-- 窗口3 -->
+  <g><rect x="890" y="150" width="170" height="64" rx="8" fill="#fff6da" stroke="#d4ac0d" stroke-width="1.6" stroke-dasharray="6 3"/>
+     <text x="975" y="173" text-anchor="middle" font-weight="bold" fill="#9a7d0a">重新观测锚定</text>
+     <text x="975" y="193" text-anchor="middle" font-size="11">z 每窗口重置(不跨窗口)</text></g>
+  <g><circle cx="1090" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/><circle cx="1120" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/></g>
+
+  <!-- 时间轴 -->
+  <line x1="60" y1="300" x2="1150" y2="300" stroke="#44566b" stroke-width="1.6" marker-end="url(#arr2)"/>
+  <text x="1140" y="320" text-anchor="end" font-size="12" fill="#555">时间 t (每步 ≈ 0.2s)</text>
+  <text x="70"  y="320" text-anchor="middle" font-size="11" fill="#9a7d0a">t₀</text>
+  <text x="470" y="320" text-anchor="middle" font-size="11" fill="#9a7d0a">t₀+K</text>
+  <text x="890" y="320" text-anchor="middle" font-size="11" fill="#9a7d0a">t₀+2K</text>
+
+  <!-- 三模型对比条 -->
+  <g transform="translate(60,338)">
+    <rect x="0"   y="0" width="360" height="18" fill="#eafaf1" stroke="#27ae60"/><text x="180" y="13" text-anchor="middle" font-size="11">14 gt: 每步观测 → 漂移≈0(平坦, 需每步观测)</text>
+    <rect x="380" y="0" width="360" height="18" fill="#fff6da" stroke="#d4ac0d"/><text x="560" y="13" text-anchor="middle" font-size="11" font-weight="bold" fill="#9a7d0a">15 open_loop (本): 锯齿·有界 (观测一次→预测K步)</text>
+    <rect x="760" y="0" width="360" height="18" fill="#fde8ef" stroke="#c0392b"/><text x="940" y="13" text-anchor="middle" font-size="11">13 无界 rollout: 单调发散(1170×, 不可部署)</text>
+  </g>
+</svg>
+</div>
+
+<h2>③ 五个核心思想(讲解顺序)</h2>
+<div class="cards">
+  <div class="card"><h4>1. 闭环, 不是前馈</h4>
+    <p>不学 <code>动作→形状</code> 的单值映射(迟滞下失效: 同一气压, 加载/卸载→不同形状), 而学状态转移
+    <code>s_t = F(s_{t-1}, a_t, z_{t-1})</code>。上一步形状进输入, 才能区分不同历史。</p></div>
+  <div class="card"><h4>2. 增量预测 + 收缩</h4>
+    <p>输出 <code>s_t = s_{t-1} + Δ</code>, 只预测小增量; <code>Δ = clamp(δ_scale,≤1.0)·tanh(·)</code> 强制收缩。
+    量级小、天然连续、rollout 不发散(open_loop 的 <code>δ_scale_max=1.0</code> 是防 NaN 安全开关; gt 可放到~4)。</p></div>
+  <div class="card"><h4>3. 可学习迟滞潜变量 z</h4>
+    <p>z 无物理真值(实物无 z 传感器), 用 <b>GRUCell</b> 自演化 <code>z_t=Φ_z([cond,s_{t-1}],z_{t-1})</code>,
+    端到端从 skeleton loss 学。门控提供选择性记忆→适合迟滞; 有界激活→利于收缩。z 是"路径依赖"的载体。</p></div>
+  <div class="card"><h4>4. 沿臂空间 GRU (悬臂因果)</h4>
+    <p>沿中心线 base→tip 跑一层 GRU, 种子 h₀ 来自上一步形状+速度。体现软臂悬臂梁因果: 近端弯曲先于远端。
+    替代逐节点循环, 行为等价、单次 cuDNN 核。</p></div>
+  <div class="card"><h4>5. 窗口开环 = 可部署</h4>
+    <p>1 帧 GT 锚定绝对位姿 + K 步自回归。漂移约束在 K 步内(锯齿), 而非整序列发散。
+    部署: "拍一帧→骨架化作种子→开环预测 K 步"。z 每窗口重置, 不跨窗口携带。</p></div>
+  <div class="card"><h4>bonus: 三模型同构</h4>
+    <p>gt / open_loop / 无界 rollout <b>共用同一网络与 state_dict</b>(256,620 参数),
+    只差 <code>teacher_forcing_ratio</code> 与 <code>delta_scale_max</code> 两个开关 → 可从 gt 热启动 open_loop。</p></div>
+</div>
+
+<h2>④ gt vs open_loop: 同一网络, 两个开关</h2>
+<table>
+  <tr><th>维度</th><th>14 gt (训练基础·精度上界)</th><th class="me">15 open_loop (部署目标)</th><th>13 无界 rollout</th></tr>
+  <tr><td>每步 s_{t-1} 来自</td><td><b>真实观测</b>(teacher_forcing=1.0)</td><td class="me"><b>模型自身预测</b>(tf=0, 窗口内)</td><td>模型预测(整序列一路喂回)</td></tr>
+  <tr><td>s 自由运行步数</td><td>0(从不)</td><td class="me"><b>≤ K−1(有界)</b></td><td>整序列 T(无界)</td></tr>
+  <tr><td>delta_scale_max</td><td>∞(单步可承受~4)</td><td class="me"><b>1.0(强制收缩, 防 rollout 发散/NaN)</b></td><td>—</td></tr>
+  <tr><td>误差累积</td><td><span class="good">无(每步重置真实)</span></td><td class="me"><b>约束在 K 步内(锯齿)</b></td><td><span class="bad">无界(1170×)</span></td></tr>
+  <tr><td>部署语义</td><td>每步都能观测</td><td class="me"><b>观测一次 → 预测 K 步</b></td><td>无法观测·多步前瞻</td></tr>
+  <tr><td>角色</td><td>训练基础 + 精度上界(NDI 末端 0.77mm)</td><td class="me"><b>形状控制部署目标</b></td><td>未来扩展</td></tr>
+</table>
+
+<div class="key">
+<b>记忆的三个来源(别混淆三个 K)</b>:
+① <code>window_size</code> = 输入模型的动作历史长度(默认 40)→ 进 TemporalEncoder 出 cond;
+② <code>episode_len</code> = 训练时窗口开环 rollout 步数(=K, 默认 40)→ 决定 s 自由运行多久;
+③ <code>K_max</code> = 评估测得的"可信预测视野"(漂移低于容差的步数)。
+本模型的"记忆" = 1帧GT种子(绝对位姿) + cond(动作历史) + z(迟滞潜轨迹), 三者职责分离。
+</div>
+
+<div class="warn">
+<b>诚实边界</b>: 仿真迟滞弱(线性阻尼), z 实际携带的真实迟滞信号有限; 实物强迟滞有效性留真机验证。
+"window=1 在 gt 单步下≈window=40"(因 s_{t-1} 已带记忆); 但在 <b>open_loop 自回归下 window=1 会坍缩成不响应动作的均值预测</b>(已诊断), 故动作历史窗口在开环部署下是必需的。
+</div>
+
+<div class="footer">
+代码: <code>src/models/model_open_loop_transition.py</code> (OpenLoopTransitionModel) ·
+继承 <code>src/models/model_state_transition.py</code> (StateTransitionSpatialModel, 复用全部 forward/z_module, 零参数增量) ·
+方向文档: <code>docs/directions/15_open_loop_windowed_transition.md</code> · 本图自包含, 可直接浏览器打开 / 截图入幻灯片
+</div>
+
+</body></html>

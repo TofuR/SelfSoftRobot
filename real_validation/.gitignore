@@ -1,0 +1,8 @@
+checkpoints/**/*.pt
+checkpoints/**/*.pth
+data/**/*.npz
+calibration/*.json
+config/hardware.json
+runs/run_*/
+__pycache__/
+**/__pycache__/

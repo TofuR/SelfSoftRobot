@@ -13,17 +13,21 @@
 """
 from __future__ import annotations
 
+import csv
+import itertools
 import random
 import time
-from typing import List
+from array import array
+from typing import List, Optional
 
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
 from modbus_manager import ModbusManager
 
 N_CHAN = 6
 P_MIN = 0.0
 P_MAX = 500.0
+DEFAULT_RATE_KPA_S = 100.0
 
 
 def _clamp6(vec) -> List[float]:
@@ -32,6 +36,67 @@ def _clamp6(vec) -> List[float]:
     if len(v) < N_CHAN:
         v += [P_MIN] * (N_CHAN - len(v))
     return [max(P_MIN, min(P_MAX, x)) for x in v]
+
+
+def _vec6(values, fill=0.0) -> List[float]:
+    v = [float(x) for x in list(values)[:N_CHAN]]
+    if len(v) < N_CHAN:
+        v += [float(fill)] * (N_CHAN - len(v))
+    return v
+
+
+class PressureSlewLimiter:
+    """按实际命令间隔限制每通道的压力命令变化速率。"""
+
+    def __init__(self, rise_rates=None, fall_rates=None, initial=None):
+        self.rise = _vec6(rise_rates or [DEFAULT_RATE_KPA_S] * N_CHAN)
+        self.fall = _vec6(fall_rates or [DEFAULT_RATE_KPA_S] * N_CHAN)
+        self._last = _clamp6(initial or [P_MIN] * N_CHAN)
+        self._last_t = time.monotonic()
+
+    def configure(self, rise_rates, fall_rates, initial=None):
+        self.rise = [max(0.0, float(x)) for x in _vec6(rise_rates)]
+        self.fall = [max(0.0, float(x)) for x in _vec6(fall_rates)]
+        if initial is not None:
+            self._last = _clamp6(initial)
+        self._last_t = time.monotonic()
+
+    def apply(self, target, now=None, bypass=False):
+        now = time.monotonic() if now is None else float(now)
+        dt = max(0.0, now - self._last_t)
+        requested = _clamp6(target)
+        if bypass:
+            applied = requested
+        else:
+            applied = []
+            for i, value in enumerate(requested):
+                delta = value - self._last[i]
+                rate = self.rise[i] if delta >= 0.0 else self.fall[i]
+                max_delta = float("inf") if rate <= 0.0 else rate * dt
+                applied.append(self._last[i] + max(-max_delta, min(max_delta, delta)))
+            applied = _clamp6(applied)
+        self._last = applied
+        self._last_t = now
+        return applied
+
+
+def load_action_sequence(path: str):
+    """加载旧/新 actions6.csv，返回相对时间和六通道动作。"""
+    rows = []
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.reader(f):
+            try:
+                values = [float(x) for x in row[:7]]
+            except (TypeError, ValueError):
+                continue
+            if len(values) == 7:
+                rows.append(values)
+    if not rows:
+        raise ValueError(f"actions6.csv 没有有效的 7 列数值记录: {path}")
+    times = [max(0.0, float(r[0]) - float(rows[0][0])) for r in rows]
+    if any(b <= a for a, b in zip(times, times[1:])):
+        raise ValueError("actions6.csv 时间戳必须严格递增")
+    return times, [_clamp6(r[1:7]) for r in rows]
 
 
 class ValveController(QObject):
@@ -46,6 +111,8 @@ class ValveController(QObject):
         log(str)
     """
     action_logged = pyqtSignal(list, float)
+    command_issued = pyqtSignal(str, list, list, float)  # id, requested, applied, monotonic
+    communication_result = pyqtSignal(str, int, bool, float, str)  # id, group, ok, t_ack, status
     connection_changed = pyqtSignal(bool, str)            # 整体状态（任一组连上即 True）+ 摘要
     group_connection_changed = pyqtSignal(int, bool)      # (group_id, connected) 每组独立
     log = pyqtSignal(str)
@@ -57,6 +124,28 @@ class ValveController(QObject):
         self.slave_addr = int(slave_addr)
         self.mgr = ModbusManager()
         self._last = [P_MIN] * N_CHAN
+        self._command_ids = itertools.count(1)
+        self._required_groups = None
+        self._slew = PressureSlewLimiter(initial=self._last)
+        self.mgr.command_ack.connect(self._on_command_ack)
+        self.mgr.command_error.connect(self._on_command_error)
+
+    def allocate_command_id(self) -> str:
+        return str(next(self._command_ids))
+
+    def set_required_groups(self, groups=None):
+        self._required_groups = None if groups is None else set(int(g) for g in groups)
+
+    def configure_safety(self, rise_rates, fall_rates):
+        self._slew.configure(rise_rates, fall_rates, initial=self._last)
+
+    def _on_command_ack(self, command_id, group_id, t_ack):
+        self.communication_result.emit(str(command_id), int(group_id), True,
+                                       float(t_ack), "ack")
+
+    def _on_command_error(self, command_id, group_id, t_ack, status):
+        self.communication_result.emit(str(command_id), int(group_id), False,
+                                       float(t_ack), str(status))
 
     def connect_group(self, gid: int):
         """连接单个控制组（串口 open 可能阻塞 → 建议在后台线程调用）。"""
@@ -102,16 +191,35 @@ class ValveController(QObject):
     def connected(self) -> bool:
         return bool(self.connected_groups)
 
-    def set_pressures(self, pressures6):
-        """下发 6 维气压（kPa）。**只写给已连接的组**；未连接的组不发命令（避免无效串口写）。"""
-        p6 = _clamp6(pressures6)
+    def set_pressures(self, pressures6, command_id=None, bypass_rate=False,
+                      required_groups=None):
+        """下发 6 维气压；返回 ``(command_id, applied6)``。"""
+        t_command = time.monotonic()
+        command_id = str(command_id or self.allocate_command_id())
+        requested = _clamp6(pressures6)
+        p6 = self._slew.apply(requested, now=t_command, bypass=bypass_rate)
         conn = self.connected_groups
-        if 1 in conn:
-            self.mgr.set_all_pressures(1, p6[0:3])
-        if 2 in conn:
-            self.mgr.set_all_pressures(2, p6[3:6])
+        if required_groups is not None:
+            required = set(int(g) for g in required_groups)
+        elif self._required_groups is not None:
+            required = self._required_groups
+        else:
+            required = conn
+        for gid in (1, 2):
+            if gid not in required:
+                self.communication_result.emit(command_id, gid, True,
+                                               t_command, "inactive")
+            elif gid not in conn:
+                self.communication_result.emit(command_id, gid, False,
+                                               t_command, "not_connected")
+            elif not self.mgr.set_all_pressures(
+                    gid, p6[0:3] if gid == 1 else p6[3:6], command_id):
+                self.communication_result.emit(command_id, gid, False,
+                                               t_command, "queue_full")
         self._last = p6
-        self.action_logged.emit(p6, time.monotonic())
+        self.command_issued.emit(command_id, requested, p6, t_command)
+        self.action_logged.emit(p6, t_command)
+        return command_id, list(p6), t_command
 
     def set_channel(self, idx: int, kpa: float):
         v = list(self._last)
@@ -123,7 +231,10 @@ class ValveController(QObject):
         return list(self._last)
 
     def zero_all(self):
-        self.set_pressures([P_MIN] * N_CHAN)
+        # 归零是安全动作：不受当前采集模式的 required_groups 限制，
+        # 对所有当前已连接组下发，避免单通道录制时另一组仍保留旧压力。
+        return self.set_pressures([P_MIN] * N_CHAN, bypass_rate=True,
+                                  required_groups=self.connected_groups)
 
     def close(self):
         try:
@@ -131,11 +242,16 @@ class ValveController(QObject):
         except Exception as e:
             self.log.emit(f"Modbus 关闭异常: {e}")
 
+    def wait_idle(self, timeout_s=1.0):
+        self.mgr.wait_idle(timeout_s)
+
 
 class MockValveController(QObject):
     """`ValveController` 的软件替身：比例阀无反馈，mock 只回放命令值。
     连接状态按组模拟（_mock_conn），与真机一样支持只连一组。"""
     action_logged = pyqtSignal(list, float)
+    command_issued = pyqtSignal(str, list, list, float)
+    communication_result = pyqtSignal(str, int, bool, float, str)
     connection_changed = pyqtSignal(bool, str)
     group_connection_changed = pyqtSignal(int, bool)
     log = pyqtSignal(str)
@@ -145,6 +261,18 @@ class MockValveController(QObject):
         self._last = [P_MIN] * N_CHAN
         self._mock_conn = {1: False, 2: False}
         self.group_ports = {1: "MOCK", 2: "MOCK"}
+        self._command_ids = itertools.count(1)
+        self._required_groups = None
+        self._slew = PressureSlewLimiter(initial=self._last)
+
+    def allocate_command_id(self) -> str:
+        return str(next(self._command_ids))
+
+    def set_required_groups(self, groups=None):
+        self._required_groups = None if groups is None else set(int(g) for g in groups)
+
+    def configure_safety(self, rise_rates, fall_rates):
+        self._slew.configure(rise_rates, fall_rates, initial=self._last)
 
     def connect_group(self, gid: int):
         self._mock_conn[gid] = True
@@ -175,10 +303,32 @@ class MockValveController(QObject):
     def connected(self) -> bool:
         return bool(self.connected_groups)
 
-    def set_pressures(self, pressures6):
-        p6 = _clamp6(pressures6)
+    def set_pressures(self, pressures6, command_id=None, bypass_rate=False,
+                      required_groups=None):
+        t_command = time.monotonic()
+        command_id = str(command_id or self.allocate_command_id())
+        requested = _clamp6(pressures6)
+        p6 = self._slew.apply(requested, now=t_command, bypass=bypass_rate)
         self._last = p6
-        self.action_logged.emit(p6, time.monotonic())
+        self.command_issued.emit(command_id, requested, p6, t_command)
+        self.action_logged.emit(p6, t_command)
+        if required_groups is not None:
+            required = set(int(g) for g in required_groups)
+        elif self._required_groups is not None:
+            required = self._required_groups
+        else:
+            required = self.connected_groups
+        for gid in (1, 2):
+            if gid not in required:
+                ok, status = True, "inactive"
+            elif gid in self.connected_groups:
+                ok, status = True, "ack"
+            else:
+                ok, status = False, "not_connected"
+            # 异步回调，保持与真实 Modbus 的生命周期顺序一致。
+            QTimer.singleShot(0, lambda g=gid, good=ok, s=status: self.communication_result.emit(
+                command_id, g, good, time.monotonic(), s))
+        return command_id, list(p6), t_command
 
     def set_channel(self, idx: int, kpa: float):
         v = list(self._last)
@@ -190,7 +340,8 @@ class MockValveController(QObject):
         return list(self._last)
 
     def zero_all(self):
-        self.set_pressures([P_MIN] * N_CHAN)
+        return self.set_pressures([P_MIN] * N_CHAN, bypass_rate=True,
+                                  required_groups=self.connected_groups)
 
     def close(self):
         for gid in list(self._mock_conn.keys()):
@@ -205,7 +356,8 @@ class ValveDriver(QObject):
     `lo_i==hi_i`（range=0）的通道恒定 → **单通道模式**就是把其余 5 通道 min=max=0。
     """
 
-    def __init__(self, lows, highs, mode: str, step_frac: float = 0.35, parent=None):
+    def __init__(self, lows, highs, mode: str, step_frac: float = 0.35,
+                 seed: Optional[int] = None, parent=None):
         super().__init__(parent)
         lo = [float(x) for x in lows]
         hi = [float(x) for x in highs]
@@ -214,12 +366,36 @@ class ValveDriver(QObject):
         self.hi = [min(P_MAX, max(a, b)) for a, b in zip(lo, hi)]
         self.mode = mode
         self.step_frac = float(step_frac)
+        self.seed = seed
+        self.rng = random.Random(seed)
         self._cur = list(self.lo)
         self._dir = [1.0] * N_CHAN
+        # 紧凑存储预生成动作：最多 1e6 步时约 24 MB，而不是百万个 Python
+        # list/float 对象造成数百 MB 峰值。每步仍按 6 维 list 对外返回。
+        self._sequence = None
+        self._sequence_index = 0
 
     def reset(self):
         self._cur = list(self.lo)
         self._dir = [1.0] * N_CHAN
+        self._sequence_index = 0
+
+    def pre_generate(self, count: int):
+        """预生成固定动作序列；count<=0 时恢复在线生成。"""
+        count = min(1_000_000, max(0, int(count)))
+        if count <= 0:
+            self._sequence = None
+            self._sequence_index = 0
+            return
+        self._sequence = None
+        self._sequence_index = 0
+        self.reset()
+        sequence = array("f")
+        for _ in range(count):
+            sequence.extend(self._next_generated())
+        self._sequence = sequence
+        self._sequence_index = 0
+        self.reset()
 
     def set_ranges(self, lows, highs):
         """运行中改每通道范围（钳到合法域），并把当前值拉进新 [lo,hi]（避免越界）。"""
@@ -228,8 +404,11 @@ class ValveDriver(QObject):
         self.lo = [max(P_MIN, min(a, b)) for a, b in zip(lo, hi)]
         self.hi = [min(P_MAX, max(a, b)) for a, b in zip(lo, hi)]
         self._cur = [max(self.lo[i], min(self.hi[i], self._cur[i])) for i in range(N_CHAN)]
+        # 范围变化后旧预生成动作不再适用，释放它并恢复在线生成。
+        self._sequence = None
+        self._sequence_index = 0
 
-    def next_action(self) -> List[float]:
+    def _next_generated(self) -> List[float]:
         out = []
         for i in range(N_CHAN):
             span = self.hi[i] - self.lo[i]
@@ -245,7 +424,7 @@ class ValveDriver(QObject):
                     nxt, self._dir[i] = self.lo[i], 1.0
             else:                                # random bounded walk
                 maxstep = span * self.step_frac
-                nxt = self._cur[i] + random.uniform(-maxstep, maxstep)
+                nxt = self._cur[i] + self.rng.uniform(-maxstep, maxstep)
                 if nxt < self.lo[i]:
                     nxt = self.lo[i] + (self.lo[i] - nxt)      # 反射
                 if nxt > self.hi[i]:
@@ -254,3 +433,36 @@ class ValveDriver(QObject):
             self._cur[i] = nxt
             out.append(nxt)
         return out
+
+    def next_action(self) -> List[float]:
+        if self._sequence is not None:
+            start = self._sequence_index * N_CHAN
+            if start < len(self._sequence):
+                self._sequence_index += 1
+                return [float(v) for v in self._sequence[start:start + N_CHAN]]
+            self._sequence = None
+            self._sequence_index = 0
+        return self._next_generated()
+
+
+class ReplayDriver:
+    """按 actions6.csv 的相对时间顺序回放六维动作。"""
+
+    def __init__(self, path: str):
+        self.path = path
+        self.times, self.actions = load_action_sequence(path)
+        self.index = 0
+
+    def next_action(self):
+        if self.index >= len(self.actions):
+            return None
+        action = self.actions[self.index]
+        self.index += 1
+        return list(action)
+
+    def next_delay(self, default_s=0.2):
+        if self.index == 0:
+            return max(0.02, float(default_s))
+        if self.index >= len(self.times):
+            return None
+        return max(0.02, self.times[self.index] - self.times[self.index - 1])

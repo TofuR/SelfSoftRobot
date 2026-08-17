@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 360" font-family="'Noto Sans CJK SC','Noto Sans CJK JP',sans-serif" font-size="13">
+  <defs>
+    <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#44566b"/></marker>
+  </defs>
+
+  <!-- 漂移曲线 (锯齿, 每窗口复位) -->
+  <text x="30" y="34" font-size="12.5" fill="#444" font-weight="bold">漂移(距上次观测的误差):</text>
+  <path d="M70,70 L70,60 L180,66 L260,62 L260,55 L380,64 L470,60 L470,53 L590,63 L680,59 L680,52 L800,62 L890,58 L890,51 L1010,61 L1100,57"
+        fill="none" stroke="#e08e0b" stroke-width="2"/>
+  <text x="560" y="50" font-size="11" fill="#e08e0b">窗口内上升 · 锚点处回落(锯齿·有界)</text>
+
+  <!-- 锚点竖线 -->
+  <line x1="70"   y1="78" x2="70"   y2="300" stroke="#d4ac0d" stroke-width="1.4" stroke-dasharray="5 4"/>
+  <line x1="470"  y1="78" x2="470"  y2="300" stroke="#d4ac0d" stroke-width="1.4" stroke-dasharray="5 4"/>
+  <line x1="890"  y1="78" x2="890"  y2="300" stroke="#d4ac0d" stroke-width="1.4" stroke-dasharray="5 4"/>
+
+  <!-- 窗口1 -->
+  <g><rect x="70" y="150" width="170" height="64" rx="8" fill="#fff6da" stroke="#d4ac0d" stroke-width="1.6" stroke-dasharray="6 3"/>
+     <text x="155" y="173" text-anchor="middle" font-weight="bold" fill="#9a7d0a">GT 观测种子</text>
+     <text x="155" y="193" text-anchor="middle" font-size="11">s_seed = 真实骨架</text>
+     <text x="155" y="208" text-anchor="middle" font-size="11">z₀ = z_init(aw)</text></g>
+  <text x="270" y="186" font-size="12" fill="#444">→ K 步自回归 rollout</text>
+  <g><circle cx="330" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/><circle cx="360" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/>
+     <circle cx="390" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/><circle cx="420" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/>
+     <text x="420" y="208" text-anchor="middle" font-size="10.5" fill="#555">…喂自身预测 + 真实未来动作</text></g>
+
+  <!-- 窗口2 -->
+  <g><rect x="470" y="150" width="170" height="64" rx="8" fill="#fff6da" stroke="#d4ac0d" stroke-width="1.6" stroke-dasharray="6 3"/>
+     <text x="555" y="173" text-anchor="middle" font-weight="bold" fill="#9a7d0a">重新观测锚定</text>
+     <text x="555" y="193" text-anchor="middle" font-size="11">位姿漂移在此清零</text></g>
+  <g><circle cx="670" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/><circle cx="700" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/>
+     <circle cx="730" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/><circle cx="760" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/>
+     <circle cx="790" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/><circle cx="820" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/></g>
+
+  <!-- 窗口3 -->
+  <g><rect x="890" y="150" width="170" height="64" rx="8" fill="#fff6da" stroke="#d4ac0d" stroke-width="1.6" stroke-dasharray="6 3"/>
+     <text x="975" y="173" text-anchor="middle" font-weight="bold" fill="#9a7d0a">重新观测锚定</text>
+     <text x="975" y="193" text-anchor="middle" font-size="11">z 每窗口重置(不跨窗口)</text></g>
+  <g><circle cx="1090" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/><circle cx="1120" cy="182" r="9" fill="#e8f4fd" stroke="#2980b9"/></g>
+
+  <!-- 时间轴 -->
+  <line x1="60" y1="300" x2="1150" y2="300" stroke="#44566b" stroke-width="1.6" marker-end="url(#arr2)"/>
+  <text x="1140" y="320" text-anchor="end" font-size="12" fill="#555">时间 t (每步 ≈ 0.2s)</text>
+  <text x="70"  y="320" text-anchor="middle" font-size="11" fill="#9a7d0a">t₀</text>
+  <text x="470" y="320" text-anchor="middle" font-size="11" fill="#9a7d0a">t₀+K</text>
+  <text x="890" y="320" text-anchor="middle" font-size="11" fill="#9a7d0a">t₀+2K</text>
+
+  <!-- 三模型对比条 -->
+  <g transform="translate(60,338)">
+    <rect x="0"   y="0" width="360" height="18" fill="#eafaf1" stroke="#27ae60"/><text x="180" y="13" text-anchor="middle" font-size="11">14 gt: 每步观测 → 漂移≈0(平坦, 需每步观测)</text>
+    <rect x="380" y="0" width="360" height="18" fill="#fff6da" stroke="#d4ac0d"/><text x="560" y="13" text-anchor="middle" font-size="11" font-weight="bold" fill="#9a7d0a">15 open_loop (本): 锯齿·有界 (观测一次→预测K步)</text>
+    <rect x="760" y="0" width="360" height="18" fill="#fde8ef" stroke="#c0392b"/><text x="940" y="13" text-anchor="middle" font-size="11">13 无界 rollout: 单调发散(1170×, 不可部署)</text>
+  </g>
+</svg>

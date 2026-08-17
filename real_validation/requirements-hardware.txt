@@ -1,0 +1,8 @@
+-r requirements.txt
+
+# 后续真机连接页面启用后按实际设备安装
+opencv-python>=4.5
+pyserial>=3.5
+pyrealsense2>=2.50
+scipy>=1.7
+scikit-surgerynditracker>=1.0

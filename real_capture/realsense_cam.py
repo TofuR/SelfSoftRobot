@@ -57,8 +57,19 @@ class RealSenseCam(QThread):
         self.exposure_us = int(exposure_us)
         self.gain = int(gain)
         self.mock = bool(mock)
-        self.serial = serial
+        self.serial = str(serial) if serial else None
         self._running = True
+
+    @staticmethod
+    def list_devices():
+        """返回当前 RealSense 设备序列号；无驱动/无设备时返回空列表。"""
+        try:
+            import pyrealsense2 as rs
+            ctx = rs.context()
+            return [str(dev.get_info(rs.camera_info.serial_number))
+                    for dev in ctx.query_devices()]
+        except Exception:
+            return []
 
     def stop(self):
         self._running = False

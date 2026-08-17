@@ -2,11 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **新接手本项目?先读 [`docs/HANDOFF.md`](docs/HANDOFF.md)** — 5 分钟接手指南:当前真实状态、别破坏的不变量、怎么跑最新控制/规划、诚实边界。本文件(CLAUDE.md)是完整规范,HANDOFF 是快速定向。
+
 ## Project Overview
 
 SelfSoftRobot is a research project implementing **neural field-based 3D self-modeling for soft robots**. The robot learns to predict its own 3D shape from 2D camera observations conditioned on actuator inputs, using NeRF-inspired volume rendering as the training signal.
 
 The project builds on the FBV-SM (Field-Based Vision Soft Manipulation) codebase from Hu et al. 2025, extending it from rigid arms to soft continuum arms simulated via PyElastica.
+
+The project follows **two data routes**:
+- **(A) Simulation** — PyElastica 3D arm + PyVista rendering (the original main line; all `train_unified` / MS-SCNF / SkeletonSDF work below stays valid).
+- **(B) Real-world** (newer, calibration-free) — a physical 1-DOF two-segment soft arm driven by a TwinCAT PLC + syringe motors, single Intel RealSense camera, **no camera calibration**: the 2D image skeleton `[col,row,0]` is used directly as `state` (predicted output is de-normalized back to pixels), and an NDI 6DOF tracker provides end-effector ground truth in mm for metric validation. The full real-data pipeline is documented in [`docs/real_data/workflow.md`](docs/real_data/workflow.md).
 
 ## Running the Code
 
@@ -63,6 +69,31 @@ python scripts/evaluation/visualize_3d_shape.py              # 3D SDF/mesh visua
 ```
 
 There is no formal test suite. Validation is done through notebooks and the evaluation scripts.
+
+### Real-Data Pipeline (route B, calibration-free 2D)
+
+Data prep → training → evaluation. Full workflow in [`docs/real_data/workflow.md`](docs/real_data/workflow.md).
+
+```bash
+# --- scripts/real/ : mask + skeleton prep ---
+python scripts/real/masks_to_transition_npz.py   # white_on_blue mask → 2D skeleton [col,row,0] + tip_fix + action norm[0,1]
+python scripts/real/clean_transition_npz.py      # static-segment consensus cleaning
+python scripts/real/repair_masks.py              # mask-level repair (independent track), outputs masks_repaired/
+python scripts/real/composite_frames.py          # original + mask + skeleton overlay
+python scripts/real/compare_skeleton_methods.py  # 7-method end-effector corner comparison
+python scripts/real/skeleton_to_shape.py         # node→shape baseline (skeleton + constant radius)
+
+# --- scripts/training/ : unified entry, replaces old train_gt/open_loop_transition ---
+python scripts/training/train_transition.py --mode gt         # ground-truth state
+python scripts/training/train_transition.py --mode open_loop  # open-loop rollout
+
+# --- scripts/evaluation/ : real-data metrics + visualization ---
+python scripts/evaluation/eval_real_quant.py        # end-effector NDI mm + shape px + drift_by_k
+python scripts/evaluation/visualize_real_overlay.py # model prediction overlaid on real photo
+python scripts/evaluation/inspect_real_data.py      # skeleton grid diagnostics
+```
+
+Note: in the real-data pipeline `state` is in image pixels `[col,row,0]`; no camera matrix / intrinsic projection is used (no metric 3D or intrinsics in this calibration-free route). Whole-shape error is reported in px; end-effector error in both px and mm (mm via NDI affine self-calibration against GT `node0` px). Backing utilities: `src/utils/skeleton_2d.py` (2D skeleton + `_perpendicular_tip_fix`), `src/evaluation/transition_metrics.py` (rollout + `drift_by_k`), `src/evaluation/shape_metrics.py` (chamfer/hausdorff).
 
 ## Architecture
 
@@ -170,13 +201,25 @@ data/
   exp7_multiview/    # multi-view experiment data
 ```
 
+Real-data layout (route B):
+
+```
+real_capture/data/
+  raw/<seq>/                     # raw capture: cam0/<NNNNN>.png, actions6.csv, ndi.csv, frame_times.txt, meta.json
+  derived/<seq>/                 # masks, masks_repaired (repair_masks output), overlay
+data/real_seq/<seq>/             # transition npz (train/val): positions(T,3,N), actions(T,1)
+data/real_seq/<seq>_clean/       # after clean_transition_npz
+```
+
+Each transition npz carries metadata (incl. `n_points`, `tip_fix`) under `data_prep`; training experiments save `config.json` (n_nodes/z_dim/episode_len + data_prep) and a one-line `model_card.txt` at the experiment root.
+
 ### Code Language
 
 Comments, docstrings, and variable names are a mix of English and Chinese. The project documentation (`docs/`) is primarily in Chinese.
 
 ## Key Conventions
 
-- **No formal test framework** — validation uses Jupyter notebooks (`notebooks/`) and evaluation scripts
+- **Tests**: `unittest`(无 pytest)。4 个测试文件:`tests/test_real_validation_core.py`(20 个契约测试)、`tests/test_perception_parity.py`(感知迁移冻结参考)、`tests/test_import_hygiene.py`(子进程断言 real_validation 包根 stdlib-only)、`tests/test_perception_{registration,quality,probe}.py`。运行:`python -m unittest discover -s tests -v`。此外仍用 `notebooks/` 与 `scripts/evaluation/` 做实验级验证
 - **Experiment logging**: Training outputs go to `train_log/<model_name>/exp_<date>_<n>/` with images, best model weights, and loss logs
 - **Config-driven**: `config/training.json` for all hyperparameters; CLI args in `src/config/args.py` can override defaults
 - **Two-phase training**: C-MSTNF/MS-SCNF/SkeletonSDF models train canonical/skeleton first, then deformation/SDF jointly
