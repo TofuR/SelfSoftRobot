@@ -45,7 +45,11 @@ try:
 except Exception:  # pragma: no cover
     cv2 = None
 
-from valve_control import N_CHAN, P_MIN, ReplayDriver, ValveDriver
+from valve_control import (EQUALITY_TOLERANCE_KPA, N_CHAN, P_MIN,
+                           ReplayDriver, ValveDriver,
+                           apply_channel_equalities,
+                           channel_equality_residuals,
+                           normalize_channel_equalities)
 
 
 def _now_iso() -> str:
@@ -187,6 +191,7 @@ class ValveRecorder(QObject):
         self._mode = "manual"
         self._manual_target = [P_MIN] * N_CHAN     # manual 模式每拍重发的目标
         self._active_channel = 0
+        self._channel_equalities = ()
         self._action_interval_s = 0.2
         self._settle_s = 0.19
         self._warned_no_cv2 = False
@@ -274,10 +279,35 @@ class ValveRecorder(QObject):
                         active_channel: int, note: str, rise_rates=None,
                         fall_rates=None, random_seed=None, pre_generate_steps=0,
                         replay_path=None, required_groups=None,
-                        max_frame_age=0.5, max_ndi_age=0.5):
+                        max_frame_age=0.5, max_ndi_age=0.5,
+                        channel_equalities=()):
         if self.recording:
             self.log.emit("已在录制中。")
-            return
+            return False
+        try:
+            equalities = normalize_channel_equalities(channel_equalities)
+            def _six(values, fill):
+                result = [float(x) for x in list(values or [])[:N_CHAN]]
+                return result + [float(fill)] * (N_CHAN - len(result))
+
+            rates_up = _six(rise_rates, 100.0)
+            rates_down = _six(fall_rates, 100.0)
+            lo_check = _six(lows6, P_MIN)
+            hi_check = _six(highs6, P_MIN)
+            for leader, follower in equalities:
+                fields = (("min", lo_check), ("max", hi_check),
+                          ("rise", rates_up), ("fall", rates_down))
+                for name, values in fields:
+                    if abs(values[leader] - values[follower]) > EQUALITY_TOLERANCE_KPA:
+                        raise ValueError(
+                            f"等值通道 ch{leader}/ch{follower} 的 {name} 必须相同")
+            if hasattr(self.controller, "configure_channel_equalities"):
+                self.controller.configure_channel_equalities(equalities)
+            if hasattr(self.controller, "configure_safety"):
+                self.controller.configure_safety(rates_up, rates_down)
+        except (TypeError, ValueError) as error:
+            self.log.emit(f"⚠ 通道等值约束无效：{error}")
+            return False
         seq_dir = os.path.abspath(seq_dir)
         os.makedirs(seq_dir, exist_ok=True)
         self._cam_dirs = [os.path.join(seq_dir, f"cam{i}")
@@ -290,6 +320,7 @@ class ValveRecorder(QObject):
         self._frame_idx = 0
         self._mode = mode
         self._active_channel = int(active_channel)
+        self._channel_equalities = equalities
         self._pending_commands.clear()
         self._replay_done = False
         self._max_frame_age = max(0.0, float(max_frame_age))
@@ -333,6 +364,7 @@ class ValveRecorder(QObject):
             ["command_id", "t_command", "t_command_ack",
              *[f"requested{i}" for i in range(N_CHAN)],
              *[f"action_command{i}" for i in range(N_CHAN)],
+             *[f"pair_residual{i}" for i in range(len(equalities))],
              "communication_status_g1", "communication_status_g2", "communication_status"])
         self._f_sample = open(os.path.join(seq_dir, "samples.csv"), "w", newline="")
         self._sample_writer = csv.writer(self._f_sample)
@@ -352,6 +384,8 @@ class ValveRecorder(QObject):
             "lo6": lo,
             "hi6": hi,
             "active_channel": self._active_channel,
+            "channel_equalities": [list(item) for item in equalities],
+            "channel_equality_tolerance_kpa": EQUALITY_TOLERANCE_KPA,
             "camera_count": len(self.cams),
             "camera_serials": [getattr(camera, "serial", None) for camera in self.cams],
             "ndi_count": self._ndi_count,
@@ -365,10 +399,6 @@ class ValveRecorder(QObject):
             "fall_rates6": list(fall_rates or []),
             "note": note,
         }
-        if hasattr(self.controller, "configure_safety"):
-            self.controller.configure_safety(
-                rise_rates or [100.0] * N_CHAN,
-                fall_rates or [100.0] * N_CHAN)
         if hasattr(self.controller, "set_required_groups"):
             self.controller.set_required_groups(required_groups)
         self.recording = True
@@ -395,6 +425,7 @@ class ValveRecorder(QObject):
         # 启动采集时钟；第一拍在 interval 后触发（给相机/NDI 缓存一点预热时间）
         first_delay = self._replay.next_delay(self._action_interval_s) if self._replay else self._action_interval_s
         self._clock.start(int(round(first_delay * 1000)))
+        return True
 
     def _on_tick(self):
         """采集时钟：下发一拍 action，并安排 settle 后抓帧。"""
@@ -408,6 +439,7 @@ class ValveRecorder(QObject):
                 return
         else:
             action = self._driver.next_action() if self._driver is not None else list(self._manual_target)
+        action = apply_channel_equalities(action, self._channel_equalities)
         command_id = self.controller.allocate_command_id()
         self._pending_commands[command_id] = {
             "requested": list(action), "applied": list(action),
@@ -415,12 +447,22 @@ class ValveRecorder(QObject):
             "statuses": {1: "pending", 2: "pending"},
             "required": set(getattr(self.controller, "_required_groups", set()) or set()),
         }
-        result = self.controller.set_pressures(action, command_id=command_id)
+        try:
+            result = self.controller.set_pressures(action, command_id=command_id)
+        except Exception as error:
+            self.log.emit(f"⚠ 动作下发违反等值/安全约束，停止采集：{error}")
+            self.stop_recording()
+            return
         if isinstance(result, tuple) and len(result) >= 2:
             self._pending_commands[command_id]["applied"] = list(result[1])
             if len(result) >= 3:
                 self._pending_commands[command_id]["t_command"] = float(result[2])
         applied = list(self._pending_commands[command_id]["applied"])
+        residuals = channel_equality_residuals(applied, self._channel_equalities)
+        if any(value > EQUALITY_TOLERANCE_KPA for value in residuals):
+            self.log.emit(f"⚠ applied6 等值残差 {residuals} 超限，停止采集。")
+            self.stop_recording()
+            return
         # 安排 settle 后抓取（同一 action 向量 → (action_i, frame_i) 精确配对）
         QTimer.singleShot(int(round(self._settle_s * 1000)),
                            lambda a=applied, cid=command_id: self._on_grab(a, cid))
@@ -532,6 +574,8 @@ class ValveRecorder(QObject):
              "nan" if not math.isfinite(t_ack) else f"{t_ack:.6f}"]
             + [f"{float(v):.4f}" for v in record["requested"]]
             + [f"{float(v):.4f}" for v in record["applied"]]
+            + [f"{value:.6f}" for value in channel_equality_residuals(
+                record["applied"], self._channel_equalities)]
             + [statuses[1], statuses[2], overall])
         self._f_cmd.flush()
 

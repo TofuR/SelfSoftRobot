@@ -28,6 +28,7 @@ N_CHAN = 6
 P_MIN = 0.0
 P_MAX = 500.0
 DEFAULT_RATE_KPA_S = 100.0
+EQUALITY_TOLERANCE_KPA = 1e-6
 
 
 def _clamp6(vec) -> List[float]:
@@ -43,6 +44,39 @@ def _vec6(values, fill=0.0) -> List[float]:
     if len(v) < N_CHAN:
         v += [float(fill)] * (N_CHAN - len(v))
     return v
+
+
+def normalize_channel_equalities(pairs) -> tuple[tuple[int, int], ...]:
+    """规范化互不重叠的 ``(leader, follower)`` 六通道等值约束。"""
+    result = []
+    used = set()
+    for item in pairs or ():
+        if len(item) != 2:
+            raise ValueError("每个通道等值约束必须是 [leader, follower]")
+        leader, follower = (int(item[0]), int(item[1]))
+        if leader == follower:
+            raise ValueError("通道不能跟随自身")
+        if leader not in range(N_CHAN) or follower not in range(N_CHAN):
+            raise ValueError("等值约束通道必须位于 0..5")
+        if leader in used or follower in used:
+            raise ValueError("等值约束必须是互不重叠的通道对")
+        used.update((leader, follower))
+        result.append((leader, follower))
+    return tuple(result)
+
+
+def apply_channel_equalities(values, pairs) -> List[float]:
+    """把 follower 投影为 leader；输入输出均为六通道 kPa。"""
+    result = _clamp6(values)
+    for leader, follower in normalize_channel_equalities(pairs):
+        result[follower] = result[leader]
+    return result
+
+
+def channel_equality_residuals(values, pairs) -> tuple[float, ...]:
+    vector = _vec6(values)
+    return tuple(abs(vector[leader] - vector[follower])
+                 for leader, follower in normalize_channel_equalities(pairs))
 
 
 class PressureSlewLimiter:
@@ -126,6 +160,7 @@ class ValveController(QObject):
         self._last = [P_MIN] * N_CHAN
         self._command_ids = itertools.count(1)
         self._required_groups = None
+        self._channel_equalities = ()
         self._slew = PressureSlewLimiter(initial=self._last)
         self.mgr.command_ack.connect(self._on_command_ack)
         self.mgr.command_error.connect(self._on_command_error)
@@ -137,7 +172,24 @@ class ValveController(QObject):
         self._required_groups = None if groups is None else set(int(g) for g in groups)
 
     def configure_safety(self, rise_rates, fall_rates):
+        rise = _vec6(rise_rates)
+        fall = _vec6(fall_rates)
+        for leader, follower in self._channel_equalities:
+            if (abs(rise[leader] - rise[follower]) > EQUALITY_TOLERANCE_KPA or
+                    abs(fall[leader] - fall[follower]) > EQUALITY_TOLERANCE_KPA):
+                raise ValueError("等值通道必须使用相同 rise/fall 速率")
         self._slew.configure(rise_rates, fall_rates, initial=self._last)
+
+    def configure_channel_equalities(self, pairs) -> None:
+        normalized = normalize_channel_equalities(pairs)
+        residuals = channel_equality_residuals(self._last, normalized)
+        if any(value > EQUALITY_TOLERANCE_KPA for value in residuals):
+            raise ValueError("启用等值约束前 linked 通道当前命令必须相等；请先全部归零")
+        self._channel_equalities = normalized
+
+    @property
+    def channel_equalities(self):
+        return tuple(self._channel_equalities)
 
     def _on_command_ack(self, command_id, group_id, t_ack):
         self.communication_result.emit(str(command_id), int(group_id), True,
@@ -196,8 +248,11 @@ class ValveController(QObject):
         """下发 6 维气压；返回 ``(command_id, applied6)``。"""
         t_command = time.monotonic()
         command_id = str(command_id or self.allocate_command_id())
-        requested = _clamp6(pressures6)
+        requested = apply_channel_equalities(pressures6, self._channel_equalities)
         p6 = self._slew.apply(requested, now=t_command, bypass=bypass_rate)
+        if any(value > EQUALITY_TOLERANCE_KPA for value in
+               channel_equality_residuals(p6, self._channel_equalities)):
+            raise RuntimeError("限速后的 applied6 破坏了通道等值约束")
         conn = self.connected_groups
         if required_groups is not None:
             required = set(int(g) for g in required_groups)
@@ -263,6 +318,7 @@ class MockValveController(QObject):
         self.group_ports = {1: "MOCK", 2: "MOCK"}
         self._command_ids = itertools.count(1)
         self._required_groups = None
+        self._channel_equalities = ()
         self._slew = PressureSlewLimiter(initial=self._last)
 
     def allocate_command_id(self) -> str:
@@ -272,7 +328,24 @@ class MockValveController(QObject):
         self._required_groups = None if groups is None else set(int(g) for g in groups)
 
     def configure_safety(self, rise_rates, fall_rates):
+        rise = _vec6(rise_rates)
+        fall = _vec6(fall_rates)
+        for leader, follower in self._channel_equalities:
+            if (abs(rise[leader] - rise[follower]) > EQUALITY_TOLERANCE_KPA or
+                    abs(fall[leader] - fall[follower]) > EQUALITY_TOLERANCE_KPA):
+                raise ValueError("等值通道必须使用相同 rise/fall 速率")
         self._slew.configure(rise_rates, fall_rates, initial=self._last)
+
+    def configure_channel_equalities(self, pairs) -> None:
+        normalized = normalize_channel_equalities(pairs)
+        residuals = channel_equality_residuals(self._last, normalized)
+        if any(value > EQUALITY_TOLERANCE_KPA for value in residuals):
+            raise ValueError("启用等值约束前 linked 通道当前命令必须相等；请先全部归零")
+        self._channel_equalities = normalized
+
+    @property
+    def channel_equalities(self):
+        return tuple(self._channel_equalities)
 
     def connect_group(self, gid: int):
         self._mock_conn[gid] = True
@@ -307,8 +380,11 @@ class MockValveController(QObject):
                       required_groups=None):
         t_command = time.monotonic()
         command_id = str(command_id or self.allocate_command_id())
-        requested = _clamp6(pressures6)
+        requested = apply_channel_equalities(pressures6, self._channel_equalities)
         p6 = self._slew.apply(requested, now=t_command, bypass=bypass_rate)
+        if any(value > EQUALITY_TOLERANCE_KPA for value in
+               channel_equality_residuals(p6, self._channel_equalities)):
+            raise RuntimeError("限速后的 applied6 破坏了通道等值约束")
         self._last = p6
         self.command_issued.emit(command_id, requested, p6, t_command)
         self.action_logged.emit(p6, t_command)
