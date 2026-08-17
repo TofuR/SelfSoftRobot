@@ -45,6 +45,9 @@ def scene_primitive_item(p: ScenePrimitive, *,
         nodes = p.geometry.get("nodes")
         if not nodes:
             return None
-        return pg.ScatterPlotItem([n[0] for n in nodes], [n[1] for n in nodes],
-                                  symbol="x", size=8, pen=pg.mkPen(target_color, width=2))
+        # 一个 PlotDataItem 同时绘制连线和节点，视觉上也是一个可编辑对象。
+        return pg.PlotDataItem([n[0] for n in nodes], [n[1] for n in nodes],
+                               pen=pg.mkPen(target_color, width=2),
+                               symbol="x", symbolSize=8,
+                               symbolPen=pg.mkPen(target_color, width=2))
     return None

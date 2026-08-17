@@ -25,6 +25,7 @@ class CameraViewWidget(QWidget):
     target_picked = pyqtSignal(object)            # ScenePrimitive(target_*)
     obstacle_picked = pyqtSignal(object)          # ScenePrimitive(obstacle_*)
     target_skeleton_picked = pyqtSignal(object)   # ScenePrimitive(target_skeleton) 功能③
+    skeleton_draft_changed = pyqtSignal(int)       # 当前未提交节点数
     selection_changed = pyqtSignal(str)           # primitive_id
     geometry_edited = pyqtSignal(object)          # 编辑后的 Scene
 
@@ -35,7 +36,7 @@ class CameraViewWidget(QWidget):
         self.plot.invertY(False)                  # 图像顶部 = row 0
         self.plot.setAspectLocked(True)
         root.addWidget(self.plot, 1)
-        self._hint = QLabel("工具: select(点选) / add_target(点加目标) / add_obstacle(点加圆障碍)")
+        self._hint = QLabel("工具: select / 点加目标 / 点出目标骨架 / 点加障碍")
         root.addWidget(self._hint)
 
         self.image_item = pg.ImageItem()
@@ -167,16 +168,18 @@ class CameraViewWidget(QWidget):
     def clear_skeleton_points(self) -> None:
         self._skeleton_points = []
         self._skeleton_preview.setData(x=[], y=[])
+        self.skeleton_draft_changed.emit(0)
 
-    def commit_skeleton_target(self) -> None:
+    def commit_skeleton_target(self) -> bool:
         """把已点节点提交为 target_skeleton(双击完成)。至少 2 点。"""
         if len(self._skeleton_points) < 2:
-            return
+            return False
         nodes = [[x, y] for x, y in self._skeleton_points]
         self.target_skeleton_picked.emit(ScenePrimitive(
             "target_skeleton", "model", {"nodes": nodes, "tolerance_px": 4.0},
-            name=f"target_skeleton_{len(self._scene_items)}"))
+            name=f"目标骨架（{len(nodes)}节点）"))
         self.clear_skeleton_points()
+        return True
 
     def set_read_only(self, read_only: bool) -> None:
         """只读模式:主显示区是纯显示,禁用鼠标点选 handler + 隐藏工具提示。"""
@@ -201,6 +204,7 @@ class CameraViewWidget(QWidget):
             xs = [p[0] for p in self._skeleton_points]
             ys = [p[1] for p in self._skeleton_points]
             self._skeleton_preview.setData(x=xs, y=ys)
+            self.skeleton_draft_changed.emit(len(self._skeleton_points))
             return
         if self.tool == "add_target":
             self.target_picked.emit(ScenePrimitive(

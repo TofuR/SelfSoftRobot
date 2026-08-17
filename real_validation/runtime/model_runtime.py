@@ -46,6 +46,18 @@ def _nearby_manifest(checkpoint: Path) -> dict[str, Any] | None:
     return None
 
 
+def _nearby_manifest_path(checkpoint: Path) -> Path | None:
+    current = checkpoint.parent
+    for _ in range(6):
+        candidate = current / "deploy_manifest.json"
+        if candidate.is_file():
+            return candidate.resolve()
+        if current.parent == current:
+            break
+        current = current.parent
+    return None
+
+
 class ModelLoadError(RuntimeError):
     """预期内的操作员级加载错误(路径/配置/契约),不应向 UI 抛 traceback。"""
 
@@ -74,6 +86,7 @@ class ModelRuntime:
         self.model = model
         self.info = info
         self.device = device
+        self.manifest_path = _nearby_manifest_path(checkpoint_path)
         manifest_raw = _nearby_manifest(checkpoint_path)
         manifest = None
         if manifest_raw:
@@ -83,6 +96,12 @@ class ModelRuntime:
             except ValueError:
                 manifest = None   # manifest 残缺 → 字段留 None,由 preflight 阻断规划
         self.manifest = manifest
+        self.reference_frame_path = None
+        if manifest is not None and manifest.reference_frame:
+            reference = Path(manifest.reference_frame)
+            if not reference.is_absolute() and self.manifest_path is not None:
+                reference = self.manifest_path.parent / reference
+            self.reference_frame_path = reference.resolve()
         self.descriptor = ModelDescriptor(
             checkpoint=str(checkpoint_path),
             checkpoint_hash=file_sha256(checkpoint_path),

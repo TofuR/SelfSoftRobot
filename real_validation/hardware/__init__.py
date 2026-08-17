@@ -5,3 +5,8 @@ Mock 流程不触碰本包。**本包不进 real_validation/__init__.py 闭包**
 stdlib-only;真机依赖 pyserial/pyrealsense2/scikit-surgerynditracker 只在
 requirements-hardware.txt)。
 """
+
+from .profile import BackendMode, DeviceState, HardwareProfile, required_groups_for_channels
+
+__all__ = ["BackendMode", "DeviceState", "HardwareProfile",
+           "required_groups_for_channels"]

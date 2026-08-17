@@ -16,6 +16,7 @@ from ..contracts.models import Scene, ScenePrimitive
 class SceneEditorPanel(QWidget):
     scene_edited = pyqtSignal(object)      # 编辑后的 Scene
     primitive_selected = pyqtSignal(str)   # primitive_id
+    redraw_requested = pyqtSignal(str)     # 重画目标骨架（保留旧对象直到新对象提交）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -34,7 +35,10 @@ class SceneEditorPanel(QWidget):
         buttons = QHBoxLayout()
         self.delete_btn = QPushButton("删除")
         self.apply_btn = QPushButton("应用修改")
+        self.redraw_btn = QPushButton("重画目标骨架")
+        self.redraw_btn.setEnabled(False)
         buttons.addWidget(self.delete_btn); buttons.addWidget(self.apply_btn)
+        buttons.addWidget(self.redraw_btn)
         buttons.addStretch()
         root.addLayout(buttons)
 
@@ -44,6 +48,7 @@ class SceneEditorPanel(QWidget):
         self.list.currentItemChanged.connect(self._on_select)
         self.delete_btn.clicked.connect(self._on_delete)
         self.apply_btn.clicked.connect(self._on_apply)
+        self.redraw_btn.clicked.connect(self._on_redraw)
 
     def set_scene(self, scene: Scene) -> None:
         self._scene = scene
@@ -51,6 +56,15 @@ class SceneEditorPanel(QWidget):
         for p in scene.primitives:
             self.list.addItem(f"[{p.kind}] {p.name or p.primitive_id[:8]}")
         self._current_id = None
+        self.redraw_btn.setEnabled(False)
+
+    def select_primitive(self, primitive_id: str) -> None:
+        if self._scene is None:
+            return
+        for row, primitive in enumerate(self._scene.primitives):
+            if primitive.primitive_id == primitive_id:
+                self.list.setCurrentRow(row)
+                return
 
     def _on_select(self, current, _previous) -> None:
         if current is None or self._scene is None:
@@ -63,7 +77,12 @@ class SceneEditorPanel(QWidget):
         self.name_edit.setText(p.name)
         self.kind_label.setText(p.kind)
         self.geometry_label.setText(str(p.geometry)[:60])
+        self.redraw_btn.setEnabled(p.kind == "target_skeleton")
         self.primitive_selected.emit(p.primitive_id)
+
+    def _on_redraw(self) -> None:
+        if self._current_id:
+            self.redraw_requested.emit(self._current_id)
 
     def _on_delete(self) -> None:
         """批量删除选中项(Ctrl 多选/Shift 范围/Ctrl+A 全选)。"""

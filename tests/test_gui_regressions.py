@@ -19,7 +19,7 @@ import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtWidgets import QApplication, QSplitter
+from PyQt5.QtWidgets import QApplication, QDoubleSpinBox, QSplitter, QTabWidget
 
 from real_validation.contracts.models import Scene, ScenePrimitive
 from real_validation.core.session import ExperimentSession
@@ -114,27 +114,27 @@ class SceneSummaryRegressionTest(unittest.TestCase):
             window.close()
 
     def test_numeric_add_syncs_visualization(self):
-        # 打磨:数值添加(_set_target/_add_obstacle)后,右侧 camera_view 原语与
+        # 打磨:数值添加(_set_target/_add_obstacle)后,主显示原语与
         # scene_editor 列表必须同步更新(原先只有工具点加才刷新)。
         from real_validation.gui.main_window import ValidationWindow
         window = ValidationWindow()
         window.session = ExperimentSession.create(
             tempfile.mkdtemp(prefix="gui_regress_sync_"))
         try:
-            self.assertEqual(len(window.camera_view._scene_items), 0)
+            self.assertEqual(len(window.main_display._scene_items), 0)
             self.assertEqual(window.scene_editor.list.count(), 0)
             window.target_x.setValue(100)
             window.target_y.setValue(200)
             window.target_radius.setValue(5)
             window._set_target()
-            # 数值添加后 camera_view 重绘 + scene_editor 列表同步
-            self.assertEqual(len(window.camera_view._scene_items), 1)
+            # 数值添加后主显示重绘 + scene_editor 列表同步
+            self.assertEqual(len(window.main_display._scene_items), 1)
             self.assertEqual(window.scene_editor.list.count(), 1)
             window.obstacle_x.setValue(30)
             window.obstacle_y.setValue(40)
             window.obstacle_radius.setValue(8)
             window._add_obstacle()
-            self.assertEqual(len(window.camera_view._scene_items), 2)
+            self.assertEqual(len(window.main_display._scene_items), 2)
             self.assertEqual(window.scene_editor.list.count(), 2)
         finally:
             window.close()
@@ -148,7 +148,7 @@ class SceneSummaryRegressionTest(unittest.TestCase):
         window.session = ExperimentSession.create(
             tempfile.mkdtemp(prefix="gui_regress_skel_"))
         try:
-            view = window.camera_view
+            view = window.main_display          # 锚定交互在主摄像头(Observe 页可交互)
             view.set_frame(np.zeros((240, 320, 3)))   # 设图像范围,mapViewToScene 才正确
             vb = view.plot.getViewBox()
 
@@ -174,6 +174,49 @@ class SceneSummaryRegressionTest(unittest.TestCase):
             primitive = window.session.scene.primitives[0]
             self.assertEqual(primitive.kind, "target_skeleton")
             self.assertEqual(len(primitive.geometry["nodes"]), 3)
+            self.assertEqual(window.scene_editor.list.count(), 1)
+            self.assertIn("target_skeleton", window.scene_editor.list.item(0).text())
+        finally:
+            window.close()
+
+    def test_new_target_replaces_old_target_but_keeps_obstacles(self):
+        from real_validation.gui.main_window import ValidationWindow
+        window = ValidationWindow()
+        window.session = ExperimentSession.create(
+            tempfile.mkdtemp(prefix="gui_single_target_"))
+        try:
+            window._add_primitive(ScenePrimitive(
+                "target_point", "model", {"xy": [10, 20], "node": 0}, name="point"))
+            window._add_primitive(ScenePrimitive(
+                "obstacle_circle", "model", {"center": [30, 40], "radius": 5},
+                name="obstacle"))
+            window._add_primitive(ScenePrimitive(
+                "target_skeleton", "model", {"nodes": [[0, 0], [1, 1]]},
+                name="skeleton"))
+            targets = [p for p in window.session.scene.primitives
+                       if p.kind.startswith("target_")]
+            obstacles = [p for p in window.session.scene.primitives
+                         if p.kind.startswith("obstacle_")]
+            self.assertEqual([p.kind for p in targets], ["target_skeleton"])
+            self.assertEqual(len(obstacles), 1)
+            self.assertEqual(window.scene_editor.list.count(), 2)
+        finally:
+            window.close()
+
+    def test_explicit_finish_commits_skeleton_as_one_scene_object(self):
+        from real_validation.gui.main_window import ValidationWindow
+        window = ValidationWindow()
+        window.session = ExperimentSession.create(
+            tempfile.mkdtemp(prefix="gui_finish_skeleton_"))
+        try:
+            window._set_tool("add_target_skeleton")
+            window.main_display._skeleton_points = [(0.0, 0.0), (10.0, 10.0)]
+            window._on_skeleton_draft_changed(2)
+            self.assertTrue(window.finish_skeleton_btn.isEnabled())
+            window._finish_skeleton_target()
+            self.assertEqual(len(window.session.scene.primitives), 1)
+            self.assertEqual(window.session.scene.primitives[0].kind, "target_skeleton")
+            self.assertEqual(window.scene_editor.list.count(), 1)
         finally:
             window.close()
 
@@ -227,39 +270,130 @@ class MainWindowLayoutTest(unittest.TestCase):
         _ensure_app()
 
     def test_main_display_in_top_level_splitter(self):
-        # 收紧:主显示区必须在顶层水平 splitter 的 index 0 子树内。
-        # (旧断言只查"存在任一水平 splitter"——Observe 页也有一个,会假过。)
+        # 收紧:主显示区必须在顶层水平 splitter 的 index 1(可视化面板)子树内。
+        # index 0 = 左 Tab 控制台(布局重构:控制台移左、摄像头右上面板,对齐 real_capture)。
         from real_validation.gui.main_window import ValidationWindow
         w = ValidationWindow()
         try:
             self.assertTrue(hasattr(w, "main_split"), "应暴露顶层 splitter 为 main_split")
             self.assertIsInstance(w.main_split, QSplitter)
             self.assertEqual(w.main_split.orientation(), 1)   # Qt.Horizontal
-            # 顶层 splitter 第一个 widget 含 main_display
-            left = w.main_split.widget(0)
-            self.assertTrue(w.main_display in left.findChildren(type(w.main_display)) or
-                            w.main_display is left or
-                            w.main_display in [left])
+            # index 0 = 左控制台(Tab),index 1 = 右可视化面板
+            self.assertIsInstance(w.main_split.widget(0), QTabWidget)
+            right = w.main_split.widget(1)
+            self.assertTrue(w.main_display in right.findChildren(type(w.main_display)) or
+                            w.main_display is right or
+                            w.main_display in [right])
+        finally:
+            w.close()
+
+    def test_setup_has_no_horizontal_overflow_at_default_size(self):
+        from real_validation.gui.main_window import ValidationWindow
+        w = ValidationWindow(); w.show(); QApplication.processEvents()
+        try:
+            setup_scroll = w.tabs.widget(0)
+            self.assertEqual(setup_scroll.horizontalScrollBar().maximum(), 0)
+            left, right = w.main_split.sizes()
+            self.assertGreater(right, left)  # 主画面占更大水平空间
         finally:
             w.close()
 
 
-class CompactLayoutTest(unittest.TestCase):
-    """Task 4:紧凑排版 —— 安全配置 6×5 一次显示全 + Setup/Plan 参数压缩 + 窗口 1400x860。"""
+class HardwareLifecycleGuiTest(unittest.TestCase):
+    """界面必须只呈现显式 profile，不再从空串口/连接失败猜 Mock。"""
 
     @classmethod
     def setUpClass(cls):
         _ensure_app()
 
-    def test_safety_table_shows_all_six_rows(self):
+    def test_setup_exposes_three_independent_backends(self):
         from real_validation.gui.main_window import ValidationWindow
         w = ValidationWindow()
         try:
-            table = w.safety_table
-            actual_content = sum(table.verticalHeader().sectionSize(i) for i in range(6)) \
-                             + table.horizontalHeader().height()
-            self.assertLessEqual(actual_content, table.maximumHeight())   # 6 行内容必须装进最大高度,无滚动
-            self.assertEqual(table.rowCount(), 6)
+            self.assertEqual(w.hw_camera_backend.count(), 3)
+            self.assertEqual(w.hw_valve_backend.count(), 2)
+            self.assertEqual(w.hw_ndi_backend.count(), 3)
+            self.assertEqual(w._profile_from_ui(), w.hardware.profile)
+        finally:
+            w.close()
+
+    def test_edited_profile_must_be_applied_before_connect(self):
+        from real_validation.gui.main_window import ValidationWindow
+        w = ValidationWindow()
+        try:
+            current = w.hardware.profile.valve_backend.value
+            target = w.hw_valve_backend.findData("mock" if current == "real" else "real")
+            w.hw_valve_backend.setCurrentIndex(target)
+            with self.assertRaisesRegex(RuntimeError, "应用配置"):
+                w._require_ui_profile_applied()
+        finally:
+            w.close()
+
+    def test_device_badges_are_independent_and_resume_is_absent(self):
+        from real_validation.gui.main_window import ValidationWindow
+        w = ValidationWindow(); w.show(); QApplication.processEvents()
+        try:
+            valve_before = w.device_badges["valve"].text()
+            w._on_device_state("camera", "error", "no camera")
+            self.assertIn("ERROR", w.device_badges["camera"].text())
+            self.assertEqual(w.device_badges["valve"].text(), valve_before)
+            self.assertTrue(w.resume_button.isHidden())
+        finally:
+            w.close()
+
+    def test_execution_label_follows_applied_valve_backend(self):
+        from real_validation.gui.main_window import ValidationWindow
+        w = ValidationWindow()
+        try:
+            w._refresh()
+            expected = ("执行真机计划" if
+                        w.hardware.profile.valve_backend.value == "real"
+                        else "运行 Mock 计划")
+            self.assertEqual(w.execute_button.text(), expected)
+        finally:
+            w.close()
+
+    def test_anchor_controls_explain_prerequisites_and_real_zero_history_is_allowed(self):
+        from types import SimpleNamespace
+        from real_validation.gui.main_window import ValidationWindow
+        from real_validation.hardware.profile import HardwareProfile
+        w = ValidationWindow()
+        w.session = ExperimentSession.create(tempfile.mkdtemp(prefix="gui_anchor_gate_"))
+        w.runtime = SimpleNamespace(
+            descriptor=SimpleNamespace(n_nodes=15, action_scale_kpa=(150.0,)),
+            reference_frame_path=None)
+        try:
+            w.hardware.apply_profile(HardwareProfile.real())
+            w._latest_frame = np.zeros((240, 320, 3), np.uint8)
+            w._refresh_anchor_controls()
+            self.assertFalse(w.camera_anchor_btn.isEnabled())
+            self.assertIn("参考背景", w.anchor_prereq.text())
+            self.assertFalse(w.warmup_btn.isEnabled())
+            self.assertTrue(w.zero_history_cb.isEnabled())
+            self.assertIn("Real 模式允许", w.zero_history_cb.toolTip())
+        finally:
+            w.runtime = None
+            w.close()
+
+
+class CompactLayoutTest(unittest.TestCase):
+    """Task 4:安全对话框 6×5 一次显示全 + 主窗口 1400x860。"""
+
+    @classmethod
+    def setUpClass(cls):
+        _ensure_app()
+
+    def test_safety_flat_grid_has_all_six_channels(self):
+        """安全对话框:6 通道 × 5 参数，不再常驻 Setup 挤占空间。"""
+        from real_validation.gui.main_window import ValidationWindow
+        w = ValidationWindow()
+        try:
+            self.assertEqual(len(w._safety_cells), 6)        # 6 通道
+            for row in w._safety_cells:
+                self.assertEqual(len(row), 5)                # 5 参数:min/max/rise/fall/initial
+                for cell in row:
+                    self.assertIsInstance(cell, QDoubleSpinBox)
+            self.assertFalse(hasattr(w, "safety_table"))     # 平铺网格,不用表格嵌套
         finally:
             w.close()
 
@@ -340,6 +474,18 @@ class SceneEditorMultiSelectTest(unittest.TestCase):
         self.assertTrue(event.isAccepted())
         self.assertEqual(len(self.edited), 0)
         self.assertEqual(self.editor.list.count(), 3)
+
+    def test_target_skeleton_can_request_redraw_as_one_object(self):
+        scene = Scene("skeleton", (ScenePrimitive(
+            "target_skeleton", "model", {"nodes": [[0, 0], [1, 1]]},
+            name="whole_body"),))
+        self.editor.set_scene(scene)
+        requested = []
+        self.editor.redraw_requested.connect(requested.append)
+        self.editor.list.setCurrentRow(0)
+        self.assertTrue(self.editor.redraw_btn.isEnabled())
+        self.editor.redraw_btn.click()
+        self.assertEqual(requested, [scene.primitives[0].primitive_id])
 
 
 if __name__ == "__main__":

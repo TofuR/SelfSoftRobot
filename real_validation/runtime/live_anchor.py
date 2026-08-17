@@ -16,7 +16,7 @@ import numpy as np
 
 from ..contracts.models import Anchor
 from ..perception.quality import QualityThresholds, assess_frame
-from ..perception.segmentation import segment_white_on_blue
+from ..perception.segmentation import segment_backlight, segment_white_on_blue
 from ..perception.skeleton import extract_skeleton_2d
 
 # 分割/骨架所需 cv2/scipy 由 perception 子模块内部处理;本模块只依赖 numpy 与上述调用。
@@ -38,7 +38,8 @@ def anchor_from_camera_frame(
         registration_displacement_px: float | None = None,
         frame_ref: str = "", state_space: str = "model_normalized",
         action_units: str = "model_normalized", source: str = "camera_live",
-        zero_pad_history: bool = False):
+        zero_pad_history: bool = False,
+        segmentation_method: str = "white_on_blue"):
     """单帧 BGR → (Anchor, FrameQuality, skeleton_px)。
 
     质量门 verdict == "reject" 时返回 (None, quality, skeleton_px)—— 调用方不得上锚。
@@ -51,7 +52,15 @@ def anchor_from_camera_frame(
     history_steps 从 model 的 config 推断)。⚠️ 模型训练从没见过零填充窗口,
     零填充起步是 OOD(预测可能不准),只在操作员明确接受时开启(GUI 需标注)。
     """
-    mask = segment_white_on_blue(bgr, background_gray, **segment_params)
+    if segmentation_method == "backlight":
+        gray = np.asarray(bgr).mean(axis=2).astype(np.uint8)
+        mask = segment_backlight(gray, thresh=int(segment_params.get("thresh", 60)))
+    elif segmentation_method == "white_on_blue":
+        if background_gray is None:
+            raise ValueError("white_on_blue 在线锚定缺少参考背景")
+        mask = segment_white_on_blue(bgr, background_gray, **segment_params)
+    else:
+        raise ValueError(f"在线锚定尚不支持分割方法 {segmentation_method}")
     skeleton, info = extract_skeleton_2d(mask, n_nodes, tip_fix=True, return_info=True)
     thresholds = QualityThresholds(float(area_median_px))
     quality = assess_frame(mask, skeleton, info, thresholds,

@@ -74,7 +74,7 @@ def _state_tensor(anchor: Anchor, descriptor: ModelDescriptor, model, device):
     return value.unsqueeze(0)
 
 
-def _target(scene: Scene, model, device):
+def _target(scene: Scene, model, device, expected_nodes: int | None = None):
     """解析唯一 target 原语 → dict。
 
     返回:
@@ -83,7 +83,8 @@ def _target(scene: Scene, model, device):
     """
     targets = [item for item in scene.primitives if item.kind.startswith("target_")]
     if len(targets) != 1:
-        raise ValueError("planner 要求 scene 中恰好一个 target 原语")
+        raise ValueError(f"planner 要求 scene 中恰好一个活动目标，当前为 {len(targets)} 个；"
+                         "请在场景编辑中删除多余目标")
     item = targets[0]
     if item.kind in {"target_point", "target_circle"}:
         xy = item.geometry.get("xy", item.geometry.get("center"))
@@ -106,7 +107,11 @@ def _target(scene: Scene, model, device):
         nodes = item.geometry.get("nodes")
         if not isinstance(nodes, (list, tuple)) or not nodes:
             raise ValueError("target_skeleton geometry 需要非空 nodes=[[x,y]×N]")
+        if expected_nodes is not None and len(nodes) != int(expected_nodes):
+            raise ValueError(f"目标骨架节点数 {len(nodes)} 与模型 {expected_nodes} 不一致")
         weights = item.geometry.get("weights")
+        if weights is not None and len(weights) != len(nodes):
+            raise ValueError("目标骨架 weights 长度必须与节点数一致")
         tolerance = float(item.geometry.get("tolerance_px", 0.0))
         if item.frame_id != "model":
             raise ValueError("target_skeleton 必须已在 model 坐标")
@@ -237,7 +242,7 @@ class OpenLoopShootingPlanner:
 
         device = next(model.parameters()).device
         state = _state_tensor(anchor, descriptor, model, device)
-        target = _target(scene, model, device)
+        target = _target(scene, model, device, descriptor.n_nodes)
         target_item = target["item"]
         if target["kind"] != "target_skeleton" and (
                 target["node"] < 0 or target["node"] >= descriptor.n_nodes):

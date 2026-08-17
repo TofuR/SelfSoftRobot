@@ -11,6 +11,24 @@ import torch
 from real_validation.contracts.models import Anchor, ModelDescriptor, SafetyPolicy, Scene, ScenePrimitive
 
 
+class PlannerTargetSemanticsTest(unittest.TestCase):
+    def test_multiple_targets_are_rejected_explicitly(self):
+        from real_validation.planning.openloop_planner import _target
+        scene = Scene(primitives=(
+            ScenePrimitive("target_point", "model", {"xy": [0, 0]}),
+            ScenePrimitive("target_point", "model", {"xy": [1, 1]}),
+        ))
+        with self.assertRaisesRegex(ValueError, "恰好一个活动目标"):
+            _target(scene, None, torch.device("cpu"), expected_nodes=15)
+
+    def test_target_skeleton_must_match_model_node_count(self):
+        from real_validation.planning.openloop_planner import _target
+        scene = Scene(primitives=(ScenePrimitive(
+            "target_skeleton", "model", {"nodes": [[0, 0], [1, 1]]}),))
+        with self.assertRaisesRegex(ValueError, "节点数 2 与模型 15 不一致"):
+            _target(scene, None, torch.device("cpu"), expected_nodes=15)
+
+
 class UnitConversionTest(unittest.TestCase):
     """T2:kPa ↔ 模型动作单位往返;safety=150kPa 时模型输入 ≤ 1.0。"""
 
@@ -327,6 +345,18 @@ class LiveAnchorTest(unittest.TestCase):
         self.assertEqual(anchor.action_units, "model_normalized")
         self.assertEqual(anchor.state_space, "model_normalized")
         self.assertIn("verdict", anchor.quality)
+        self.assertEqual(skeleton.shape, (15, 2))
+
+    def test_mock_camera_uses_backlight_segmentation(self):
+        from real_validation.hardware.camera import _mock_frame
+        from real_validation.runtime.anchors import anchor_from_camera_frame
+        bgr = _mock_frame(0.4, 320, 240)
+        anchor, quality, skeleton = anchor_from_camera_frame(
+            bgr, background_gray=None, segment_params={"thresh": 60},
+            segmentation_method="backlight", n_nodes=15, model=self._stub_model(),
+            action_history=((0.1, 0.2, 0.3),) * 40,
+            area_median_px=float(320 * 240 * 0.035), frame_ref="mock#0")
+        self.assertIsNotNone(anchor, f"quality={quality.verdict} {quality.reasons}")
         self.assertEqual(skeleton.shape, (15, 2))
 
     def test_empty_history_requires_explicit_zero_pad(self):
