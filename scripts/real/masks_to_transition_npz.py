@@ -19,10 +19,10 @@ action 归一化（**[0,1]，不到负数**）:
 输入:
   --masks-dir  derived/<seq>/masks/      (segment_batch 产物，0/255 PNG)
   --actions    raw/<seq>/actions6.csv    (表头 t_sec,c0..c5)
-  --action-channels 0                    (本序列只驱动 ch0 → action_dim=1)
+  --action-channels 0,1,2,3,4,5          (等值约束序列必须保留全部六列)
 输出:
   <out-root>/train/<seq>_train.npz  +  <out-root>/val/<seq>_val.npz
-  每个 npz: positions:(T,3,31) float32, actions:(T,A) float32 (已归一化到 [0,1])
+  每个 npz: positions:(T,3,15) float32, actions:(T,A) float32 (已归一化到 [0,1])
 """
 from __future__ import annotations
 
@@ -38,6 +38,109 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from src.utils.skeleton_2d import batch_extract_skeleton_2d  # noqa: E402
+
+
+EQUALITY_TOLERANCE_KPA = 1e-6
+
+
+def load_capture_metadata(seq_dir):
+    """读取采集合同；旧序列没有 ``meta.json`` 时保持向后兼容。"""
+    path = os.path.join(seq_dir, "meta.json")
+    if not os.path.isfile(path):
+        return {}
+    with open(path, encoding="utf-8") as stream:
+        value = json.load(stream)
+    if not isinstance(value, dict):
+        raise ValueError(f"meta.json 顶层必须是对象: {path}")
+    return value
+
+
+def normalize_channel_equalities(pairs):
+    """本地校验采集元数据，避免前处理依赖 GUI/Qt 硬件模块。"""
+    result = []
+    used = set()
+    for item in pairs or ():
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise ValueError("channel_equalities 每项必须是 [leader, follower]")
+        leader, follower = int(item[0]), int(item[1])
+        if leader == follower or leader not in range(6) or follower not in range(6):
+            raise ValueError("channel_equalities 必须引用两个不同的 0..5 通道")
+        if leader in used or follower in used:
+            raise ValueError("channel_equalities 通道对不能重叠")
+        used.update((leader, follower))
+        result.append((leader, follower))
+    return tuple(result)
+
+
+def validate_action_equalities(actions, channels, equalities,
+                               tolerance=EQUALITY_TOLERANCE_KPA):
+    """验证未归一化 kPa 动作；返回每个等值对在全序列的最大残差。"""
+    pairs = normalize_channel_equalities(equalities)
+    if not pairs:
+        return np.empty((0,), dtype=np.float32)
+    if not np.isfinite(float(tolerance)) or float(tolerance) < 0.0:
+        raise ValueError("channel_equality_tolerance_kpa 必须是非负有限数")
+    channel_ids = tuple(int(channel) for channel in channels)
+    if channel_ids != tuple(range(6)):
+        raise ValueError(
+            "带 channel_equalities 的序列必须使用 --action-channels 0,1,2,3,4,5，"
+            "NPZ 继续保留六维动作")
+    values = np.asarray(actions, dtype=np.float64)
+    if values.ndim != 2 or values.shape[1] != 6:
+        raise ValueError(f"等值约束动作必须是 (T,6)，实际为 {values.shape}")
+    if not np.isfinite(values).all():
+        raise ValueError("actions6.csv 含 NaN/Inf，不能验证等值约束")
+    residual_max = np.array(
+        [np.max(np.abs(values[:, leader] - values[:, follower]), initial=0.0)
+         for leader, follower in pairs],
+        dtype=np.float32)
+    bad = np.where(residual_max > float(tolerance))[0]
+    if bad.size:
+        details = ", ".join(
+            f"ch{pairs[index][1]}=ch{pairs[index][0]} residual="
+            f"{float(residual_max[index]):.6g}kPa"
+            for index in bad)
+        raise ValueError(
+            f"actions6.csv 违反 channel_equalities（tolerance={tolerance:g}kPa）：{details}")
+    return residual_max
+
+
+def validate_equality_action_maxes(maxes, channels, equalities,
+                                   tolerance=EQUALITY_TOLERANCE_KPA):
+    """归一化尺度也必须保持等值列相同，否则会把同一 kPa 投到流形外。"""
+    values = np.asarray(maxes, dtype=np.float64)
+    if values.ndim != 1 or len(values) != len(channels):
+        raise ValueError("动作归一化上限维数与 action channels 不一致")
+    if not np.isfinite(values).all() or np.any(values <= 0.0):
+        raise ValueError("动作归一化上限必须全部为正有限数")
+    pairs = normalize_channel_equalities(equalities)
+    if not pairs:
+        return
+    channel_ids = tuple(int(channel) for channel in channels)
+    index = {channel: i for i, channel in enumerate(channel_ids)}
+    for leader, follower in pairs:
+        if leader not in index or follower not in index:
+            raise ValueError("等值通道缺少动作归一化上限")
+        if abs(values[index[leader]] - values[index[follower]]) > float(tolerance):
+            raise ValueError(
+                f"等值通道 ch{leader}/ch{follower} 的动作归一化上限必须相同")
+
+
+def load_planarity_qc(seq_dir, explicit_path=None):
+    """读取可选离面 QC；明确为失败的序列不进入训练集。"""
+    path = explicit_path or os.path.join(seq_dir, "planarity_qc.json")
+    if not os.path.isfile(path):
+        if explicit_path:
+            raise FileNotFoundError(f"找不到指定的 planarity_qc: {path}")
+        return None
+    with open(path, encoding="utf-8") as stream:
+        qc = json.load(stream)
+    if not isinstance(qc, dict):
+        raise ValueError(f"planarity_qc 顶层必须是对象: {path}")
+    if qc.get("planarity_pass") is False:
+        raise ValueError(
+            f"平面性质控未通过，拒绝写入训练集: {path}；失败序列应保留作诊断")
+    return qc
 
 
 def load_actions(csv_path, channels):
@@ -208,7 +311,8 @@ def detect_joint_xy(positions, node_lo=None, node_hi=None):
     return joint_xy, peak_node
 
 
-def save_npz(path, positions, actions, n_points=None, tip_fix=None):
+def save_npz(path, positions, actions, n_points=None, tip_fix=None,
+             channel_equalities=(), pair_residual_max=None, planarity_qc=None):
     """存 npz。n_points/tip_fix 作元数据存入(供训练 config.json 记录数据配置, 辨识模型用)。"""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     kw = dict(positions=positions.astype(np.float32), actions=actions.astype(np.float32))
@@ -216,6 +320,13 @@ def save_npz(path, positions, actions, n_points=None, tip_fix=None):
         kw['n_points'] = np.array(n_points)
     if tip_fix is not None:
         kw['tip_fix'] = np.array(bool(tip_fix))
+    kw['channel_equalities'] = np.array(json.dumps(
+        [list(pair) for pair in channel_equalities], separators=(",", ":")))
+    kw['pair_residual_max'] = np.asarray(
+        pair_residual_max if pair_residual_max is not None else [], dtype=np.float32)
+    if planarity_qc is not None:
+        kw['planarity_qc'] = np.array(json.dumps(
+            planarity_qc, ensure_ascii=False, separators=(",", ":")))
     np.savez_compressed(path, **kw)
     print(f"    {path}  positions={positions.shape} actions={actions.shape}")
 
@@ -228,7 +339,7 @@ def build_parser():
     pa.add_argument("--actions", default=None,
                     help="actions6.csv(默认 <seq>/actions6.csv)")
     pa.add_argument("--action-channels", default="0",
-                    help="逗号分隔的通道下标(默认 0=ch0；本序列单通道)")
+                    help="逗号分隔的通道下标；等值约束序列必须为 0,1,2,3,4,5")
     pa.add_argument("--action-max", default=None,
                     help="每通道归一化上限(逗号分隔, kPa)；默认读 meta.json hi6[ch]")
     pa.add_argument("--n-points", type=int, default=15,
@@ -241,6 +352,8 @@ def build_parser():
                     help="末尾连续 val 比例(时序连续切分，避免乱序泄漏)")
     pa.add_argument("--out-root", default=None,
                     help="输出根(默认 data/real_seq/<seq名>)")
+    pa.add_argument("--planarity-qc", default=None,
+                    help="可选 planarity_qc.json；默认读取 <seq>/planarity_qc.json")
     return pa
 
 
@@ -254,6 +367,15 @@ def main():
     out_root = args.out_root or os.path.abspath(
         os.path.join("data", "real_seq", seq_name))
     channels = [c.strip() for c in args.action_channels.split(",") if c.strip() != ""]
+    meta = load_capture_metadata(seq)
+    equalities = normalize_channel_equalities(meta.get("channel_equalities", ()))
+    equality_tolerance = float(meta.get(
+        "channel_equality_tolerance_kpa", EQUALITY_TOLERANCE_KPA))
+    planarity_qc = load_planarity_qc(seq, args.planarity_qc)
+    if equalities and tuple(int(channel) for channel in channels) != tuple(range(6)):
+        raise ValueError(
+            "带 channel_equalities 的序列必须显式使用 "
+            "--action-channels 0,1,2,3,4,5")
 
     print(f">>> 读 mask → 2D 骨架: {masks_dir}  (tip_fix={args.tip_fix})")
     positions, fs = masks_to_positions(masks_dir, args.n_points, tip_fix=args.tip_fix)
@@ -275,7 +397,11 @@ def main():
     print(f">>> 读 actions: {actions_csv} 通道 {channels}")
     actions = load_actions(actions_csv, channels)
     assert len(actions) == T, f"帧数不匹配: positions {T} vs actions {len(actions)}"
+    pair_residual_max = validate_action_equalities(
+        actions, channels, equalities, equality_tolerance)
     print(f"    actions(原始 kPa) {actions.shape} 范围 [{actions.min():.1f}, {actions.max():.1f}]")
+    if equalities:
+        print(f"    等值约束 {equalities} 已验证，最大残差 {pair_residual_max.tolist()} kPa")
 
     # 每通道固定归一到 [0,1]（气动单向半DOF：rest=0, full=操作上限；负值=反向驱动不合法）
     if args.action_max:
@@ -283,6 +409,7 @@ def main():
         assert len(maxes) == len(channels), "--action-max 通道数与 --action-channels 不符"
     else:
         maxes = action_max_per_channel(seq, channels, actions)
+    validate_equality_action_maxes(maxes, channels, equalities, equality_tolerance)
     actions = actions / maxes                                  # (T,A) ∈ [0,1]
     print(f"    归一化上限 {maxes.tolist()} → [0,1]（rest=0, full=1, 半DOF）")
 
@@ -293,9 +420,13 @@ def main():
     act_tr, act_va = actions[:n_train], actions[n_train:]
     print(f">>> 切分: train {n_train} 帧 / val {n_val} 帧  → {out_root}")
     save_npz(os.path.join(out_root, "train", f"{seq_name}_train.npz"), pos_tr, act_tr,
-             n_points=args.n_points, tip_fix=args.tip_fix)
+             n_points=args.n_points, tip_fix=args.tip_fix,
+             channel_equalities=equalities, pair_residual_max=pair_residual_max,
+             planarity_qc=planarity_qc)
     save_npz(os.path.join(out_root, "val", f"{seq_name}_val.npz"), pos_va, act_va,
-             n_points=args.n_points, tip_fix=args.tip_fix)
+             n_points=args.n_points, tip_fix=args.tip_fix,
+             channel_equalities=equalities, pair_residual_max=pair_residual_max,
+             planarity_qc=planarity_qc)
 
     print(f"\n>>> 完成。训练: --data_dir {os.path.join(out_root,'train')}")
     print(f"           验证: {os.path.join(out_root,'val')}")

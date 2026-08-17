@@ -28,6 +28,12 @@ from valve_control import (
     channel_equality_residuals,
     normalize_channel_equalities,
 )
+from scripts.real.masks_to_transition_npz import (
+    load_planarity_qc,
+    save_npz,
+    validate_action_equalities,
+    validate_equality_action_maxes,
+)
 
 
 _app: QApplication | None = None
@@ -156,6 +162,51 @@ class CaptureEqualityTest(unittest.TestCase):
         finally:
             window.close()
             _ensure_app().processEvents()
+
+
+class PreprocessingEqualityTest(unittest.TestCase):
+    def test_six_dimensional_equalities_are_validated_before_normalization(self):
+        actions = [[1, 20, 20, 4, 50, 50], [2, 30, 30, 5, 60, 60]]
+        residual = validate_action_equalities(
+            actions, range(6), ((1, 2), (4, 5)))
+        self.assertEqual(residual.tolist(), [0.0, 0.0])
+        with self.assertRaisesRegex(ValueError, "必须使用 --action-channels"):
+            validate_action_equalities(actions, (0,), ((1, 2),))
+        actions[1][2] = 31
+        with self.assertRaisesRegex(ValueError, "违反 channel_equalities"):
+            validate_action_equalities(actions, range(6), ((1, 2), (4, 5)))
+
+    def test_linked_action_normalization_maxes_must_match(self):
+        validate_equality_action_maxes(
+            [100] * 6, range(6), ((1, 2), (4, 5)))
+        with self.assertRaisesRegex(ValueError, "归一化上限必须相同"):
+            validate_equality_action_maxes(
+                [100, 100, 90, 100, 100, 100], range(6), ((1, 2),))
+
+    def test_npz_keeps_six_actions_and_equality_metadata(self):
+        import numpy as np
+
+        with tempfile.TemporaryDirectory(prefix="planar_npz_") as root:
+            path = Path(root) / "train" / "seq.npz"
+            save_npz(
+                str(path), np.zeros((2, 3, 15)), np.zeros((2, 6)),
+                n_points=15, tip_fix=True,
+                channel_equalities=((1, 2), (4, 5)),
+                pair_residual_max=[0.0, 0.0],
+                planarity_qc={"planarity_pass": True})
+            with np.load(path) as data:
+                self.assertEqual(data["actions"].shape, (2, 6))
+                self.assertEqual(json.loads(str(data["channel_equalities"])),
+                                 [[1, 2], [4, 5]])
+                self.assertEqual(data["pair_residual_max"].tolist(), [0.0, 0.0])
+                self.assertTrue(json.loads(str(data["planarity_qc"]))["planarity_pass"])
+
+    def test_failed_planarity_qc_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="planarity_qc_") as root:
+            path = Path(root) / "planarity_qc.json"
+            path.write_text(json.dumps({"planarity_pass": False}))
+            with self.assertRaisesRegex(ValueError, "平面性质控未通过"):
+                load_planarity_qc(root)
 
 
 if __name__ == "__main__":
