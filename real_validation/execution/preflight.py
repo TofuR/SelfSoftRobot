@@ -62,13 +62,6 @@ def validate_plan(plan: ActionPlan, model: ModelDescriptor, anchor: Anchor,
         add("history_short", f"动作历史仅 {len(anchor.action_history)} 步，模型需要 {model.history_steps} 步")
     if any(len(action) != model.action_dim for action in anchor.action_history):
         add("history_dim", "anchor 动作历史维度与模型 action_dim 不同")
-    elif model.channel_equalities:
-        for step, action in enumerate(anchor.action_history):
-            residuals = channel_equality_residuals(
-                action, model.channel_equalities, size=model.action_dim)
-            if any(value > CHANNEL_EQUALITY_TOLERANCE for value in residuals):
-                add("history_equality",
-                    f"anchor 历史第 {step} 步违反 channel_equalities: {residuals}", step)
     if len(plan.channel_map) != model.action_dim:
         add("channel_map", "channel_map 长度必须等于模型 action_dim")
     if len(set(plan.channel_map)) != len(plan.channel_map):
@@ -87,6 +80,8 @@ def validate_plan(plan: ActionPlan, model: ModelDescriptor, anchor: Anchor,
             f"预测轨迹侵入障碍 {abs(float(predicted_clearance)):.3g} 个模型坐标单位")
 
     mapped = set(plan.channel_map)
+    mapped.update(follower for leader, follower in model.channel_equalities
+                  if leader in mapped)
     for leader, follower in model.channel_equalities:
         for field_name in ("pressure_min6", "pressure_max6", "rise_rate6",
                            "fall_rate6", "initial_action6"):

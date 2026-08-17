@@ -255,6 +255,8 @@ class UnifiedTrainer:
             "data_dirs": {k: str(v) for k, v in data_dirs.items()},
             "view_strategy": type(self.views).__name__ if self.views else None,
         }
+        if self.config.get("action_view"):
+            config["action_view"] = self.config["action_view"]
 
         # 模型特有参数
         for attr in ('skeleton_mode', 'rod_radius', 'd_filter', 'n_freqs',

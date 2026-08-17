@@ -19,10 +19,11 @@ action 归一化（**[0,1]，不到负数**）:
 输入:
   --masks-dir  derived/<seq>/masks/      (segment_batch 产物，0/255 PNG)
   --actions    raw/<seq>/actions6.csv    (表头 t_sec,c0..c5)
-  --action-channels 0,1,2,3,4,5          (等值约束序列必须保留全部六列)
+  --action-channels auto                 (约束序列自动得到 0,1,3,4 模型视图)
 输出:
   <out-root>/train/<seq>_train.npz  +  <out-root>/val/<seq>_val.npz
-  每个 npz: positions:(T,3,15) float32, actions:(T,A) float32 (已归一化到 [0,1])
+  每个 npz: positions:(T,3,15) float32, actions:(T,6) float32 (已归一化到 [0,1])
+  Dataset 再按 model_action_channels 投影为模型使用的四维动作。
 """
 from __future__ import annotations
 
@@ -40,7 +41,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from src.utils.skeleton_2d import batch_extract_skeleton_2d  # noqa: E402
 
 
-EQUALITY_TOLERANCE_KPA = 1e-6
+EQUALITY_TOLERANCE_KPA = 0.5
 
 
 def load_capture_metadata(seq_dir):
@@ -72,6 +73,26 @@ def normalize_channel_equalities(pairs):
     return tuple(result)
 
 
+def independent_channels_for_equalities(equalities):
+    followers = {follower for _leader, follower in normalize_channel_equalities(equalities)}
+    return tuple(channel for channel in range(6) if channel not in followers)
+
+
+def action_expansion6(channel_map, equalities):
+    """返回每个硬件通道应读取的模型动作列；受约束四维例为 (0,1,1,2,3,3)。"""
+    mapping = tuple(int(channel) for channel in channel_map)
+    lookup = {channel: index for index, channel in enumerate(mapping)}
+    follower_sources = {follower: leader for leader, follower in
+                        normalize_channel_equalities(equalities)}
+    result = []
+    for hardware_channel in range(6):
+        source = follower_sources.get(hardware_channel, hardware_channel)
+        if source not in lookup:
+            raise ValueError(f"硬件 ch{hardware_channel} 无法从 model action 展开")
+        result.append(lookup[source])
+    return tuple(result)
+
+
 def validate_action_equalities(actions, channels, equalities,
                                tolerance=EQUALITY_TOLERANCE_KPA):
     """验证未归一化 kPa 动作；返回每个等值对在全序列的最大残差。"""
@@ -83,8 +104,7 @@ def validate_action_equalities(actions, channels, equalities,
     channel_ids = tuple(int(channel) for channel in channels)
     if channel_ids != tuple(range(6)):
         raise ValueError(
-            "带 channel_equalities 的序列必须使用 --action-channels 0,1,2,3,4,5，"
-            "NPZ 继续保留六维动作")
+            "验证 channel_equalities 必须传入原始六通道动作")
     values = np.asarray(actions, dtype=np.float64)
     if values.ndim != 2 or values.shape[1] != 6:
         raise ValueError(f"等值约束动作必须是 (T,6)，实际为 {values.shape}")
@@ -312,7 +332,8 @@ def detect_joint_xy(positions, node_lo=None, node_hi=None):
 
 
 def save_npz(path, positions, actions, n_points=None, tip_fix=None,
-             channel_equalities=(), pair_residual_max=None, planarity_qc=None):
+             channel_equalities=(), pair_residual_max=None, planarity_qc=None,
+             model_action_channels=(), action_expansion=None):
     """存 npz。n_points/tip_fix 作元数据存入(供训练 config.json 记录数据配置, 辨识模型用)。"""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     kw = dict(positions=positions.astype(np.float32), actions=actions.astype(np.float32))
@@ -324,6 +345,12 @@ def save_npz(path, positions, actions, n_points=None, tip_fix=None,
         [list(pair) for pair in channel_equalities], separators=(",", ":")))
     kw['pair_residual_max'] = np.asarray(
         pair_residual_max if pair_residual_max is not None else [], dtype=np.float32)
+    kw['raw_action_dim'] = np.array(actions.shape[1])
+    kw['model_action_dim'] = np.array(len(model_action_channels) or actions.shape[1])
+    kw['model_action_channels'] = np.asarray(
+        model_action_channels or tuple(range(actions.shape[1])), dtype=np.int64)
+    kw['action_expansion6'] = np.asarray(
+        action_expansion if action_expansion is not None else [], dtype=np.int64)
     if planarity_qc is not None:
         kw['planarity_qc'] = np.array(json.dumps(
             planarity_qc, ensure_ascii=False, separators=(",", ":")))
@@ -338,8 +365,9 @@ def build_parser():
                     help="mask 目录(默认 derived/<seq名>/masks)")
     pa.add_argument("--actions", default=None,
                     help="actions6.csv(默认 <seq>/actions6.csv)")
-    pa.add_argument("--action-channels", default="0",
-                    help="逗号分隔的通道下标；等值约束序列必须为 0,1,2,3,4,5")
+    pa.add_argument("--action-channels", default="auto",
+                    help="模型动作对应的独立硬件通道；auto:有等值约束时删除 follower，"
+                         "否则保持旧版单通道 ch0")
     pa.add_argument("--action-max", default=None,
                     help="每通道归一化上限(逗号分隔, kPa)；默认读 meta.json hi6[ch]")
     pa.add_argument("--n-points", type=int, default=15,
@@ -366,16 +394,22 @@ def main():
     actions_csv = args.actions or os.path.join(seq, "actions6.csv")
     out_root = args.out_root or os.path.abspath(
         os.path.join("data", "real_seq", seq_name))
-    channels = [c.strip() for c in args.action_channels.split(",") if c.strip() != ""]
     meta = load_capture_metadata(seq)
     equalities = normalize_channel_equalities(meta.get("channel_equalities", ()))
     equality_tolerance = float(meta.get(
         "channel_equality_tolerance_kpa", EQUALITY_TOLERANCE_KPA))
     planarity_qc = load_planarity_qc(seq, args.planarity_qc)
-    if equalities and tuple(int(channel) for channel in channels) != tuple(range(6)):
+    independent_channels = independent_channels_for_equalities(equalities)
+    if args.action_channels == "auto":
+        channels = independent_channels if equalities else (0,)
+    else:
+        channels = tuple(int(c.strip()) for c in args.action_channels.split(",")
+                         if c.strip() != "")
+    if equalities and channels != independent_channels:
         raise ValueError(
-            "带 channel_equalities 的序列必须显式使用 "
-            "--action-channels 0,1,2,3,4,5")
+            "带 channel_equalities 的序列必须按 follower 删除后的固定顺序使用 "
+            f"--action-channels {','.join(map(str, independent_channels))}")
+    expansion = action_expansion6(independent_channels, equalities) if equalities else None
 
     print(f">>> 读 mask → 2D 骨架: {masks_dir}  (tip_fix={args.tip_fix})")
     positions, fs = masks_to_positions(masks_dir, args.n_points, tip_fix=args.tip_fix)
@@ -394,23 +428,29 @@ def main():
         f.write(" ".join(str(int(i)) for i in np.where(bad)[0]) + "\n")
         f.write(f"# 总计 {n_out}/{T} 帧\n")
 
-    print(f">>> 读 actions: {actions_csv} 通道 {channels}")
-    actions = load_actions(actions_csv, channels)
-    assert len(actions) == T, f"帧数不匹配: positions {T} vs actions {len(actions)}"
+    print(f">>> 读 actions: {actions_csv} 原始六维；模型动作视图 {channels}")
+    raw_actions6 = load_actions(actions_csv, range(6))
+    assert len(raw_actions6) == T, f"帧数不匹配: positions {T} vs actions {len(raw_actions6)}"
     pair_residual_max = validate_action_equalities(
-        actions, channels, equalities, equality_tolerance)
-    print(f"    actions(原始 kPa) {actions.shape} 范围 [{actions.min():.1f}, {actions.max():.1f}]")
+        raw_actions6, range(6), equalities, equality_tolerance)
+    print(f"    actions(原始 kPa) {raw_actions6.shape} 范围 "
+          f"[{raw_actions6.min():.1f}, {raw_actions6.max():.1f}]")
     if equalities:
         print(f"    等值约束 {equalities} 已验证，最大残差 {pair_residual_max.tolist()} kPa")
 
     # 每通道固定归一到 [0,1]（气动单向半DOF：rest=0, full=操作上限；负值=反向驱动不合法）
     if args.action_max:
         maxes = np.array([float(x) for x in args.action_max.split(",")], np.float32)
-        assert len(maxes) == len(channels), "--action-max 通道数与 --action-channels 不符"
+        if equalities and len(maxes) == len(channels):
+            maxes = maxes[np.asarray(expansion, dtype=np.int64)]
+        assert len(maxes) == 6, "六维 NPZ 的 --action-max 必须为六列，或为可展开的四个独立列"
     else:
-        maxes = action_max_per_channel(seq, channels, actions)
-    validate_equality_action_maxes(maxes, channels, equalities, equality_tolerance)
-    actions = actions / maxes                                  # (T,A) ∈ [0,1]
+        maxes = action_max_per_channel(seq, range(6), raw_actions6)
+    if equalities:
+        raw_maxes6 = action_max_per_channel(seq, range(6), raw_actions6)
+        validate_equality_action_maxes(
+            raw_maxes6, range(6), equalities, equality_tolerance)
+    actions = raw_actions6 / maxes                             # (T,6) ∈ [0,1]
     print(f"    归一化上限 {maxes.tolist()} → [0,1]（rest=0, full=1, 半DOF）")
 
     # 连续时序切分（首 (1-v) 训练 / 末 v 验证）
@@ -422,15 +462,20 @@ def main():
     save_npz(os.path.join(out_root, "train", f"{seq_name}_train.npz"), pos_tr, act_tr,
              n_points=args.n_points, tip_fix=args.tip_fix,
              channel_equalities=equalities, pair_residual_max=pair_residual_max,
-             planarity_qc=planarity_qc)
+             planarity_qc=planarity_qc,
+             model_action_channels=channels,
+             action_expansion=expansion)
     save_npz(os.path.join(out_root, "val", f"{seq_name}_val.npz"), pos_va, act_va,
              n_points=args.n_points, tip_fix=args.tip_fix,
              channel_equalities=equalities, pair_residual_max=pair_residual_max,
-             planarity_qc=planarity_qc)
+             planarity_qc=planarity_qc,
+             model_action_channels=channels,
+             action_expansion=expansion)
 
     print(f"\n>>> 完成。训练: --data_dir {os.path.join(out_root,'train')}")
     print(f"           验证: {os.path.join(out_root,'val')}")
-    print(f"    action_dim={len(channels)} n_nodes={args.n_points}（train_transition.py 自动探测）")
+    print(f"    raw_action_dim=6 model_action_dim={len(channels)} n_nodes={args.n_points}"
+          "（Dataset 按合同投影）")
 
 
 if __name__ == "__main__":

@@ -24,8 +24,6 @@ from ..contracts.models import (
     ModelDescriptor,
     SafetyPolicy,
     Scene,
-    channel_equality_residuals,
-    normalize_channel_equalities,
 )
 from .planner_service import build_plan
 from .units import kPa_to_model, model_to_kPa
@@ -175,36 +173,13 @@ def _project_actions(raw, lower, upper, rise, fall, initial, dt):
     return torch.stack(rows)
 
 
-def _independent_action_channels(action_dim, equalities):
-    pairs = normalize_channel_equalities(equalities, size=action_dim)
-    followers = {follower for _leader, follower in pairs}
-    return tuple(channel for channel in range(action_dim) if channel not in followers)
-
-
-def _expand_independent_actions(raw, action_dim, independent_channels, equalities):
-    """可微地把 optimizer 的独立列展开为模型六维等值动作。"""
-    pairs = normalize_channel_equalities(equalities, size=action_dim)
-    leaders = {follower: leader for leader, follower in pairs}
-    lookup = {channel: index for index, channel in enumerate(independent_channels)}
-    columns = []
-    for channel in range(action_dim):
-        source = leaders.get(channel, channel)
-        if source not in lookup:
-            raise ValueError(f"channel equality source ch{source} 不是独立变量")
-        columns.append(raw[:, lookup[source]])
-    return torch.stack(columns, dim=1)
-
-
 def _forward_normalized(raw, model, history, k_effective, history_steps, state,
-                        lo, hi, rise, fall, initial, dt, scale_kpa, norm,
-                        action_dim, independent_channels, equalities):
+                        lo, hi, rise, fall, initial, dt, scale_kpa, norm):
     """物理动作 → 归一化模型输入 → rollout。返回 (physical_kPa, normalized, predictions)。
 
     优化循环与 no_grad 终评共用(消除重复)。
     """
-    independent = _project_actions(raw, lo, hi, rise, fall, initial, dt)
-    physical = _expand_independent_actions(
-        independent, action_dim, independent_channels, equalities)
+    physical = _project_actions(raw, lo, hi, rise, fall, initial, dt)
     normalized = kPa_to_model(physical, action_scale_kpa=scale_kpa,
                               action_norm_factor=norm)
     predictions = plan_rollout(
@@ -297,12 +272,6 @@ class OpenLoopShootingPlanner:
             raise ValueError("anchor action history 不足 H 步")
         history = history[-descriptor.history_steps:]
         equalities = descriptor.channel_equalities
-        for index, row in enumerate(history.detach().cpu().numpy()):
-            residuals = channel_equality_residuals(
-                row, equalities, size=descriptor.action_dim)
-            if any(value > CHANNEL_EQUALITY_TOLERANCE for value in residuals):
-                raise ValueError(
-                    f"anchor action history 第 {index} 步违反 channel_equalities: {residuals}")
         if anchor.action_units == "kpa":
             # 兼容旧标注:真实 kPa → 训练域 [0,1] → /norm_factor
             history = kPa_to_model(history, action_scale_kpa=action_scale_kpa,
@@ -313,10 +282,6 @@ class OpenLoopShootingPlanner:
         k_effective, auto_k_gap_px = _resolve_k(config, descriptor, model, target,
                                                 state, center, scale)
 
-        independent_channels = _independent_action_channels(
-            descriptor.action_dim, equalities)
-        if equalities and channel_map != tuple(range(6)):
-            raise ValueError("channel_equalities planner 要求 identity channel_map=(0..5)")
         for leader, follower in equalities:
             for field_name in ("pressure_min6", "pressure_max6", "rise_rate6",
                                "fall_rate6", "initial_action6"):
@@ -324,8 +289,7 @@ class OpenLoopShootingPlanner:
                 if abs(values[leader] - values[follower]) > CHANNEL_EQUALITY_TOLERANCE:
                     raise ValueError(
                         f"等值通道 ch{leader}/ch{follower} 的 {field_name} 必须相同")
-        hardware_channels = tuple(channel_map[index] for index in independent_channels)
-        mapped = torch.tensor(hardware_channels, dtype=torch.long, device=device)
+        mapped = torch.tensor(channel_map, dtype=torch.long, device=device)
         lo = torch.tensor(safety.pressure_min6, device=device)[mapped]
         hi = torch.tensor(safety.pressure_max6, device=device)[mapped]
         rise = torch.tensor(safety.rise_rate6, device=device)[mapped]
@@ -338,8 +302,6 @@ class OpenLoopShootingPlanner:
             model_to_kPa(history[-1:], action_scale_kpa=action_scale_kpa,
                          action_norm_factor=norm),
             dtype=torch.float32, device=device).reshape(-1)
-        seed_last = seed_last[torch.tensor(
-            independent_channels, dtype=torch.long, device=device)]
 
         torch.manual_seed(config.random_seed)
         if str(device).startswith("cuda"):
@@ -361,10 +323,10 @@ class OpenLoopShootingPlanner:
                     init_name = "repeat"
                 elif restart == 1:
                     initial_raw = torch.zeros(
-                        k_effective, len(independent_channels), device=device)
+                        k_effective, descriptor.action_dim, device=device)
                     init_name = "zero"
                 else:
-                    initial_raw = lo + torch.rand(k_effective, len(independent_channels),
+                    initial_raw = lo + torch.rand(k_effective, descriptor.action_dim,
                                                   device=device) * (hi - lo)
                     init_name = "random"
                 raw = initial_raw.detach().clone().requires_grad_(True)
@@ -377,8 +339,7 @@ class OpenLoopShootingPlanner:
                     physical, normalized, predictions = _forward_normalized(
                         raw, model, history, k_effective, descriptor.history_steps, state,
                         lo, hi, rise, fall, initial, step_interval_s,
-                        action_scale_kpa, norm, descriptor.action_dim,
-                        independent_channels, equalities)
+                        action_scale_kpa, norm)
                     if target["kind"] == "target_skeleton":
                         dists = _skeleton_dists(predictions, target["nodes"], scale, center)
                         weights = target["weights"]
@@ -417,8 +378,7 @@ class OpenLoopShootingPlanner:
                     physical, normalized, predictions = _forward_normalized(
                         raw, model, history, k_effective, descriptor.history_steps, state,
                         lo, hi, rise, fall, initial, step_interval_s,
-                        action_scale_kpa, norm, descriptor.action_dim,
-                        independent_channels, equalities)
+                        action_scale_kpa, norm)
                     if target["kind"] == "target_skeleton":
                         dists = _skeleton_dists(predictions, target["nodes"], scale, center)
                         final_distance = float(dists.mean().cpu())
@@ -484,6 +444,6 @@ class OpenLoopShootingPlanner:
                 "auto_k": config.auto_k, "auto_k_gap_px": auto_k_gap_px,
                 "duration_s": duration_s,
                 "predicted_min_obstacle_clearance": minimum_clearance,
-                "optimizer_action_dim": len(independent_channels),
+                "optimizer_action_dim": descriptor.action_dim,
                 "channel_equalities": [list(pair) for pair in equalities],
             })

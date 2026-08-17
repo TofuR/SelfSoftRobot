@@ -34,7 +34,8 @@ import torch  # noqa: E402
 
 from src.config.args import (  # noqa: E402
     add_common_args, resolve_training_config, build_common_overrides)
-from src.utils.data_detect import detect_action_dim, detect_n_nodes  # noqa: E402
+from src.utils.data_detect import detect_n_nodes  # noqa: E402
+from src.data.action_view import resolve_action_contract  # noqa: E402
 from src.training.trainer_unified import UnifiedTrainer  # noqa: E402
 
 
@@ -55,6 +56,10 @@ def build_parser():
     parser.add_argument("--dense_step_weight", type=str, default="uniform",
                         choices=["uniform", "linear"],
                         help="dense 监督权重: uniform(等权) | linear(递增,末步权重大)")
+    parser.add_argument(
+        "--action-channels", default="auto",
+        help="Dataset 模型动作视图；auto 读取 NPZ 的 model_action_channels，"
+             "也可显式写 0,1,3,4")
     # ── open_loop 专属（gt 模式忽略）──
     parser.add_argument("--init_from", type=str, default=None,
                         help="[open_loop] 热启动 checkpoint（默认自动找最新 "
@@ -76,7 +81,9 @@ def main(argv=None):
     config = resolve_training_config(build_common_overrides(args))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    action_dim = detect_action_dim(args.data_dir)
+    action_contract = resolve_action_contract(args.data_dir, args.action_channels)
+    action_dim = action_contract.model_action_dim
+    config["action_view"] = action_contract.to_dict()
     n_nodes = args.n_nodes or detect_n_nodes(args.data_dir)
     temp_cfg = config["temporal"]
     hidden_dim = temp_cfg["hidden_dim"]
@@ -116,6 +123,8 @@ def main(argv=None):
     print(f"\nModel: {model_tag}（mode={args.mode}）")
     print(f"  Action dim: {action_dim}, N nodes: {n_nodes}, Encoder: {args.encoder}, "
           f"z_dim: {args.z_dim}, episode_len(K): {args.episode_len}")
+    print(f"  Action view: raw={action_contract.raw_action_dim}D -> "
+          f"channels={action_contract.model_action_channels} -> model={action_dim}D")
     print(f"  {tf_info}, dense_step_weight: {args.dense_step_weight}")
     print(f"  Parameters: {n_params:,}")
     print(f"  Active losses: {spec.phases[0].active_losses}")
@@ -124,7 +133,8 @@ def main(argv=None):
     from src.data.dataset_spatial import StateTransitionDataset
     norm_dataset = StateTransitionDataset(
         args.data_dir, seq_len=temp_cfg["window_size"],
-        episode_mode=True, episode_len=args.episode_len)
+        episode_mode=True, episode_len=args.episode_len,
+        action_channels=action_contract.model_action_channels)
     pc_center, pc_scale = norm_dataset.get_normalization_params()
     model.set_normalization(pc_center, pc_scale, norm_dataset.norm_factor)
 

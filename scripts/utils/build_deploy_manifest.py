@@ -31,6 +31,7 @@ from scripts.real.masks_to_transition_npz import (
     validate_equality_action_maxes,
 )
 from real_validation.contracts.io import file_sha256
+from real_validation.contracts.models import validate_hardware_action_contract
 
 
 def find_checkpoint(exp_dir):
@@ -89,10 +90,12 @@ def main():
     meta_path = os.path.join(args.raw_seq, "meta.json")
     with open(meta_path) as stream:
         meta = json.load(stream)
-    # 驱动通道:优先 --channels;否则从 meta.hi6>0 推断(支持 3 腔道,hi6=[150,150,150,0,0,0]→[0,1,2]);
-    # 兼容旧 meta 只有单值 active_channel。
+    # 驱动通道:优先 CLI，其次使用训练 config 中由 Dataset 记录的动作视图合同。
+    action_view = config.get("action_view", {})
     if args.channels:
         channels = [int(c.strip()) for c in args.channels.split(",") if c.strip()]
+    elif action_view.get("model_action_channels") is not None:
+        channels = [int(value) for value in action_view["model_action_channels"]]
     else:
         hi6 = meta.get("hi6", [])
         channels = [i for i, v in enumerate(hi6) if float(v) > 0] or \
@@ -102,19 +105,23 @@ def main():
         "channel_equality_tolerance_kpa", EQUALITY_TOLERANCE_KPA))
     action_dim = int(config.get("action_dim", 1))
     if equalities:
-        if action_dim != 6:
+        stored_equalities = tuple(tuple(int(v) for v in pair) for pair in
+                                  action_view.get("channel_equalities", ()))
+        if stored_equalities and stored_equalities != equalities:
             raise ValueError(
-                f"采集序列声明 channel_equalities，但训练 config action_dim={action_dim}；"
-                "第一版必须保留六维模型动作")
-        if tuple(channels) != tuple(range(6)):
+                "训练 config 与采集 meta 的 channel_equalities 不一致")
+        if action_dim != len(channels):
             raise ValueError(
-                "channel_equalities 部署包必须使用 --channels 0,1,2,3,4,5 "
-                "和 identity channel_map")
-    # 复用 action_max_per_channel(优先 hi6,缺失/为 0 用数据 max)—— 不自己读 hi6
-    raw_actions = load_actions_kpa(args.raw_seq, channels)
-    validate_action_equalities(raw_actions, channels, equalities, equality_tolerance)
-    maxes = action_max_per_channel(args.raw_seq, channels, raw_actions)
-    validate_equality_action_maxes(maxes, channels, equalities, equality_tolerance)
+                f"训练 action_dim={action_dim} 与模型动作通道 {channels} 数量不一致")
+    # 等值关系必须在原始六维 kPa 上验证；模型归一化尺度只取独立通道。
+    raw_actions6 = load_actions_kpa(args.raw_seq, range(6))
+    validate_action_equalities(raw_actions6, range(6), equalities, equality_tolerance)
+    raw_maxes6 = action_max_per_channel(args.raw_seq, range(6), raw_actions6)
+    validate_equality_action_maxes(
+        raw_maxes6, range(6), equalities, equality_tolerance)
+    maxes = raw_maxes6[np.asarray(channels, dtype=np.int64)]
+    expansion = validate_hardware_action_contract(
+        action_dim, channels, equalities, action_view.get("action_expansion6", ()))
     dt_mean, dt_std = measure_train_dt(args.raw_seq)
 
     data_dirs = config.get("data_dirs", {}).get("sequence", "")
@@ -155,6 +162,7 @@ def main():
         "action_scale_kpa": [float(v) for v in maxes],
         "channel_map": channels,
         "channel_equalities": [list(pair) for pair in equalities],
+        "action_expansion6": list(expansion),
         "train_dt_nominal_s": float(meta.get("action_interval_s", 0.2)),
         "train_dt_measured_s": dt_mean,
         "train_dt_std_s": dt_std,

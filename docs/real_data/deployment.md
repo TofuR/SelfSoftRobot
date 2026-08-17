@@ -155,7 +155,8 @@ python scripts/utils/build_deploy_manifest.py \
 | 字段 | 来源 | 说明 |
 |---|---|---|
 | `action_scale_kpa` | `meta.json hi6` 经 `action_max_per_channel()` | kPa 上界(150);**复用该函数,不自己读 hi6** |
-| `channel_equalities` | `meta.json` | 可选 `[leader,follower]` 对；存在时要求六维模型和 identity channel map |
+| `channel_equalities` | `meta.json` | 六维硬件 `[leader,follower]` 对；follower 不重复进入模型动作 |
+| `action_expansion6` | 训练 `action_view` | 例如 `[0,1,1,2,3,3]`，明确四维模型如何展开到硬件 |
 | `train_dt_measured_s` | `frame_times.txt` 现算 `np.diff` | 实测 Δt(**禁止硬写 0.203125**) |
 | `mask_source` | `config.json data_dirs.sequence` 路径后缀 | 判断**完整路径**而非 basename(`.../train` 会丢后缀) |
 | `segment_params` | `segment_meta.json`(仅 white_on_blue) | SAM2/修复 mask 时 null |
@@ -204,7 +205,7 @@ python real_validation/perception_probe.py --source dir --frames-dir <帧目录>
 | `predicted_collision` | 预测轨迹侵入障碍(最小净距 < 0) |
 | `slew_rate` / `pressure_bound` | 压力越界 / 速率超限 |
 | `channel_equality_contract` | plan 与模型的等值关系不一致 |
-| `history_equality` / `safety_equality` | 历史或 linked 通道范围/速率/初值离开训练动作流形 |
+| `history_dim` / `safety_equality` | 四维模型历史宽度错误，或 linked 硬件通道范围/速率/初值不一致 |
 
 **执行态守卫**:EXECUTING 中锁页 1/2/3(防执行中改 scene 致执行记录与计划脱钩);`invalidate_model` 在模型加载失败时清旧 runtime。
 

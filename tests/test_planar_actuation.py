@@ -50,6 +50,8 @@ from real_validation.planning.openloop_planner import (
 )
 from real_validation.planning.planner_service import build_plan
 from real_validation.runtime.warmup import warmup_actions
+from real_validation.runtime.warmup import expand_to_6ch
+from src.data.dataset_spatial import SpatialSequenceDataset
 
 
 _app: QApplication | None = None
@@ -214,8 +216,10 @@ class PreprocessingEqualityTest(unittest.TestCase):
         residual = validate_action_equalities(
             actions, range(6), ((1, 2), (4, 5)))
         self.assertEqual(residual.tolist(), [0.0, 0.0])
-        with self.assertRaisesRegex(ValueError, "必须使用 --action-channels"):
+        with self.assertRaisesRegex(ValueError, "原始六通道"):
             validate_action_equalities(actions, (0,), ((1, 2),))
+        actions[0][2] = 20.25
+        validate_action_equalities(actions, range(6), ((1, 2), (4, 5)))
         actions[1][2] = 31
         with self.assertRaisesRegex(ValueError, "违反 channel_equalities"):
             validate_action_equalities(actions, range(6), ((1, 2), (4, 5)))
@@ -237,13 +241,38 @@ class PreprocessingEqualityTest(unittest.TestCase):
                 n_points=15, tip_fix=True,
                 channel_equalities=((1, 2), (4, 5)),
                 pair_residual_max=[0.0, 0.0],
-                planarity_qc={"planarity_pass": True})
+                planarity_qc={"planarity_pass": True},
+                model_action_channels=(0, 1, 3, 4),
+                action_expansion=(0, 1, 1, 2, 3, 3))
             with np.load(path) as data:
                 self.assertEqual(data["actions"].shape, (2, 6))
+                self.assertEqual(data["model_action_channels"].tolist(), [0, 1, 3, 4])
+                self.assertEqual(data["action_expansion6"].tolist(), [0, 1, 1, 2, 3, 3])
                 self.assertEqual(json.loads(str(data["channel_equalities"])),
                                  [[1, 2], [4, 5]])
                 self.assertEqual(data["pair_residual_max"].tolist(), [0.0, 0.0])
                 self.assertTrue(json.loads(str(data["planarity_qc"]))["planarity_pass"])
+
+    def test_dataset_projects_six_raw_channels_to_four_model_channels(self):
+        import numpy as np
+
+        with tempfile.TemporaryDirectory(prefix="planar_dataset_") as root:
+            actions = np.asarray([
+                [0, 1, 1, 3, 4, 4], [10, 11, 11, 13, 14, 14],
+                [20, 21, 21, 23, 24, 24],
+            ], dtype=np.float32)
+            save_npz(
+                str(Path(root) / "seq.npz"), np.zeros((3, 3, 15)), actions,
+                channel_equalities=((1, 2), (4, 5)),
+                model_action_channels=(0, 1, 3, 4),
+                action_expansion=(0, 1, 1, 2, 3, 3))
+            raw_dataset = SpatialSequenceDataset(root, seq_len=2, pairs=False)
+            self.assertEqual(raw_dataset.action_dim, 6)
+            dataset = SpatialSequenceDataset(
+                root, seq_len=2, pairs=False, action_channels="auto")
+            self.assertEqual(dataset.action_dim, 4)
+            self.assertEqual(dataset.action_channels, (0, 1, 3, 4))
+            self.assertEqual(dataset.data_cache[0]["actions"].shape, (3, 4))
 
     def test_failed_planarity_qc_is_rejected(self):
         with tempfile.TemporaryDirectory(prefix="planarity_qc_") as root:
@@ -255,15 +284,15 @@ class PreprocessingEqualityTest(unittest.TestCase):
 
 def _deployment_fixtures(*, history=None, safety=None):
     model = ModelDescriptor(
-        "mock.pt", "planar", "state_transition", 6, 3, 2,
+        "mock.pt", "planar", "state_transition", 4, 3, 2,
         k_train=4, k_safe=4,
-        action_scale_kpa=(100.0,) * 6, channel_map=tuple(range(6)),
+        action_scale_kpa=(100.0,) * 4, channel_map=(0, 1, 3, 4),
         channel_equalities=((1, 2), (4, 5)),
         train_dt_nominal_s=0.1, train_dt_measured_s=0.1,
         train_dt_std_s=0.0)
     anchor = Anchor(
         state=((0.0, 0.0), (1.0, 1.0), (2.0, 2.0)),
-        action_history=history or ((0.0,) * 6, (0.0,) * 6), source="test")
+        action_history=history or ((0.0,) * 4, (0.0,) * 4), source="test")
     scene = Scene("planar", (ScenePrimitive(
         "target_point", "model_normalized", {"xy": [0.2, 0.0], "node": 0}),))
     safety = safety or SafetyPolicy(
@@ -271,8 +300,8 @@ def _deployment_fixtures(*, history=None, safety=None):
         rise_rate6=(100.0,) * 6, fall_rate6=(100.0,) * 6,
         ack_timeout_s=0.1)
     plan = build_plan(
-        model_actions=((1, 2, 9, 3, 4, 8),),
-        channel_map=tuple(range(6)), step_interval_s=0.1,
+        model_actions=((1, 2, 3, 4),),
+        channel_map=(0, 1, 3, 4), step_interval_s=0.1,
         model=model, anchor=anchor, scene=scene, safety=safety)
     return model, anchor, scene, safety, plan
 
@@ -280,20 +309,21 @@ def _deployment_fixtures(*, history=None, safety=None):
 class DeploymentEqualityTest(unittest.TestCase):
     def test_manifest_round_trip_keeps_equalities(self):
         manifest = DeployManifest(
-            checkpoint_sha256="deadbeef", action_scale_kpa=(100.0,) * 6,
-            channel_map=tuple(range(6)), channel_equalities=((1, 2), (4, 5)),
+            checkpoint_sha256="deadbeef", action_scale_kpa=(100.0,) * 4,
+            channel_map=(0, 1, 3, 4), channel_equalities=((1, 2), (4, 5)),
             train_dt_nominal_s=0.1, mask_source="white_on_blue",
             n_nodes=15, window_size=40, z_dim=16, episode_len=40,
-            action_dim=6, encoder_type="fractional", hidden_dim=128, n_scales=4)
+            action_dim=4, encoder_type="fractional", hidden_dim=128, n_scales=4)
         restored = DeployManifest.from_dict(manifest.to_dict())
         self.assertEqual(restored.channel_equalities, ((1, 2), (4, 5)))
-        with self.assertRaisesRegex(ValueError, "identity channel_map"):
+        self.assertEqual(restored.action_expansion6, (0, 1, 1, 2, 3, 3))
+        with self.assertRaisesRegex(ValueError, "follower"):
             DeployManifest(
-                checkpoint_sha256="deadbeef", action_scale_kpa=(100.0,) * 6,
-                channel_map=(1, 0, 2, 3, 4, 5), channel_equalities=((1, 2),),
+                checkpoint_sha256="deadbeef", action_scale_kpa=(100.0,) * 4,
+                channel_map=(0, 1, 2, 4), channel_equalities=((1, 2),),
                 train_dt_nominal_s=0.1, mask_source="white_on_blue",
                 n_nodes=15, window_size=40, z_dim=16, episode_len=40,
-                action_dim=6, encoder_type="fractional", hidden_dim=128, n_scales=4)
+                action_dim=4, encoder_type="fractional", hidden_dim=128, n_scales=4)
 
     def test_build_plan_projects_model_actions_and_records_contract(self):
         model, anchor, scene, safety, plan = _deployment_fixtures()
@@ -302,11 +332,11 @@ class DeploymentEqualityTest(unittest.TestCase):
         self.assertTrue(validate_plan(plan, model, anchor, scene, safety).ok)
 
     def test_preflight_rejects_history_and_safety_outside_manifold(self):
-        bad_history = ((0.0,) * 6, (0.0, 1.0, 2.0, 0.0, 0.0, 0.0))
+        bad_history = ((0.0,) * 4, (0.0,) * 3)
         model, anchor, scene, safety, plan = _deployment_fixtures(history=bad_history)
         codes = {issue.code for issue in validate_plan(
             plan, model, anchor, scene, safety).issues}
-        self.assertIn("history_equality", codes)
+        self.assertIn("history_dim", codes)
 
         bad_safety = SafetyPolicy(
             pressure_max6=(100, 100, 90, 100, 100, 100),
@@ -318,10 +348,11 @@ class DeploymentEqualityTest(unittest.TestCase):
         self.assertIn("safety_equality", codes)
 
     def test_seeded_warmup_is_projected_after_jitter(self):
-        actions = warmup_actions(
-            6, 20, seed=7, channel_equalities=((1, 2), (4, 5)))
-        self.assertTrue((actions[:, 1] == actions[:, 2]).all())
-        self.assertTrue((actions[:, 4] == actions[:, 5]).all())
+        actions4 = warmup_actions(
+            4, 20, seed=7, channel_equalities=((1, 2), (4, 5)))
+        actions6 = expand_to_6ch(actions4, (0, 1, 3, 4), ((1, 2), (4, 5)))
+        self.assertTrue((actions6[:, 1] == actions6[:, 2]).all())
+        self.assertTrue((actions6[:, 4] == actions6[:, 5]).all())
 
     def test_executor_zeros_when_ack_breaks_equality(self):
         class BadAckTransport(MockCommandTransport):
@@ -340,6 +371,22 @@ class DeploymentEqualityTest(unittest.TestCase):
         with self.assertRaisesRegex(ExecutionError, "applied6"):
             PlanExecutor(transport, safety).execute(plan)
         self.assertEqual(transport.commands[-1], (0.0,) * 6)
+
+    def test_executor_accepts_small_ack_quantization_residual(self):
+        class QuantizedAckTransport(MockCommandTransport):
+            def send(self, action6, required_groups, timeout_s):
+                receipt = super().send(action6, required_groups, timeout_s)
+                if any(float(value) for value in action6):
+                    applied = list(receipt.applied6)
+                    applied[2] += 0.25
+                    return CommandReceipt(
+                        receipt.command_id, receipt.requested6, tuple(applied),
+                        receipt.t_command, receipt.t_ack, receipt.status)
+                return receipt
+
+        _, _, _, safety, plan = _deployment_fixtures()
+        receipts = PlanExecutor(QuantizedAckTransport(), safety).execute(plan)
+        self.assertEqual(len(receipts), 1)
 
     def test_planner_optimizes_four_variables_and_outputs_equal_six_channels(self):
         import torch
@@ -368,7 +415,7 @@ class DeploymentEqualityTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="planar_planner_") as root:
             plan = OpenLoopShootingPlanner(runtime).plan(
                 anchor=anchor, scene=scene, safety=safety,
-                channel_map=tuple(range(6)), step_interval_s=0.1,
+                channel_map=(0, 1, 3, 4), step_interval_s=0.1,
                 output_dir=root,
                 config=ShootingConfig(
                     horizon=2, n_iter=3, n_restarts=1, learning_rate=0.05))

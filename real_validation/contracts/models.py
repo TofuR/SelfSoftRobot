@@ -1,7 +1,7 @@
 """验证工作台的稳定数据契约。
 
 计划始终保存为六通道命令，模型自身的动作维度通过 ``channel_map`` 显式映射；
-因此 1/3/6 通道模型可以共用执行器，同时不会静默补零掩盖维度错误。
+因此 1..6 通道模型可以共用执行器，同时不会静默补零掩盖维度错误。
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from .io import stable_digest
 
 SCHEMA_VERSION = 1
 N_HARDWARE_CHANNELS = 6
-CHANNEL_EQUALITY_TOLERANCE = 1e-6
+CHANNEL_EQUALITY_TOLERANCE = 0.5
 
 
 def _finite_vector(values: Iterable[float], size: int, name: str) -> tuple[float, ...]:
@@ -71,6 +71,45 @@ def channel_equality_residuals(values: Iterable[float], pairs,
                  for leader, follower in normalize_channel_equalities(pairs, size=size))
 
 
+def hardware_action_expansion(channel_map, pairs) -> tuple[int, ...]:
+    """返回 6 个硬件通道各自读取的模型动作列；未驱动通道为 -1。"""
+    mapping = tuple(int(value) for value in channel_map)
+    lookup = {channel: index for index, channel in enumerate(mapping)}
+    followers = {follower: leader for leader, follower in
+                 normalize_channel_equalities(pairs)}
+    result = []
+    for channel in range(N_HARDWARE_CHANNELS):
+        source = followers.get(channel, channel)
+        result.append(lookup.get(source, -1))
+    return tuple(result)
+
+
+def validate_hardware_action_contract(action_dim, channel_map, pairs,
+                                      action_expansion6=()) -> tuple[int, ...]:
+    """校验模型独立通道到六通道硬件的展开关系。"""
+    if channel_map is None:
+        if pairs:
+            raise ValueError("channel_equalities 要求显式 channel_map")
+        return ()
+    mapping = tuple(int(value) for value in channel_map)
+    if len(mapping) != int(action_dim) or len(set(mapping)) != len(mapping) or any(
+            value not in range(N_HARDWARE_CHANNELS) for value in mapping):
+        raise ValueError("channel_map 必须是不重复的 0..5 通道,长度等于 action_dim")
+    equalities = normalize_channel_equalities(pairs)
+    mapped = set(mapping)
+    for leader, follower in equalities:
+        if leader not in mapped:
+            raise ValueError(f"等值约束 leader ch{leader} 必须在 channel_map 中")
+        if follower in mapped:
+            raise ValueError(f"等值约束 follower ch{follower} 不应重复进入模型动作")
+    expected = hardware_action_expansion(mapping, equalities)
+    expansion = tuple(int(value) for value in action_expansion6 or ())
+    if expansion and expansion != expected:
+        raise ValueError(
+            f"action_expansion6={expansion} 与 channel_map/equalities 推导值 {expected} 不同")
+    return expected
+
+
 @dataclass(frozen=True)
 class ModelDescriptor:
     checkpoint: str
@@ -88,6 +127,7 @@ class ModelDescriptor:
     action_scale_kpa: tuple[float, ...] | None = None
     channel_map: tuple[int, ...] | None = None
     channel_equalities: tuple[tuple[int, int], ...] = ()
+    action_expansion6: tuple[int, ...] = ()
     train_dt_nominal_s: float | None = None
     train_dt_measured_s: float | None = None
     train_dt_std_s: float | None = None
@@ -101,8 +141,8 @@ class ModelDescriptor:
     provenance: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.action_dim not in (1, 3, 6):
-            raise ValueError("实机工作台当前只接受 action_dim=1/3/6")
+        if self.action_dim not in range(1, N_HARDWARE_CHANNELS + 1):
+            raise ValueError("实机工作台只接受 action_dim=1..6")
         if self.n_nodes <= 0 or self.history_steps <= 0:
             raise ValueError("n_nodes 与 history_steps 必须为正数")
         if self.k_safe is not None and self.k_safe <= 0:
@@ -114,25 +154,16 @@ class ModelDescriptor:
             if any(v <= 0 or not math.isfinite(v) for v in values):
                 raise ValueError("action_scale_kpa 必须全为正有限值")
             object.__setattr__(self, "action_scale_kpa", values)
-        if self.channel_map is not None:
-            mapping = tuple(int(v) for v in self.channel_map)
-            if len(mapping) != self.action_dim or len(set(mapping)) != len(mapping) \
-                    or any(v < 0 or v >= 6 for v in mapping):
-                raise ValueError("channel_map 必须是不重复的 0..5 通道,长度等于 action_dim")
-            object.__setattr__(self, "channel_map", mapping)
         equalities = normalize_channel_equalities(self.channel_equalities)
         if equalities:
-            if self.action_dim != N_HARDWARE_CHANNELS:
-                raise ValueError("channel_equalities 当前只支持 action_dim=6 模型")
-            if self.channel_map != tuple(range(N_HARDWARE_CHANNELS)):
-                raise ValueError("channel_equalities 要求 identity channel_map=(0..5)")
             if self.action_scale_kpa is None:
                 raise ValueError("channel_equalities 要求 action_scale_kpa")
-            for leader, follower in equalities:
-                if abs(self.action_scale_kpa[leader] - self.action_scale_kpa[follower]) \
-                        > CHANNEL_EQUALITY_TOLERANCE:
-                    raise ValueError("等值通道的 action_scale_kpa 必须相同")
+        expansion = validate_hardware_action_contract(
+            self.action_dim, self.channel_map, equalities, self.action_expansion6)
+        if self.channel_map is not None:
+            object.__setattr__(self, "channel_map", tuple(int(v) for v in self.channel_map))
         object.__setattr__(self, "channel_equalities", equalities)
+        object.__setattr__(self, "action_expansion6", expansion)
 
     def to_dict(self) -> dict[str, Any]:
         return {"schema_version": SCHEMA_VERSION, **asdict(self)}

@@ -28,7 +28,9 @@ N_CHAN = 6
 P_MIN = 0.0
 P_MAX = 500.0
 DEFAULT_RATE_KPA_S = 100.0
-EQUALITY_TOLERANCE_KPA = 1e-6
+# 这是“最终命令”容差，不是真实腔压容差。Modbus 4–20mA 换算分辨率约
+# 1/32 kPa；留 0.5 kPa 可容纳量化/浮点差异，同时仍能抓住映射或限速配置错误。
+EQUALITY_TOLERANCE_KPA = 0.5
 
 
 def _clamp6(vec) -> List[float]:

@@ -22,7 +22,11 @@ def anchor_from_npz(path: str | Path, frame_index: int, model: ModelDescriptor,
     if frame_index < 0 or frame_index >= len(positions):
         raise IndexError(f"frame_index={frame_index} 超出 0..{len(positions) - 1}")
     if actions.shape[1] != model.action_dim:
-        raise ValueError(f"NPZ action_dim={actions.shape[1]} 与模型 {model.action_dim} 不同")
+        if actions.shape[1] == 6 and model.channel_map is not None:
+            actions = actions[:, model.channel_map]
+        else:
+            raise ValueError(
+                f"NPZ raw action_dim={actions.shape[1]} 无法投影到模型 {model.action_dim} 维")
     state = positions[frame_index]
     if state.shape == (3, model.n_nodes):
         state = state.T

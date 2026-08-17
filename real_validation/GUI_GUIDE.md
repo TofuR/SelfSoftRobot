@@ -59,7 +59,7 @@ GUI 用五个 Tab 页串起"**加载模型 → 建立状态锚点 → 定义目�
 | | `打开 Run（只读回放）` | 回看历史实验，不能 Arm |
 | **运行配置** | 全 Mock / 真机验证 / 自定义混合 + `应用配置` | 确定三类设备的 backend。有任何设备对象存在时配置锁定，须全部断开后才能重新应用 |
 | **相机** | Backend / 数量 / serials / 主显示 + `连接相机` | 1–8 路 Mock 或 RealSense；真机 serial 必须唯一，设备不足直接 ERROR |
-| **六通道比例阀** | Backend / 组1/2 端口 / baud / slave | Mock 与 Real 共用 Controller/ACK 路径；两组可单独连接。Arm 会按 plan `channel_map` 推导必需阀组并 fail-closed |
+| **六通道比例阀** | Backend / 组1/2 端口 / baud / slave | Mock 与 Real 共用 Controller/ACK 路径；两组可单独连接。Arm 会按 plan `channel_map + channel_equalities` 推导必需阀组并 fail-closed |
 | **NDI** | Backend / 串口 / 探头数 + `连接 NDI` | 显式 Disabled/Mock/Real；启动时不再自动跑 Mock NDI；末端 mm 只进评价 |
 | **模型与部署契约** | Checkpoint / 训练数据目录 / K_safe / 设备 | 指定模型权重路径;K_safe(规划视野上限)在加载后按认证表自动填充,并在模型摘要标注来源(`认证表(10px 容差)` 或 `手动`),悬停 K_safe 可见说明 |
 | | `加载部署模型` | 后台加载 checkpoint,显示 type/action_dim/nodes/H/K_train/K_safe/train_dt/action_scale_kpa/hash |
@@ -108,7 +108,8 @@ GUI 用五个 Tab 页串起"**加载模型 → 建立状态锚点 → 定义目�
 ```
 
 **规则(报错时会提示怎么改)**:
-- NPZ 必须含 `positions(T,3,N)` + `actions(T,D)`;N = 模型节点数(15),D = action_dim(1),动作已归一 [0,1]。
+- NPZ 必须含 `positions(T,3,N)` + 已归一化的 `actions(T,D)`。旧数据可令 D 等于模型维度；
+  六腔受约束数据保留 `D=6`，工作台按部署 `channel_map=[0,1,3,4]` 投影为四维模型历史。
 - 帧索引往前必须凑满 H=40 步历史 —— 选太靠前会报"缺少 N 步历史",把帧索引调大即可(示例数据 8172 帧,用 39+)。
 - 其它序列:把 transition npz 拷入 `real_validation/data/npz/`,或点 `…` 选择任意位置的文件。
 
@@ -151,7 +152,7 @@ Real 阀模式下仍允许操作员显式选择零历史，但会保留 OOD 警�
 | | `归零并重新锚定` | 中止计划并归零，进入 `reanchor`；旧计划不可 Resume |
 | **执行日志** | execution_log | 命令下发/ACK/状态流转记录 |
 
-**安全行为**:Arm 之前必须连好 `channel_map` 推导的所有阀组；Abort/归零全通道归零；执行中锁定 1/2/3 页；关窗时统一中止执行、停相机/NDI、归零关阀。
+**安全行为**:Arm 之前必须连好模型通道及 equality follower 涉及的所有阀组；Abort/归零全通道归零；执行中锁定 1/2/3 页；关窗时统一中止执行、停相机/NDI、归零关阀。
 
 ### 2.5 Page 5 · Results — 查看结果
 

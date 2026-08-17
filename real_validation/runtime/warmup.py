@@ -49,10 +49,10 @@ def warmup_actions(action_dim: int, history_steps: int, *, lo=0.0, hi=1.0,
         rng = np.random.default_rng(seed)
         out += rng.uniform(-0.02, 0.02, out.shape).astype(np.float32)
         out = np.clip(out, lo, hi)
-    if channel_equalities:
+    # 四维模型动作本身只含独立变量；硬件 follower 在 expand_to_6ch 时复制。
+    # 仅保留旧六维模型的兼容投影。
+    if channel_equalities and action_dim == 6:
         from ..contracts.models import apply_channel_equalities
-        if action_dim != 6:
-            raise ValueError("channel_equalities warmup 当前要求 action_dim=6")
         out = np.asarray(
             [apply_channel_equalities(row, channel_equalities) for row in out],
             dtype=np.float32)

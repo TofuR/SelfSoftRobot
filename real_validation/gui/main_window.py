@@ -1174,6 +1174,7 @@ class ValidationWindow(QMainWindow):
         # B15:加载失败必须清 runtime,否则操作员看到新 checkpoint 路径、以为换了模型,
         # 实际后续 Plan 用旧 runtime;preflight 比对的两个 hash 都是旧的照样放行。
         self.runtime = None
+        self.channel_map.setReadOnly(False)
         self.model_summary.setPlainText("模型未加载")
         if self.session is not None and self.session.model is not None:
             try:
@@ -1189,11 +1190,17 @@ class ValidationWindow(QMainWindow):
         self.session.configure_model(runtime.descriptor)
         descriptor = runtime.descriptor
         if descriptor.channel_map is not None:
+            self.channel_map.setText(",".join(str(value) for value in descriptor.channel_map))
+            self.channel_map.setReadOnly(True)
+            self.channel_map.setToolTip("来自 deploy_manifest；模型动作列不能在 GUI 中重新解释")
             from dataclasses import replace
-            groups = required_groups_for_channels(descriptor.channel_map)
+            groups = required_groups_for_channels(
+                descriptor.channel_map, descriptor.channel_equalities)
             if self.session.safety.required_groups != groups:
                 self.session.set_safety(replace(self.session.safety, required_groups=groups))
-                self._log(f"安全所需阀组已按 channel_map 设为 {groups}")
+                self._log(f"安全所需阀组已按动作展开合同设为 {groups}")
+        else:
+            self.channel_map.setReadOnly(False)
         self.model_summary.setPlainText(
             f"type={descriptor.model_type}\nclass={descriptor.model_class}\n"
             f"action_dim={descriptor.action_dim}\n"
@@ -1201,6 +1208,9 @@ class ValidationWindow(QMainWindow):
             f"K_train={descriptor.k_train}\nK_safe={descriptor.k_safe}\n"
             f"train_dt={descriptor.train_dt_measured_s or descriptor.train_dt_nominal_s}\n"
             f"action_scale_kpa={descriptor.action_scale_kpa}\n"
+            f"channel_map={descriptor.channel_map}\n"
+            f"channel_equalities={descriptor.channel_equalities}\n"
+            f"action_expansion6={descriptor.action_expansion6}\n"
             f"sha256={descriptor.checkpoint_hash}")
         # B5:plan_dt 默认取训练实测 Δt(不再硬编码 0.2)
         ref_dt = descriptor.train_dt_measured_s or descriptor.train_dt_nominal_s
@@ -1234,7 +1244,9 @@ class ValidationWindow(QMainWindow):
             mapping = (self.runtime.descriptor.channel_map if self.runtime is not None
                        else tuple(int(value.strip()) for value in
                                   self.channel_map.text().split(",") if value.strip()))
-            groups = required_groups_for_channels(mapping or (0,))
+            equalities = (self.runtime.descriptor.channel_equalities
+                          if self.runtime is not None else ())
+            groups = required_groups_for_channels(mapping or (0,), equalities)
             safety = SafetyPolicy(
                 pressure_min6=tuple(columns[0]), pressure_max6=tuple(columns[1]),
                 rise_rate6=tuple(columns[2]), fall_rate6=tuple(columns[3]),
@@ -1577,7 +1589,8 @@ class ValidationWindow(QMainWindow):
                 raise RuntimeError("没有 session")
             if not self.session.plan:
                 raise RuntimeError("没有已通过 Preflight 的计划")
-            groups = required_groups_for_channels(self.session.plan.channel_map)
+            groups = required_groups_for_channels(
+                self.session.plan.channel_map, self.session.plan.channel_equalities)
             self.hardware.require_valves_ready(groups)
             self.session.arm(); self._log("计划已由操作员 Arm")
             self._refresh()
@@ -1588,7 +1601,8 @@ class ValidationWindow(QMainWindow):
         """只从 HardwareSession 创建 transport，不存在隐式 Mock fallback。"""
         if not self.session or not self.session.plan:
             raise RuntimeError("尚无执行计划")
-        groups = required_groups_for_channels(self.session.plan.channel_map)
+        groups = required_groups_for_channels(
+            self.session.plan.channel_map, self.session.plan.channel_equalities)
         return self.hardware.create_transport(groups)
 
     def _execute(self) -> None:

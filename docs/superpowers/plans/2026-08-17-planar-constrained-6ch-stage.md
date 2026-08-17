@@ -162,32 +162,35 @@ ndi.csv            # 独立末端三维质控
 第一版离线处理继续直接使用六维动作，只额外验证并保存约束元数据：
 
 ```text
-actions:             (T,6)       # 训练输入，等值列保留
+actions:             (T,6)       # 原始训练文件，等值列保留
+model_action_channels: [0,1,3,4] # Dataset 投影合同
+action_expansion6:   [0,1,1,2,3,3]
 channel_equalities:  JSON/string
 pair_residual:       (T,2)
 planarity_qc:        metadata
 ```
 
-若任一等压对在 `applied6` 命令历史中不一致，转换必须 fail-closed。需要注意：当前 ACK 证明的是
+若任一等压对在 `applied6` 命令历史中超过记录的命令容差（默认 0.5 kPa），转换必须
+fail-closed；量化或浮点造成的小残差允许存在。需要注意：当前 ACK 证明的是
 命令被驱动层接受，不是六个腔体的真实压力完全相等；真正的物理偏差由压力传感器（若有）、
 NDI 和侧视 QC 揭示。
 
 ### 5.3 Planner 必须搜索同一个动作流形
 
-训练只覆盖 `a6 = expand(u4)`，Planner 就只能优化 `u4`，然后展开成六维输入送给现有
-`action_dim=6` 模型。不能训练时约束等压、规划时又让六个通道独立搜索，否则会立即产生
+训练只覆盖 `a6 = expand(u4)`，Dataset 因此选择 `u4=[ch0,ch1,ch3,ch4]`，模型直接使用
+`action_dim=4`。Planner 优化同一 `u4`，到计划/硬件边界才展开成六维。不能训练时约束等压、
+规划时又让六个通道独立搜索，否则会立即产生
 动作 OOD。
 
-这一做法保留现有 identity `channel_map=(0,1,2,3,4,5)`，无需放宽工作台目前只接受
-`action_dim=1/3/6`、且禁止重复 channel map 的合同：
+部署合同使用 `channel_map=(0,1,3,4)`、`channel_equalities=((1,2),(4,5))`：
 
 ```text
-optimizer u4 → EqualityConstraint.expand → model/controller actions6
-applied6   → EqualityConstraint.validate → model history6
+optimizer/model/history u4 → EqualityConstraint.expand → controller actions6
+applied6 → channel_map.project → model history4
 ```
 
 压力上下界和 rise/fall 限制仍按六维检查。等值通道使用相同范围和速率，并从相等初值开始，
-逐通道 limiter 才会继续给出相等结果。模型历史继续使用验证后的六维 `applied6`。
+逐通道 limiter 才会继续给出近似相等结果。模型历史从验证后的六维 `applied6` 选择独立四列。
 
 ## 6. 最小实施顺序
 
@@ -208,7 +211,7 @@ applied6   → EqualityConstraint.validate → model history6
 - 约束统一投影 Manual、Random、Sweep 和 Replay 的每一拍；
 - 配置写入 `meta.json` 和 GUI 持久化文件；
 - 启动时检查两组 Modbus 均连接、链接通道初值相等；
-- 保存前验证最终 `applied6` 的 pair residual 为零。
+- 保存前验证最终 `applied6` 的 pair residual 不超过显式容差，默认 0.5 kPa。
 
 Random、Sweep、seed、预生成和每通道安全范围继续复用现有实现，不新增前置动作文件。
 采集层仍只负责原始动作、图像和 NDI，不在其中做骨架或平面判断。
@@ -225,18 +228,18 @@ Random、Sweep、seed、预生成和每通道安全范围继续复用现有实�
 
 - 先训练 GT-observed，用于检查数据和单步模型；
 - 再训练窗口化 OpenLoop，作为部署主线；
-- 模型 `action_dim=6`，状态仍为 `(15,3)`，其中第三维为零；
+- 原始 NPZ 为六维，Dataset 投影后模型 `action_dim=4`；状态仍为 `(15,3)`，第三维为零；
 - 对每段动作历史分别覆盖加载、卸载和 hold；
 - 在从未出现过的联合轨迹上评估单步误差、rollout 漂移和 `K_safe`。
 
-压缩 4 维模型和固定共同压力的 2 维动作可作为后续消融，不阻塞第一版。
+保留六维模型可作为消融；部署主线使用没有冗余等值列的四维模型。
 
 ### P4：受约束规划和执行
 
-- 在部署 manifest 保存 channel equalities、六维动作尺度、安全范围和 pair invariant；
-- `OpenLoopShootingPlanner` 内部优化 4 个独立变量，展开后送入六维模型；
+- 在部署 manifest 保存 model action channels、channel equalities、展开关系和动作尺度；
+- `OpenLoopShootingPlanner` 直接优化四维模型动作，生成计划时展开到六维硬件动作；
 - preflight 在 6 维展开后检查压力、速率、通信组和 pair equality；
-- 执行历史保留真实 `applied6`，pair 校验失败时归零并重新锚定/规划；
+- 执行记录保留真实 `applied6`，模型历史按 channel map 投影为四维；明显违反 pair 容差时归零；
 - NDI 继续只做评价和离面安全监视，不进入模型或 Planner。
 
 ### P5：实机任务递进

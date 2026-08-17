@@ -17,6 +17,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from .action_view import project_actions, resolve_action_contract
+
 
 class SpatialSequenceDataset(Dataset):
     """空间序列数据集。
@@ -30,7 +32,7 @@ class SpatialSequenceDataset(Dataset):
         pairs: 是否返回相邻帧（smooth loss）。
     """
 
-    def __init__(self, data_dir, seq_len=20, pairs=True):
+    def __init__(self, data_dir, seq_len=20, pairs=True, action_channels=None):
         self.seq_len = seq_len
         self.pairs = pairs
         self.samples = []
@@ -40,27 +42,28 @@ class SpatialSequenceDataset(Dataset):
         if not file_list:
             raise FileNotFoundError(f"No .npz files in {data_dir}")
 
+        self.action_contract = resolve_action_contract(data_dir, action_channels)
+        self.action_channels = self.action_contract.model_action_channels
+        self.action_dim = self.action_contract.model_action_dim
+
         # 动作归一化因子
         all_acts = []
         for f in file_list:
             d = np.load(f)
             if 'actions' in d:
-                all_acts.append(d['actions'])
+                all_acts.append(project_actions(d['actions'], self.action_channels))
         self.norm_factor = (
             float(np.max(np.abs(np.concatenate(all_acts)))) if all_acts else 1.0
         )
 
         # 缓存数据
-        self.action_dim = None
         for f_path in file_list:
             raw = np.load(f_path)
             if 'positions' not in raw:
                 continue
-            actions = raw['actions'] / self.norm_factor
+            actions = project_actions(raw['actions'], self.action_channels) / self.norm_factor
             positions = raw['positions'].astype(np.float32)  # (T, 3, N)
             radii = raw['radii'].astype(np.float32) if 'radii' in raw else None
-            if self.action_dim is None:
-                self.action_dim = actions.shape[1]
             self.data_cache.append({
                 'actions': actions,
                 'positions': positions,
@@ -76,7 +79,9 @@ class SpatialSequenceDataset(Dataset):
                 self.samples.append((seq_id, t))
 
         print(f"SpatialSequenceDataset: {len(self.samples)} samples, "
-              f"action_dim={self.action_dim}, n_seqs={len(self.data_cache)}")
+              f"raw_action_dim={self.action_contract.raw_action_dim}, "
+              f"action_dim={self.action_dim}, channels={self.action_channels}, "
+              f"n_seqs={len(self.data_cache)}")
 
         # 计算归一化参数（基于中心线坐标范围）
         self._compute_normalization()
@@ -204,11 +209,12 @@ class StateTransitionDataset(SpatialSequenceDataset):
     """
 
     def __init__(self, data_dir, seq_len=20, pairs=True, episode_mode=False,
-                 episode_len=20):
+                 episode_len=20, action_channels=None):
         self.episode_mode = episode_mode
         self.episode_len = episode_len
         # 父类先按单帧模式构建 self.samples（episode 模式随后重建）
-        super().__init__(data_dir, seq_len=seq_len, pairs=pairs)
+        super().__init__(data_dir, seq_len=seq_len, pairs=pairs,
+                         action_channels=action_channels)
         if self.episode_mode:
             self._build_episode_samples()
             print(f"StateTransitionDataset (episode mode): {len(self.samples)} "
