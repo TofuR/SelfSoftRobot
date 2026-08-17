@@ -13,7 +13,12 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable, Protocol, Sequence, TYPE_CHECKING
 
-from ..contracts.models import ActionPlan, SafetyPolicy
+from ..contracts.models import (
+    CHANNEL_EQUALITY_TOLERANCE,
+    ActionPlan,
+    SafetyPolicy,
+    channel_equality_residuals,
+)
 
 if TYPE_CHECKING:
     from ..runtime.observation_policy import ActionHistoryBuffer
@@ -146,12 +151,18 @@ class PlanExecutor:
                 # 记录期望下发时刻(绝对时基)→ jitter 可归因
                 receipt = replace(receipt, t_expected=deadline)
                 self.receipts.append(receipt)
-                # 功能①:运行累积本次实验的实际动作历史(供后续重锚定/滚动规划)
-                if self.history_buffer is not None and receipt.status == "ack":
-                    self.history_buffer.append_applied6(receipt.applied6)
                 self._emit("command", {"step": step, "receipt": asdict(receipt)})
                 if receipt.status != "ack":
                     raise ExecutionError(f"command {receipt.command_id}: {receipt.status}")
+                residuals = channel_equality_residuals(
+                    receipt.applied6, plan.channel_equalities)
+                if any(value > CHANNEL_EQUALITY_TOLERANCE for value in residuals):
+                    raise ExecutionError(
+                        f"command {receipt.command_id}: applied6 违反 "
+                        f"channel_equalities {residuals}")
+                # 只有通过 ACK 与等值 invariant 的实际动作才能进入下一次锚定历史。
+                if self.history_buffer is not None:
+                    self.history_buffer.append_applied6(receipt.applied6)
             self._emit("completed", {"steps": len(plan.actions6)})
             return list(self.receipts)
         except Exception as error:

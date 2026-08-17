@@ -16,6 +16,7 @@ from .io import stable_digest
 
 SCHEMA_VERSION = 1
 N_HARDWARE_CHANNELS = 6
+CHANNEL_EQUALITY_TOLERANCE = 1e-6
 
 
 def _finite_vector(values: Iterable[float], size: int, name: str) -> tuple[float, ...]:
@@ -29,6 +30,45 @@ def _finite_vector(values: Iterable[float], size: int, name: str) -> tuple[float
 
 def _vec6(values: Iterable[float], name: str) -> tuple[float, ...]:
     return _finite_vector(values, N_HARDWARE_CHANNELS, name)
+
+
+def normalize_channel_equalities(pairs: Iterable[Iterable[int]] | None,
+                                 *, size: int = N_HARDWARE_CHANNELS
+                                 ) -> tuple[tuple[int, int], ...]:
+    """规范化互不重叠的 ``(leader, follower)`` 等值约束。"""
+    result: list[tuple[int, int]] = []
+    used: set[int] = set()
+    for item in pairs or ():
+        values = tuple(item)
+        if len(values) != 2:
+            raise ValueError("每个 channel equality 必须是 [leader, follower]")
+        leader, follower = int(values[0]), int(values[1])
+        if leader == follower:
+            raise ValueError("channel equality 不能跟随自身")
+        if leader not in range(size) or follower not in range(size):
+            raise ValueError(f"channel equality 通道必须位于 0..{size - 1}")
+        if leader in used or follower in used:
+            raise ValueError("channel equalities 必须是互不重叠的通道对")
+        used.update((leader, follower))
+        result.append((leader, follower))
+    return tuple(result)
+
+
+def apply_channel_equalities(values: Iterable[float], pairs,
+                             *, size: int = N_HARDWARE_CHANNELS
+                             ) -> tuple[float, ...]:
+    result = list(_finite_vector(values, size, "action"))
+    for leader, follower in normalize_channel_equalities(pairs, size=size):
+        result[follower] = result[leader]
+    return tuple(result)
+
+
+def channel_equality_residuals(values: Iterable[float], pairs,
+                               *, size: int = N_HARDWARE_CHANNELS
+                               ) -> tuple[float, ...]:
+    vector = _finite_vector(values, size, "action")
+    return tuple(abs(vector[leader] - vector[follower])
+                 for leader, follower in normalize_channel_equalities(pairs, size=size))
 
 
 @dataclass(frozen=True)
@@ -47,6 +87,7 @@ class ModelDescriptor:
     # ---- P1b 新增(全部带默认值;缺 manifest 时为 None,由 preflight/planner 阻断) ----
     action_scale_kpa: tuple[float, ...] | None = None
     channel_map: tuple[int, ...] | None = None
+    channel_equalities: tuple[tuple[int, int], ...] = ()
     train_dt_nominal_s: float | None = None
     train_dt_measured_s: float | None = None
     train_dt_std_s: float | None = None
@@ -79,6 +120,19 @@ class ModelDescriptor:
                     or any(v < 0 or v >= 6 for v in mapping):
                 raise ValueError("channel_map 必须是不重复的 0..5 通道,长度等于 action_dim")
             object.__setattr__(self, "channel_map", mapping)
+        equalities = normalize_channel_equalities(self.channel_equalities)
+        if equalities:
+            if self.action_dim != N_HARDWARE_CHANNELS:
+                raise ValueError("channel_equalities 当前只支持 action_dim=6 模型")
+            if self.channel_map != tuple(range(N_HARDWARE_CHANNELS)):
+                raise ValueError("channel_equalities 要求 identity channel_map=(0..5)")
+            if self.action_scale_kpa is None:
+                raise ValueError("channel_equalities 要求 action_scale_kpa")
+            for leader, follower in equalities:
+                if abs(self.action_scale_kpa[leader] - self.action_scale_kpa[follower]) \
+                        > CHANNEL_EQUALITY_TOLERANCE:
+                    raise ValueError("等值通道的 action_scale_kpa 必须相同")
+        object.__setattr__(self, "channel_equalities", equalities)
 
     def to_dict(self) -> dict[str, Any]:
         return {"schema_version": SCHEMA_VERSION, **asdict(self)}
@@ -282,6 +336,7 @@ class ActionPlan:
     scene_digest: str
     anchor_id: str
     safety_digest: str
+    channel_equalities: tuple[tuple[int, int], ...] = ()
     plan_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     random_seed: int | None = None
     predicted_states_path: str | None = None
@@ -294,6 +349,12 @@ class ActionPlan:
             raise ValueError("计划至少需要一个动作")
         object.__setattr__(self, "actions6", actions)
         object.__setattr__(self, "channel_map", tuple(int(i) for i in self.channel_map))
+        equalities = normalize_channel_equalities(self.channel_equalities)
+        object.__setattr__(self, "channel_equalities", equalities)
+        for step, action in enumerate(actions):
+            residuals = channel_equality_residuals(action, equalities)
+            if any(value > CHANNEL_EQUALITY_TOLERANCE for value in residuals):
+                raise ValueError(f"计划第 {step} 步违反 channel_equalities: {residuals}")
         if self.step_interval_s <= 0:
             raise ValueError("step_interval_s 必须为正数")
 
@@ -310,4 +371,6 @@ class ActionPlan:
         data.pop("schema_version", None)
         data["actions6"] = tuple(tuple(row) for row in data["actions6"])
         data["channel_map"] = tuple(data["channel_map"])
+        data["channel_equalities"] = tuple(
+            tuple(pair) for pair in data.get("channel_equalities", ()))
         return cls(**data)

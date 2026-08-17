@@ -13,9 +13,14 @@ or 1.0 回退 —— 单位 bug 是活的,kPa 0-150 直接除 ≈1.0 的 norm_fa
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+from .models import (CHANNEL_EQUALITY_TOLERANCE,
+                     N_HARDWARE_CHANNELS,
+                     normalize_channel_equalities)
 
 REQUIRED = (
     "checkpoint_sha256", "action_scale_kpa", "channel_map", "train_dt_nominal_s",
@@ -30,6 +35,7 @@ class DeployManifest:
     checkpoint_sha256: str | None = None
     action_scale_kpa: tuple[float, ...] | None = None
     channel_map: tuple[int, ...] | None = None
+    channel_equalities: tuple[tuple[int, int], ...] = ()
     train_dt_nominal_s: float | None = None
     train_dt_measured_s: float | None = None
     train_dt_std_s: float | None = None
@@ -57,11 +63,30 @@ class DeployManifest:
         if missing:
             raise ValueError(f"deploy_manifest 缺必填字段: {missing}")
         if self.action_scale_kpa is not None:
-            object.__setattr__(self, "action_scale_kpa",
-                               tuple(float(v) for v in self.action_scale_kpa))
+            scale = tuple(float(v) for v in self.action_scale_kpa)
+            if len(scale) != self.action_dim or any(
+                    v <= 0 or not math.isfinite(v) for v in scale):
+                raise ValueError("action_scale_kpa 必须是 action_dim 个正数")
+            object.__setattr__(self, "action_scale_kpa", scale)
         if self.channel_map is not None:
-            object.__setattr__(self, "channel_map",
-                               tuple(int(v) for v in self.channel_map))
+            mapping = tuple(int(v) for v in self.channel_map)
+            if (len(mapping) != self.action_dim or len(set(mapping)) != len(mapping)
+                    or any(v not in range(N_HARDWARE_CHANNELS) for v in mapping)):
+                raise ValueError("channel_map 必须是 action_dim 个不重复的 0..5 通道")
+            object.__setattr__(self, "channel_map", mapping)
+        equalities = normalize_channel_equalities(self.channel_equalities)
+        if equalities:
+            if self.action_dim != N_HARDWARE_CHANNELS:
+                raise ValueError("channel_equalities 要求 deploy action_dim=6")
+            if self.channel_map != tuple(range(N_HARDWARE_CHANNELS)):
+                raise ValueError("channel_equalities 要求 identity channel_map=(0..5)")
+            if self.action_scale_kpa is None:
+                raise ValueError("channel_equalities 要求 action_scale_kpa")
+            for leader, follower in equalities:
+                if abs(self.action_scale_kpa[leader] - self.action_scale_kpa[follower]) \
+                        > CHANNEL_EQUALITY_TOLERANCE:
+                    raise ValueError("等值通道的 action_scale_kpa 必须相同")
+        object.__setattr__(self, "channel_equalities", equalities)
         if self.train_sequences is not None:
             object.__setattr__(self, "train_sequences", tuple(self.train_sequences))
 

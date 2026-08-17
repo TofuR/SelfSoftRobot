@@ -116,6 +116,7 @@ class ModelRuntime:
             normalization={"action_norm_factor": float(info["norm_factor"])},
             action_scale_kpa=manifest.action_scale_kpa if manifest else None,
             channel_map=manifest.channel_map if manifest else None,
+            channel_equalities=manifest.channel_equalities if manifest else (),
             train_dt_nominal_s=manifest.train_dt_nominal_s if manifest else None,
             train_dt_measured_s=manifest.train_dt_measured_s if manifest else None,
             train_dt_std_s=manifest.train_dt_std_s if manifest else None,

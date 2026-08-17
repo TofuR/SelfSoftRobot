@@ -23,7 +23,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import numpy as np
 
-from scripts.real.masks_to_transition_npz import action_max_per_channel
+from scripts.real.masks_to_transition_npz import (
+    EQUALITY_TOLERANCE_KPA,
+    action_max_per_channel,
+    normalize_channel_equalities,
+    validate_action_equalities,
+    validate_equality_action_maxes,
+)
 from real_validation.contracts.io import file_sha256
 
 
@@ -91,9 +97,24 @@ def main():
         hi6 = meta.get("hi6", [])
         channels = [i for i, v in enumerate(hi6) if float(v) > 0] or \
                    [int(meta.get("active_channel", 0))]
+    equalities = normalize_channel_equalities(meta.get("channel_equalities", ()))
+    equality_tolerance = float(meta.get(
+        "channel_equality_tolerance_kpa", EQUALITY_TOLERANCE_KPA))
+    action_dim = int(config.get("action_dim", 1))
+    if equalities:
+        if action_dim != 6:
+            raise ValueError(
+                f"采集序列声明 channel_equalities，但训练 config action_dim={action_dim}；"
+                "第一版必须保留六维模型动作")
+        if tuple(channels) != tuple(range(6)):
+            raise ValueError(
+                "channel_equalities 部署包必须使用 --channels 0,1,2,3,4,5 "
+                "和 identity channel_map")
     # 复用 action_max_per_channel(优先 hi6,缺失/为 0 用数据 max)—— 不自己读 hi6
     raw_actions = load_actions_kpa(args.raw_seq, channels)
+    validate_action_equalities(raw_actions, channels, equalities, equality_tolerance)
     maxes = action_max_per_channel(args.raw_seq, channels, raw_actions)
+    validate_equality_action_maxes(maxes, channels, equalities, equality_tolerance)
     dt_mean, dt_std = measure_train_dt(args.raw_seq)
 
     data_dirs = config.get("data_dirs", {}).get("sequence", "")
@@ -133,6 +154,7 @@ def main():
         "checkpoint_sha256": file_sha256(checkpoint),
         "action_scale_kpa": [float(v) for v in maxes],
         "channel_map": channels,
+        "channel_equalities": [list(pair) for pair in equalities],
         "train_dt_nominal_s": float(meta.get("action_interval_s", 0.2)),
         "train_dt_measured_s": dt_mean,
         "train_dt_std_s": dt_std,
@@ -150,7 +172,7 @@ def main():
         "window_size": int(config.get("window_size", 40)),
         "z_dim": int(config.get("z_dim", 16)),
         "episode_len": int(config.get("episode_len", 40)),
-        "action_dim": int(config.get("action_dim", 1)),
+        "action_dim": action_dim,
         "encoder_type": str(config.get("encoder_type", "fractional")),
         "hidden_dim": int(config.get("hidden_dim", 128)),
         "n_scales": int(config.get("n_scales", 4)),

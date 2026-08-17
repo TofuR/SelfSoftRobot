@@ -950,7 +950,9 @@ class ValidationWindow(QMainWindow):
             return
         from ..runtime.warmup import warmup_actions
         descriptor = self.runtime.descriptor
-        seq = warmup_actions(descriptor.action_dim, descriptor.history_steps, kind="ramp")
+        seq = warmup_actions(
+            descriptor.action_dim, descriptor.history_steps, kind="ramp",
+            channel_equalities=descriptor.channel_equalities)
         self._action_history = [tuple(float(v) for v in row) for row in seq]
         # 简化:用 mock 传输"下发"填历史(真机用 QtValveTransport)
         self.warmup_btn.setText(f"Mock Warmup 已生成:{len(seq)} 步")

@@ -16,7 +16,8 @@ import numpy as np
 
 
 def warmup_actions(action_dim: int, history_steps: int, *, lo=0.0, hi=1.0,
-                   kind: str = "ramp", seed: int | None = None) -> np.ndarray:
+                   kind: str = "ramp", seed: int | None = None,
+                   channel_equalities=()) -> np.ndarray:
     """训练分布内 warmup 动作序列,形状 (history_steps, action_dim),值域 [lo, hi]。
 
     kind:
@@ -48,14 +49,22 @@ def warmup_actions(action_dim: int, history_steps: int, *, lo=0.0, hi=1.0,
         rng = np.random.default_rng(seed)
         out += rng.uniform(-0.02, 0.02, out.shape).astype(np.float32)
         out = np.clip(out, lo, hi)
+    if channel_equalities:
+        from ..contracts.models import apply_channel_equalities
+        if action_dim != 6:
+            raise ValueError("channel_equalities warmup 当前要求 action_dim=6")
+        out = np.asarray(
+            [apply_channel_equalities(row, channel_equalities) for row in out],
+            dtype=np.float32)
     return out
 
 
-def expand_to_6ch(actions_model, channel_map) -> np.ndarray:
+def expand_to_6ch(actions_model, channel_map, channel_equalities=()) -> np.ndarray:
     """(H, action_dim) 模型动作 → (H, 6) applied 命令。
 
     委托 planner_service.expand_model_actions(共享 6 通道展开逻辑,含 channel_map
     唯一性/范围校验)。
     """
     from ..planning.planner_service import expand_model_actions
-    return np.asarray(expand_model_actions(actions_model, channel_map), dtype=np.float64)
+    return np.asarray(expand_model_actions(
+        actions_model, channel_map, channel_equalities), dtype=np.float64)

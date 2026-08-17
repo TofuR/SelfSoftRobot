@@ -34,6 +34,27 @@ from scripts.real.masks_to_transition_npz import (
     validate_action_equalities,
     validate_equality_action_maxes,
 )
+from real_validation.contracts.deploy_manifest import DeployManifest
+from real_validation.contracts.models import (
+    Anchor,
+    ModelDescriptor,
+    SafetyPolicy,
+    Scene,
+    ScenePrimitive,
+)
+from real_validation.execution.executor import (
+    CommandReceipt,
+    ExecutionError,
+    MockCommandTransport,
+    PlanExecutor,
+)
+from real_validation.execution.preflight import validate_plan
+from real_validation.planning.openloop_planner import (
+    OpenLoopShootingPlanner,
+    ShootingConfig,
+)
+from real_validation.planning.planner_service import build_plan
+from real_validation.runtime.warmup import warmup_actions
 
 
 _app: QApplication | None = None
@@ -207,6 +228,132 @@ class PreprocessingEqualityTest(unittest.TestCase):
             path.write_text(json.dumps({"planarity_pass": False}))
             with self.assertRaisesRegex(ValueError, "平面性质控未通过"):
                 load_planarity_qc(root)
+
+
+def _deployment_fixtures(*, history=None, safety=None):
+    model = ModelDescriptor(
+        "mock.pt", "planar", "state_transition", 6, 3, 2,
+        k_train=4, k_safe=4,
+        action_scale_kpa=(100.0,) * 6, channel_map=tuple(range(6)),
+        channel_equalities=((1, 2), (4, 5)),
+        train_dt_nominal_s=0.1, train_dt_measured_s=0.1,
+        train_dt_std_s=0.0)
+    anchor = Anchor(
+        state=((0.0, 0.0), (1.0, 1.0), (2.0, 2.0)),
+        action_history=history or ((0.0,) * 6, (0.0,) * 6), source="test")
+    scene = Scene("planar", (ScenePrimitive(
+        "target_point", "model_normalized", {"xy": [0.2, 0.0], "node": 0}),))
+    safety = safety or SafetyPolicy(
+        pressure_max6=(100.0,) * 6,
+        rise_rate6=(100.0,) * 6, fall_rate6=(100.0,) * 6,
+        ack_timeout_s=0.1)
+    plan = build_plan(
+        model_actions=((1, 2, 9, 3, 4, 8),),
+        channel_map=tuple(range(6)), step_interval_s=0.1,
+        model=model, anchor=anchor, scene=scene, safety=safety)
+    return model, anchor, scene, safety, plan
+
+
+class DeploymentEqualityTest(unittest.TestCase):
+    def test_manifest_round_trip_keeps_equalities(self):
+        manifest = DeployManifest(
+            checkpoint_sha256="deadbeef", action_scale_kpa=(100.0,) * 6,
+            channel_map=tuple(range(6)), channel_equalities=((1, 2), (4, 5)),
+            train_dt_nominal_s=0.1, mask_source="white_on_blue",
+            n_nodes=15, window_size=40, z_dim=16, episode_len=40,
+            action_dim=6, encoder_type="fractional", hidden_dim=128, n_scales=4)
+        restored = DeployManifest.from_dict(manifest.to_dict())
+        self.assertEqual(restored.channel_equalities, ((1, 2), (4, 5)))
+        with self.assertRaisesRegex(ValueError, "identity channel_map"):
+            DeployManifest(
+                checkpoint_sha256="deadbeef", action_scale_kpa=(100.0,) * 6,
+                channel_map=(1, 0, 2, 3, 4, 5), channel_equalities=((1, 2),),
+                train_dt_nominal_s=0.1, mask_source="white_on_blue",
+                n_nodes=15, window_size=40, z_dim=16, episode_len=40,
+                action_dim=6, encoder_type="fractional", hidden_dim=128, n_scales=4)
+
+    def test_build_plan_projects_model_actions_and_records_contract(self):
+        model, anchor, scene, safety, plan = _deployment_fixtures()
+        self.assertEqual(plan.channel_equalities, model.channel_equalities)
+        self.assertEqual(plan.actions6[0], (1.0, 2.0, 2.0, 3.0, 4.0, 4.0))
+        self.assertTrue(validate_plan(plan, model, anchor, scene, safety).ok)
+
+    def test_preflight_rejects_history_and_safety_outside_manifold(self):
+        bad_history = ((0.0,) * 6, (0.0, 1.0, 2.0, 0.0, 0.0, 0.0))
+        model, anchor, scene, safety, plan = _deployment_fixtures(history=bad_history)
+        codes = {issue.code for issue in validate_plan(
+            plan, model, anchor, scene, safety).issues}
+        self.assertIn("history_equality", codes)
+
+        bad_safety = SafetyPolicy(
+            pressure_max6=(100, 100, 90, 100, 100, 100),
+            rise_rate6=(100,) * 6, fall_rate6=(100,) * 6,
+            ack_timeout_s=0.1)
+        model, anchor, scene, _, plan = _deployment_fixtures(safety=bad_safety)
+        codes = {issue.code for issue in validate_plan(
+            plan, model, anchor, scene, bad_safety).issues}
+        self.assertIn("safety_equality", codes)
+
+    def test_seeded_warmup_is_projected_after_jitter(self):
+        actions = warmup_actions(
+            6, 20, seed=7, channel_equalities=((1, 2), (4, 5)))
+        self.assertTrue((actions[:, 1] == actions[:, 2]).all())
+        self.assertTrue((actions[:, 4] == actions[:, 5]).all())
+
+    def test_executor_zeros_when_ack_breaks_equality(self):
+        class BadAckTransport(MockCommandTransport):
+            def send(self, action6, required_groups, timeout_s):
+                receipt = super().send(action6, required_groups, timeout_s)
+                if any(float(value) for value in action6):
+                    applied = list(receipt.applied6)
+                    applied[2] += 1.0
+                    return CommandReceipt(
+                        receipt.command_id, receipt.requested6, tuple(applied),
+                        receipt.t_command, receipt.t_ack, receipt.status)
+                return receipt
+
+        _, _, _, safety, plan = _deployment_fixtures()
+        transport = BadAckTransport()
+        with self.assertRaisesRegex(ExecutionError, "applied6"):
+            PlanExecutor(transport, safety).execute(plan)
+        self.assertEqual(transport.commands[-1], (0.0,) * 6)
+
+    def test_planner_optimizes_four_variables_and_outputs_equal_six_channels(self):
+        import torch
+
+        class TinyModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.dummy = torch.nn.Parameter(torch.zeros(()))
+                self.register_buffer("pc_center", torch.zeros(3))
+                self.register_buffer("pc_scale", torch.ones(3))
+
+            def init_z_from_action(self, action_window):
+                return action_window.new_zeros((action_window.shape[0], 1))
+
+            def forward(self, action_window, state, state_previous, latent):
+                del state_previous
+                delta = action_window[:, -1, 0].view(-1, 1, 1)
+                direction = state.new_tensor((1.0, 0.0, 0.0)).view(1, 1, 3)
+                return {"skeleton": state + delta * direction,
+                        "latent_z": latent}
+
+        model, anchor, scene, safety, _ = _deployment_fixtures()
+        runtime = type("Runtime", (), {
+            "descriptor": model, "model": TinyModel(), "info": {"norm_factor": 1.0},
+        })()
+        with tempfile.TemporaryDirectory(prefix="planar_planner_") as root:
+            plan = OpenLoopShootingPlanner(runtime).plan(
+                anchor=anchor, scene=scene, safety=safety,
+                channel_map=tuple(range(6)), step_interval_s=0.1,
+                output_dir=root,
+                config=ShootingConfig(
+                    horizon=2, n_iter=3, n_restarts=1, learning_rate=0.05))
+        self.assertEqual(plan.metadata["optimizer_action_dim"], 4)
+        for action in plan.actions6:
+            self.assertEqual(action[1], action[2])
+            self.assertEqual(action[4], action[5])
+        self.assertTrue(validate_plan(plan, model, anchor, scene, safety).ok)
 
 
 if __name__ == "__main__":
