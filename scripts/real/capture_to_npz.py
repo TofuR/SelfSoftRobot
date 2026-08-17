@@ -3,8 +3,8 @@
 串联（对应 docs/directions/11 §5）:
   io_video.load_image_views(+去畸变)  →  (V,N,H,W,3)
   segmentation.segment_views          →  masks (V,N,H,W)
-  segmentation.masks_to_skeletons_2d  →  2D 骨架 (V,N,31,2)   [复用 skeleton_2d]
-  triangulation.triangulate_skeletons →  3D 骨架 (N,31,3)     [DLT]
+  segmentation.masks_to_skeletons_2d  →  2D 骨架 (V,T,J,2)    [默认 J=15]
+  triangulation + quality              →  3D 骨架 (T,J,3)      [DLT]
   assemble_npz.save_real_npz          →  data/*.npz           [仿真 schema]
 
 动作同步（§7）：--actions 传入的 (N,A) 实测气压应已按相机帧对齐
@@ -31,7 +31,7 @@ from src.data.real.io_video import load_image_views, make_undistorter  # noqa: E
 from src.data.real.segmentation import (  # noqa: E402
     segment_views, masks_to_skeletons_2d)
 from src.data.real.triangulation import (  # noqa: E402
-    triangulate_skeletons, planar_lift_skeletons)
+    triangulate_skeletons_with_quality, planar_lift_skeletons)
 from src.data.real.assemble_npz import save_real_npz  # noqa: E402
 from src.data.real.preprocess import (  # noqa: E402
     clean_nan_skeleton, align_actions_to_frames)
@@ -102,6 +102,10 @@ def build_parser():
                    help="弯曲平面法向(世界系)；默认=相机朝向(正对安装)")
     p.add_argument("--out", required=True, help="输出 .npz 路径")
     p.add_argument("--max-frames", type=int, default=None)
+    p.add_argument("--n-nodes", type=int, default=15,
+                   help="每条骨架的规范节点数（默认 15）")
+    p.add_argument("--max-reprojection-error-px", type=float, default=5.0,
+                   help="三角化节点允许的平均重投影误差（像素）")
     return p
 
 
@@ -114,8 +118,13 @@ def main():
                   if "view_names" in calib else
                   [f"cam{i}" for i in range(cp.shape[0])])
     undistort = None
-    if "K" in calib and "dist" in calib:
+    if "Ks" in calib and "dists" in calib:
+        undistort = [make_undistorter(K, dist, H, W)
+                     for K, dist in zip(calib["Ks"], calib["dists"])]
+    elif "K" in calib and "dist" in calib:
         undistort = make_undistorter(calib["K"], calib["dist"], H, W)
+    projection_matrices = (calib["projection_matrices"]
+                           if "projection_matrices" in calib else None)
 
     print(">>> 加载多视角图像（+ 去畸变）...")
     if args.view_dirs:
@@ -139,7 +148,10 @@ def main():
     masks = segment_views(images, args.method, color_bounds=color_bounds,
                           gray_thresh=args.gray_thresh,
                           bg_thresh=args.bg_thresh)
-    sk2d = masks_to_skeletons_2d(masks, n_points=31)         # (V,N,31,2)
+    if args.n_nodes < 2:
+        sys.exit("--n-nodes 必须至少为 2")
+    sk2d = masks_to_skeletons_2d(masks, n_points=args.n_nodes)  # (V,T,J,2)
+    visibility = np.isfinite(sk2d).all(axis=-1) & ~np.all(sk2d == 0.0, axis=-1)
 
     if args.planar_lift:
         if cp.shape[0] != 1:
@@ -150,15 +162,31 @@ def main():
             pn = np.asarray(center, float) - np.asarray(eye, float)  # 默认=相机朝向(正对)
         print(">>> 平面升维（射线-平面相交，1-DOF 平面弯曲）→ 3D 骨架...")
         sk3d = planar_lift_skeletons(sk2d, cp, args.plane_point, pn, H, W)
+        positions_2d = np.transpose(sk2d, (1, 0, 2, 3)).astype(np.float32)
+        visibility_tvj = np.transpose(visibility, (1, 0, 2))
+        reprojection_error = np.full(visibility_tvj.shape, np.nan, np.float32)
+        position_confidence = np.isfinite(sk3d).all(axis=-1).astype(np.float32)
+        source_mask = np.where(position_confidence > 0, 1, 0).astype(np.uint8)
     else:
-        print(">>> 多视角三角化 → 3D 骨架 (GT)...")
-        sk3d = triangulate_skeletons(sk2d, cp, H, W)
+        print(">>> 多视角三角化 + 重投影质控 → 3D 骨架监督...")
+        quality = triangulate_skeletons_with_quality(
+            sk2d, cp, H, W, args.max_reprojection_error_px,
+            projection_matrices=projection_matrices)
+        sk3d = quality["positions_3d"]
+        positions_2d = quality["positions_2d"]
+        visibility_tvj = quality["visibility"]
+        reprojection_error = quality["reprojection_error"]
+        position_confidence = quality["position_confidence"]
+        source_mask = quality["source_mask"]
     valid = np.isfinite(sk3d).all(axis=-1).mean()
     print(f"    有效节点比例: {valid:.1%}")
 
     if args.clean_nan:
+        missing_before_clean = ~np.isfinite(sk3d).all(axis=-1)
         sk3d = clean_nan_skeleton(sk3d)
-        print("    已清洗 NaN（沿节点轴插值，整帧失败置零）")
+        source_mask[missing_before_clean] = 3
+        position_confidence[missing_before_clean] = 0.0
+        print("    已清洗 NaN；插值节点 source_mask=3 且不进入 3D 监督")
 
     # 帧时刻：用于把高频气压对齐到相机帧（同一时钟原点）
     if args.frame_times:
@@ -167,6 +195,8 @@ def main():
         frame_times = np.arange(N) / float(args.fps)
     else:
         frame_times = None
+    if frame_times is not None and len(frame_times) != N:
+        sys.exit(f"frame_times 数量 {len(frame_times)} 与图像帧数 {N} 不一致")
     actions = _load_actions(args.actions, N, args.actions_has_timestamps,
                             args.actions_rate, frame_times)
     if frame_times is not None:
@@ -177,11 +207,19 @@ def main():
     else:
         ndi_tip = None
 
-    save_real_npz(args.out, images=images, masks=masks, skeletons_3d=sk3d,
+    # io/segmentation 使用 (V,T,...);训练 schema 明确使用 (T,V,...)
+    images_tv = np.transpose(images, (1, 0, 2, 3, 4))
+    masks_tv = np.transpose(masks, (1, 0, 2, 3))
+    save_real_npz(args.out, images=images_tv, masks=masks_tv, skeletons_3d=sk3d,
                   actions=actions, camera_params=cp, dt=args.dt,
-                  view_names=view_names, ndi_tip_anchor=ndi_tip)
+                  view_names=view_names, ndi_tip_anchor=ndi_tip,
+                  positions_2d=positions_2d, visibility=visibility_tvj,
+                  reprojection_error=reprojection_error,
+                  position_confidence=position_confidence,
+                  source_mask=source_mask, frame_times=frame_times,
+                  projection_matrices=projection_matrices)
     print(f">>> 保存: {args.out}")
-    print("    可直接用 train_unified.py / evaluate 训练评估（仿真 schema）")
+    print("    可用 train_real_3d_transition.py 训练，或由通用 loader 消费")
 
 
 if __name__ == "__main__":

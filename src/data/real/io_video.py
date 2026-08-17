@@ -25,7 +25,7 @@ def make_undistorter(K, dist, H, W):
     if cv2 is None:
         raise RuntimeError(f"需要 opencv：{_CV2_ERR}")
     map1, map2 = cv2.initUndistortRectifyMap(
-        K, dist, None, K, (W, H), cv2.CV_16UC2)
+        K, dist, None, K, (W, H), cv2.CV_16SC2)
 
     def undistort(img):
         return cv2.remap(img, map1, map2, cv2.INTER_LINEAR)
@@ -59,7 +59,8 @@ def load_image_views(view_dirs, undistort=None, max_frames=None):
             if img is None:
                 raise ValueError(f"无法读取图像：{files[v][i]}")
             if undistort is not None:
-                img = undistort(img)
+                fn = undistort[v] if isinstance(undistort, (list, tuple)) else undistort
+                img = fn(img)
             frames.append(img)
         seqs.append(frames)
     n = min(len(s) for s in seqs) if seqs else 0
@@ -81,7 +82,8 @@ def load_video_views(video_paths, undistort=None, max_frames=None):
             if not ok:
                 break
             if undistort is not None:
-                fr = undistort(fr)
+                fn = undistort[len(seqs)] if isinstance(undistort, (list, tuple)) else undistort
+                fr = fn(fr)
             frames.append(fr)
             if max_frames and len(frames) >= max_frames:
                 break

@@ -1,7 +1,8 @@
 """calibrate_cameras.py — 实物多相机标定入口。
 
-从棋盘格图像求内参 + 外参，输出 camera_params(V,10)（项目格式），供
-capture_to_npz.py 与训练消费。
+从棋盘格图像分别求每台相机的内参 + 外参，输出完整 P=K[R|t]，供
+混合 RealSense/普通相机的 capture_to_npz.py 与训练消费。camera_params(V,10)
+继续保存为旧工具兼容字段，但三角化优先使用 projection_matrices。
 
 流程（对应 docs/directions/11 §3）:
   1) 内参：每视角一个【含多张不同姿态棋盘格】的目录 → calibrate_intrinsics
@@ -19,6 +20,7 @@ capture_to_npz.py 与训练消费。
 """
 
 import argparse
+import glob
 import os
 import sys
 
@@ -26,9 +28,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from src.calibration import (  # noqa: E402
-    calibrate_intrinsics, calibrate_camera_params,
-)
+from src.calibration import calibrate_intrinsics, solve_extrinsics  # noqa: E402
+from src.calibration.camera_params_format import extrinsics_to_camera_params  # noqa: E402
 
 
 def build_parser():
@@ -59,25 +60,47 @@ def main():
     view_names = args.view_names or [f"cam{i}" for i in range(V)]
     pattern_size = tuple(args.pattern)
 
-    print(f">>> 内参标定（{V} 视角，每视角用各自目录的棋盘格图）...")
-    intr = calibrate_intrinsics(args.intrinsic_dirs, pattern_size, args.square)
-    print(f"    fx={intr['fx']:.1f} fy={intr['fy']:.1f}  "
-          f"reproj_error={intr['reproj_error']:.3f} px  "
-          f"image_size={intr['image_size']}")
+    print(f">>> 内参标定（{V} 视角，每台相机独立求 K/dist）...")
+    intrinsics = []
+    extensions = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+    for i, directory in enumerate(args.intrinsic_dirs):
+        paths = [path for path in sorted(glob.glob(os.path.join(directory, "*")))
+                 if os.path.splitext(path)[1].lower() in extensions]
+        if len(paths) < 3:
+            sys.exit(f"{view_names[i]} 内参目录至少需要3张图: {directory}")
+        intr = calibrate_intrinsics(paths, pattern_size, args.square)
+        if tuple(intr["image_size"]) != (args.W, args.H):
+            sys.exit(f"{view_names[i]} 标定图尺寸 {intr['image_size']} != {(args.W, args.H)}")
+        intrinsics.append(intr)
+        print(f"    [{view_names[i]}] fx={intr['fx']:.1f} fy={intr['fy']:.1f} "
+              f"error={intr['reproj_error']:.3f}px")
 
-    print(">>> 外参标定（每视角一张【世界原点】棋盘格图）...")
-    res = calibrate_camera_params(intr, args.extrinsic_imgs, pattern_size,
-                                  args.square, args.H, args.W)
-    cp = res["camera_params"]                                  # (V,10)
-    for i, v in enumerate(res["views"]):
-        print(f"    [{view_names[i]}] eye={np.round(v['eye'], 3).tolist()}")
+    print(">>> 外参标定（每视角一张【机器人基座系】棋盘格图）...")
+    rows, projections, rotations, translations = [], [], [], []
+    for i, (intr, image) in enumerate(zip(intrinsics, args.extrinsic_imgs)):
+        ex = solve_extrinsics(intr["K"], intr["dist"], image,
+                              pattern_size, args.square)
+        if not ex["found"]:
+            sys.exit(f"外参求解失败: {view_names[i]} {image}")
+        legacy = extrinsics_to_camera_params(ex["R"], ex["t"], intr["fx"])
+        rows.append([*legacy["eye"], *legacy["center"], *legacy["up"],
+                     legacy["focal"]])
+        projections.append(intr["K"] @ np.hstack([ex["R"], ex["t"][:, None]]))
+        rotations.append(ex["R"])
+        translations.append(ex["t"])
+        print(f"    [{view_names[i]}] eye={np.round(legacy['eye'], 3).tolist()}")
+    cp = np.asarray(rows, np.float32)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    np.savez_compressed(args.out, camera_params=cp, K=intr["K"],
-                        dist=intr["dist"], H=args.H, W=args.W,
-                        fx=intr["fx"], fy=intr["fy"],
+    np.savez_compressed(args.out, camera_params=cp,
+                        Ks=np.stack([item["K"] for item in intrinsics]).astype(np.float32),
+                        dists=np.stack([item["dist"].reshape(-1) for item in intrinsics]).astype(np.float32),
+                        Rs=np.stack(rotations).astype(np.float32),
+                        ts=np.stack(translations).astype(np.float32),
+                        projection_matrices=np.stack(projections).astype(np.float32),
+                        H=args.H, W=args.W,
                         view_names=np.array(view_names))
-    print(f">>> 保存: {args.out}  camera_params{cp.shape}")
+    print(f">>> 保存: {args.out}  camera_params{cp.shape}, P={(V, 3, 4)}")
     print("    下一步: capture_to_npz.py --camera-params", args.out)
 
 
