@@ -18,6 +18,10 @@
 - 单台固定相机继续提供有序的 15 节点二维骨架 GT；
 - 两段各自的曲率可调，能够先研究全身形态控制、末端到达和二维无接触避障。
 
+结合现有 `real_capture` 和 `real_validation` 接口，第一版采用更小的工程改动：模型和 NPZ
+仍保留 6 维动作，只是在 GUI/控制层强制两个通道对相等。数据实际位于一个 4 维动作流形上；
+Planner 用 4 个独立变量构造满足约束的 6 维模型输入。暂不把训练动作压缩成 4 维。
+
 它与 `feat/real-3d-pipeline` 不冲突。三维分支保留 RGBD、多视角和三角化能力；本分支
 回答更早、更基础的问题：在可靠 GT 下，动作历史模型能否支持双段整形和避障。
 
@@ -43,12 +47,13 @@ b ∝ (p0 - q) e0
 | 物理阀/腔道 | 6 | 实际下发和记录的 `c0..c5` |
 | 独立压力变量 | 4 | 每段一个单腔压力和一个等压腔对压力 |
 | 主要弯曲自由度 | 2 | 每段一个有符号差压，决定该段平面曲率 |
+| 第一版模型动作维度 | 6 | 两列成对重复，保持现有训练/部署接口兼容 |
 
 每段的差压 `d = p_single - p_pair` 主要控制曲率；共同压力
 `c = (p_single + 2 p_pair)/3` 还可能改变轴向伸长、刚度和动态响应。因此第一版不应直接
-声称系统只有 2 个动作输入。主模型使用 4 维压力坐标更诚实，也更容易吸收共同压力效应。
+声称系统只有 2 个动作输入。虽然模型文件仍接收 6 列，但必须明确其有效动作流形只有 4 维。
 
-后续可做一个更严格的 2 维消融：每段固定共同压力，只优化差压。但它不是第一版默认。
+后续可比较压缩 4 维模型，以及每段固定共同压力的 2 维消融；它们不是第一版前置条件。
 
 ## 3. 这一步能证明什么，不能证明什么
 
@@ -102,11 +107,12 @@ planarity_threshold_source
 
 只有 `planarity_pass=true` 的序列进入二维训练主集。失败序列保留用于诊断，不静默删除。
 
-## 5. 动作参数化和数据合同
+## 5. 最小的 GUI 等值约束与数据合同
 
 ### 5.1 参数化不能硬编码通道编号
 
-需要一个可配置的 `PlanarActuationMap`。默认假设只是示例：
+GUI 增加两行可选的等值关系，例如“`ch2 跟随 ch1`”“`ch5 跟随 ch4`”。底层仍需要
+一个很小的可配置约束对象，避免只在界面显示值相等而实际命令不同。默认假设只是示例：
 
 ```json
 {
@@ -120,12 +126,27 @@ planarity_threshold_source
 真实 mapping 必须通过接管和小幅单腔试验确认；还要确认两段绕主轴的装配角一致。若第二段
 相对第一段发生轴向旋转，即使各段局部平面弯曲，也不一定处于同一全局平面。
 
-四维模型动作定义为：
+四个独立压力变量与六维动作的关系为：
 
 ```text
 u4 = [s0, q0, s1, q1]
 a6 = [s0, q0, q0, s1, q1, q1]      # 仅为默认 mapping 示例
 ```
+
+约束启用后应统一作用于 Manual、Random、Sweep 和 Replay，不能只修改 Random。follower
+通道的 target/min/max/rise/fall 控件应镜像 leader 并禁用编辑。开始采集前要求等值组当前命令
+已经相等（最简单是先归零）；下发后再次检查 `applied6`，不相等则停止而不是继续采坏数据。
+
+当前自动动作的真实逻辑是：
+
+- Random：每通道在自己的 `[min,max]` 内做有界随机游走；
+- Sweep：每通道在自己的范围内独立往返；
+- seed：控制 Random 的可复现随机序列；
+- rise/fall：在 controller 下发前按真实命令时间间隔逐通道限速；
+- “预生成步数”：只缓存前 N 个动作，耗尽后继续在线生成，不是采集自动停止步数。
+
+因此无需新增“先生成 CSV 再 Replay”的必经流程。若以后确实需要严格固定实验长度，可单独增加
+“最大命令步数”并自动停止；不要改变现有“预生成步数”的语义。
 
 ### 5.2 原始数据仍保存六通道
 
@@ -138,14 +159,13 @@ cam0/              # 主训练视角
 ndi.csv            # 独立末端三维质控
 ```
 
-离线处理额外生成并保存：
+第一版离线处理继续直接使用六维动作，只额外验证并保存约束元数据：
 
 ```text
-actions_planar4: (T,4)
-actions6:         (T,6)
-actuation_map:    JSON/string
-pair_residual:    (T,2)
-planarity_qc:     metadata
+actions:             (T,6)       # 训练输入，等值列保留
+channel_equalities:  JSON/string
+pair_residual:       (T,2)
+planarity_qc:        metadata
 ```
 
 若任一等压对在 `applied6` 命令历史中不一致，转换必须 fail-closed。需要注意：当前 ACK 证明的是
@@ -154,18 +174,20 @@ NDI 和侧视 QC 揭示。
 
 ### 5.3 Planner 必须搜索同一个动作流形
 
-训练只覆盖 `a6 = expand(u4)`，Planner 就只能优化 `u4`，然后统一展开为六通道。不能训练时
-约束等压、规划时又让六个通道独立搜索，否则会立即产生动作 OOD。
+训练只覆盖 `a6 = expand(u4)`，Planner 就只能优化 `u4`，然后展开成六维输入送给现有
+`action_dim=6` 模型。不能训练时约束等压、规划时又让六个通道独立搜索，否则会立即产生
+动作 OOD。
 
-当前 `channel_map` 只适合“一维模型动作映射一个物理通道”，不能表达一个 `q` 同时复制到
-两个阀。后续应新增一般的动作变换合同，而不是在 GUI 或执行器里临时复制数值：
+这一做法保留现有 identity `channel_map=(0,1,2,3,4,5)`，无需放宽工作台目前只接受
+`action_dim=1/3/6`、且禁止重复 channel map 的合同：
 
 ```text
-u_model(4) → ActuationMap.expand → requested6
-applied6   → ActuationMap.compress/validate → history4
+optimizer u4 → EqualityConstraint.expand → model/controller actions6
+applied6   → EqualityConstraint.validate → model history6
 ```
 
-压力上下界和 rise/fall 限制必须在展开后的六维命令上检查；模型历史使用验证后的 4 维坐标。
+压力上下界和 rise/fall 限制仍按六维检查。等值通道使用相同范围和速率，并从相等初值开始，
+逐通道 limiter 才会继续给出相等结果。模型历史继续使用验证后的六维 `applied6`。
 
 ## 6. 最小实施顺序
 
@@ -179,40 +201,42 @@ applied6   → ActuationMap.compress/validate → history4
 
 停止条件：找不到一组在安全范围内稳定保持平面的 mapping，就不要开始二维训练，转回三维分支。
 
-### P1：生成受约束 Replay 动作
+### P1：在现有 GUI 增加等值约束
 
-- 新增 `scripts/real/gen_planar_paired_excitation.py`；
-- 输入 actuation map、每通道上下界、速率、seed 和采样长度；
-- 输出仍为标准 `actions6.csv`，可直接交给现有 Replay；
-- 覆盖单段扫描、两段联合扫描、加载/卸载、不同速率、hold 和平滑随机轨迹；
-- 所有动作天然满足两个等压对，不在 GUI 中靠人工保持相等。
+- 增加最多两组 `follower = leader` 选择，禁止 self-link、环和重复 follower；
+- follower 的 target/min/max/rise/fall 镜像 leader；
+- 约束统一投影 Manual、Random、Sweep 和 Replay 的每一拍；
+- 配置写入 `meta.json` 和 GUI 持久化文件；
+- 启动时检查两组 Modbus 均连接、链接通道初值相等；
+- 保存前验证最终 `applied6` 的 pair residual 为零。
 
-第一版不改 `real_capture` GUI。这样采集层仍只负责原始动作、图像和 NDI。
+Random、Sweep、seed、预生成和每通道安全范围继续复用现有实现，不新增前置动作文件。
+采集层仍只负责原始动作、图像和 NDI，不在其中做骨架或平面判断。
 
-### P2：离线转换为 4 维平面数据
+### P2：离线验证六维受约束数据
 
-- 扩展 `masks_to_transition_npz.py`，接受 `--actuation-map`；
-- 从 `applied6`/`actions6` 验证并压缩成 `actions_planar4`；
+- 扩展 `masks_to_transition_npz.py`，读取 `channel_equalities`；
+- 从 `applied6`/`actions6` 验证等值关系，不压缩动作列；
 - 默认 15 节点，保留现有二维分割、tip 修复和清洗流程；
-- 写入平面 QC、原始六维动作和动作 mapping；
+- 写入平面 QC、六维动作和 equality metadata；
 - 按完整轨迹/激励段切分 train/val/test，不能随机打散相邻帧。
 
 ### P3：训练与可信视野
 
 - 先训练 GT-observed，用于检查数据和单步模型；
 - 再训练窗口化 OpenLoop，作为部署主线；
-- 模型 `action_dim=4`，状态仍为 `(15,3)`，其中第三维为零；
+- 模型 `action_dim=6`，状态仍为 `(15,3)`，其中第三维为零；
 - 对每段动作历史分别覆盖加载、卸载和 hold；
 - 在从未出现过的联合轨迹上评估单步误差、rollout 漂移和 `K_safe`。
 
-可以增加固定共同压力的 2 维动作作为消融，但不能用它替代 4 维主数据。
+压缩 4 维模型和固定共同压力的 2 维动作可作为后续消融，不阻塞第一版。
 
 ### P4：受约束规划和执行
 
-- 在部署 manifest 保存 actuation map、4 维动作尺度、六维安全范围和 pair invariant；
-- `OpenLoopShootingPlanner` 优化 4 维动作；
+- 在部署 manifest 保存 channel equalities、六维动作尺度、安全范围和 pair invariant；
+- `OpenLoopShootingPlanner` 内部优化 4 个独立变量，展开后送入六维模型；
 - preflight 在 6 维展开后检查压力、速率、通信组和 pair equality；
-- 执行历史由真实 `applied6` 压缩回 4 维，失败时归零并重新锚定/规划；
+- 执行历史保留真实 `applied6`，pair 校验失败时归零并重新锚定/规划；
 - NDI 继续只做评价和离面安全监视，不进入模型或 Planner。
 
 ### P5：实机任务递进
@@ -257,27 +281,28 @@ Planner 的碰撞代价要覆盖节点之间的线段/胶囊，而不只检查 1
 正式实施时优先新增小而独立的模块，不把约束散落在 GUI 中：
 
 ```text
-real_validation/contracts/actuation_map.py          # 4↔6 映射和 invariant
-scripts/real/gen_planar_paired_excitation.py        # 受约束 Replay 生成
-scripts/real/masks_to_transition_npz.py             # 4维动作压缩与 QC
-real_validation/planning/openloop_planner.py        # 在模型动作空间优化
-real_validation/execution/preflight.py              # 展开后的六维安全检查
-real_validation/execution/executor.py                # applied6→history4
+real_capture/main_capture.py                         # 两组 GUI follower=leader
+real_capture/valve_control.py                        # 小型 equality 投影/校验
+real_capture/recorder.py                             # meta 和每拍 applied6 invariant
+scripts/real/masks_to_transition_npz.py              # 六维 pair 校验与 QC
+real_validation/contracts/deploy_manifest.py         # equality metadata
+real_validation/planning/openloop_planner.py         # 4变量展开为6维模型输入
+real_validation/execution/preflight.py               # 六维安全与 equality 检查
 scripts/evaluation/eval_planarity.py                 # NDI/侧视平面性报告
 tests/test_planar_actuation.py
 ```
 
-`real_capture/recorder.py`、相机线程和原始目录合同原则上不需要改变。只有确认现有日志没有保存
-足够的 `applied6` 信息时，才在采集层补字段；不能把动作压缩、平面判断或骨架处理塞进采集线程。
+相机线程和原始目录结构不需要改变；`recorder.py` 只增加 equality 元数据和 fail-closed 校验。
+不能把动作压缩、平面判断或骨架处理塞进采集线程。
 
 ## 9. 第一版验收门
 
 只有以下条件全部满足，才进入真实避障：
 
 - 两段通道 mapping 和装配方向已经记录；
-- Replay 的每一拍都满足等压对 invariant；
+- Manual/Random/Sweep/Replay 的每一拍都满足等压对 invariant；
 - 单段和双段联合动作的平面 QC 均通过；
-- 训练、验证和 Planner 使用同一个 4→6 actuation map；
+- 训练数据、Planner 和执行都满足同一个六维 equality invariant；
 - OpenLoop 的真实验证误差在认证的 `K_safe` 内；
 - 碰撞检查覆盖整条节点间胶囊；
 - 障碍物几何确实代表二维平面中的不可穿越区域；
