@@ -34,6 +34,10 @@ from scripts.real.masks_to_transition_npz import (
     validate_action_equalities,
     validate_equality_action_maxes,
 )
+from scripts.evaluation.eval_planarity import (
+    evaluate_planarity,
+    load_ndi_xyz,
+)
 from real_validation.contracts.deploy_manifest import DeployManifest
 from real_validation.contracts.models import (
     Anchor,
@@ -354,6 +358,42 @@ class DeploymentEqualityTest(unittest.TestCase):
             self.assertEqual(action[1], action[2])
             self.assertEqual(action[4], action[5])
         self.assertTrue(validate_plan(plan, model, anchor, scene, safety).ok)
+
+
+class PlanarityQcTest(unittest.TestCase):
+    def test_baseline_plane_and_p95_pass_are_reported(self):
+        import numpy as np
+
+        points = np.array([
+            [0, 0, 10], [1, 0, 10], [2, 0, 10],
+            [3, 0, 10.2], [4, 0, 9.8],
+        ], dtype=float)
+        report = evaluate_planarity(
+            points, (0, 0, 1), 0.25, baseline_samples=3, pass_stat="p95")
+        self.assertTrue(report["planarity_pass"])
+        self.assertEqual(report["valid_samples"], 5)
+        self.assertAlmostEqual(report["plane_point_mm"][2], 10.0)
+        self.assertAlmostEqual(report["planarity_tip_abs_mm_max"], 0.2)
+
+    def test_failed_threshold_and_invalid_normal_are_rejected_or_flagged(self):
+        points = [[0, 0, 0], [0, 0, 2]]
+        report = evaluate_planarity(
+            points, (0, 0, 1), 0.5, plane_point=(0, 0, 0), pass_stat="max")
+        self.assertFalse(report["planarity_pass"])
+        with self.assertRaisesRegex(ValueError, "零向量"):
+            evaluate_planarity(points, (0, 0, 0), 1.0)
+
+    def test_ndi_loader_filters_nonfinite_and_low_quality_rows(self):
+        with tempfile.TemporaryDirectory(prefix="ndi_qc_") as root:
+            path = Path(root) / "ndi.csv"
+            path.write_text(
+                "t_sec,ndi0_x,ndi0_y,ndi0_z,ndi0_quality\n"
+                "0,1,2,3,0.9\n"
+                "1,nan,2,3,0.9\n"
+                "2,4,5,6,0.1\n", encoding="utf-8")
+            points, total = load_ndi_xyz(path, min_quality=0.5)
+            self.assertEqual(total, 3)
+            self.assertEqual(points.tolist(), [[1.0, 2.0, 3.0]])
 
 
 if __name__ == "__main__":
