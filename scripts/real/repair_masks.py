@@ -1,4 +1,7 @@
-"""repair_masks.py — mask 级修复（**独立于 node 轨道**, 不重骨架化）。
+"""repair_masks.py — LEGACY：静态近端段的 mask 级修复。
+
+只用于复现旧的单段驱动实验；六通道通用流程使用 prepare_sam2_anchors.py 自动候选
+锚点，再由 SAM2 传播，不得把任一机器人段替换成跨帧静态共识。
 
 为什么需要: 形态预测目标是 mask, 但当前所有清洗(clean_outlier/stabilize_static/tip_fix)
 都在 **node 层**(骨架化后)。mask 本身的分割误差未修——如 f4080 静态段顶部被截成 w=17
@@ -14,8 +17,8 @@
 独立轨道: 只产 derived/<seq>/masks_repaired/, 不碰 node npz(那是另一条清洗线)。
 
 用法:
-  python scripts/real/repair_masks.py --seq seq_20260627_163921
-  python scripts/real/repair_masks.py --seq ... --joint-row 95   # 手动指定关节行
+  python scripts/real/repair_masks.py --seq seq_20260627_163921 \
+    --allow-legacy-static-proximal
 """
 import argparse
 import glob
@@ -345,12 +348,17 @@ def main(argv=None):
     pa.add_argument("--masks-dir", default=None, help="mask 目录(默认 derived/<seq>/masks)")
     pa.add_argument("--out-dir", default=None, help="输出(默认 derived/<seq>/masks_repaired)")
     pa.add_argument("--joint-row", type=int, default=None, help="手动指定关节行(默认自动检测)")
+    pa.add_argument("--allow-legacy-static-proximal", action="store_true",
+                    help="确认输入是近端段静止的旧实验")
     pa.add_argument("--actuated", action=argparse.BooleanOptionalAction, default=True,
                     help="动作段时间插值修复(半mask/缺块, 默认开; --no-actuated 关闭)")
     pa.add_argument("--hand", action=argparse.BooleanOptionalAction, default=True,
                     help="整帧手污染/管茬时间插值(area>1.5×中位, 默认开; --no-hand 关闭)")
     pa.add_argument("--limit", type=int, default=None, help="只处理前 N 帧(预览)")
     args = pa.parse_args(argv)
+    if not args.allow_legacy_static_proximal:
+        pa.error("这是静态近端段LEGACY脚本；旧实验必须显式传 "
+                 "--allow-legacy-static-proximal，新流程请用prepare_sam2_anchors.py")
 
     masks_dir = args.masks_dir or os.path.join(
         PROJECT_ROOT, "real_capture", "data", "derived", args.seq, "masks")

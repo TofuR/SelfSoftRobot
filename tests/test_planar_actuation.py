@@ -262,7 +262,7 @@ class PreprocessingEqualityTest(unittest.TestCase):
             path = Path(root) / "train" / "seq.npz"
             save_npz(
                 str(path), np.zeros((2, 3, 15)), np.zeros((2, 6)),
-                n_points=15, tip_fix=True,
+                n_points=15, tip_fix=True, endpoint_fix=True,
                 channel_equalities=((1, 2), (4, 5)),
                 pair_residual_max=[0.0, 0.0],
                 planarity_qc={"planarity_pass": True},
@@ -270,6 +270,7 @@ class PreprocessingEqualityTest(unittest.TestCase):
                 action_expansion=(0, 1, 1, 2, 3, 3))
             with np.load(path) as data:
                 self.assertEqual(data["actions"].shape, (2, 6))
+                self.assertTrue(bool(data["endpoint_fix"]))
                 self.assertEqual(data["channel_source6"].tolist(), [0, 1, 1, 3, 4, 4])
                 self.assertEqual(data["model_action_channels"].tolist(), [0, 1, 3, 4])
                 self.assertEqual(data["action_expansion6"].tolist(), [0, 1, 1, 2, 3, 3])

@@ -66,13 +66,18 @@ python scripts/real/segment_batch.py --seq real_capture/data/raw/seq_20260627_16
 实际生效参数:`sat=100, val=100, diff=25, dil=35, open_k=5, close_k=15, min_area_frac=0.003, min_h_frac=0.15, n_bg=500`。
 管线:`HSV白 ∩ dilate(背景差) → OPEN去细管 → CLOSE填体 → fill_holes → 最大连通区`。输出 `derived/<seq>/masks/` + `bg_median.png` + `segment_meta.json`。
 
-**② 启发式修复**(跨帧,离线):
+**② 启发式修复（LEGACY：仅近端段静止旧数据）**:
 
 ```bash
-python scripts/real/repair_masks.py --seq seq_20260627_163921
+python scripts/real/repair_masks.py --seq seq_20260627_163921 \
+  --allow-legacy-static-proximal
 ```
 
 三步:手干扰帧插值(默认开)、静态段宽度共识(无条件)、动作段插值(默认开)。输出 `derived/<seq>/masks_repaired/`。
+
+新六通道数据不要运行②；先按
+[`general_6ch_postprocess.md`](general_6ch_postprocess.md)运行
+`prepare_sam2_anchors.py`生成动作无关的候选锚点。
 
 **③ SAM2 视频分割**(★ **当前训练数据的来源**,跨帧双向,离线):
 
@@ -93,7 +98,9 @@ python scripts/real/masks_to_transition_npz.py \
     --out-root data/real_seq/seq_20260627_163921_n15_sam2_clean --n-points 15
 ```
 
-骨架 = 逐行质心 + 弧长均匀重采样到 15 点 + **tip_fix**(末端垂直切片修正,实物 34% 帧受益、末端误差 -71%)。唯一实现 `real_validation/perception/skeleton.py`。
+旧数据骨架 = 逐行质心 + tip_fix。新六通道默认
+`--skeleton-method skeletonize --segment-lengths 1,1`，使用细化主路径和明确关节节点；详见
+`general_6ch_postprocess.md`。
 
 产出 npz(`np.savez_compressed`):
 
@@ -104,13 +111,15 @@ python scripts/real/masks_to_transition_npz.py \
 | `n_points` / `tip_fix` | 15 / True |
 | 切分 | 首 80% train / 末 20% val,时间连续不 shuffle(防乱序泄漏) |
 
-### 2.4 清洗(`clean_transition_npz.py`)
+### 2.4 Legacy清洗(`clean_transition_npz.py`)
 
 ```bash
-python scripts/real/clean_transition_npz.py --seq seq_20260627_163921_n15_sam2
+python scripts/real/clean_transition_npz.py --seq seq_20260627_163921_n15_sam2 \
+  --allow-legacy-static-proximal
 ```
 
-静态段跨帧中位共识(关节绝对位置锚定,node 漂移鲁棒)+ 动作段离群插值(`--act-dev-thresh 60`)。**完全离线**(需全序列/未来帧)。对 SAM2 数据近 no-op(离群 3+1 帧)。
+该步骤只用于旧近端静止数据。新六通道数据的通用QC已经包含在
+`masks_to_transition_npz.py`，不得再运行本节静态共识。
 
 ### 2.5 归一化(训练时,不进 npz)
 
@@ -238,7 +247,7 @@ python real_validation/perception_probe.py --source dir --frames-dir <帧目录>
 |---|---|---|
 | 1 | **配准参考帧须取无臂静态背景** | 用 `bg_median.png`(含运动臂)当参考会混入臂运动假位移 ~3.4px → 误判"相机动了" |
 | 2 | **raw(white_on_blue)mask 质量参差** | 探针扫描大量帧段被门控拒;这是选 SAM2 的动机。在线阈值分割时门控必须兜底 |
-| 3 | **在线 SAM2 前向 vs 训练双向差异未量化** | 训练锚帧来自 masks_repaired,在线无此来源;GPU 单帧延迟未实测(0.2s 是预算) |
+| 3 | **在线 SAM2 前向 vs 训练双向差异未量化** | 训练锚帧现由`prepare_sam2_anchors`自动生成；在线流式延迟与双向传播差异仍需量化 |
 | 4 | **动作单位链** | kPa → /action_scale_kpa → [0,1] → /norm_factor → 模型。换算只允许出现在 valve/planner 两处 |
 | 5 | **冷启动需 40 步真实动作(≈8.1s)** | 模型从没见过零填充窗口,且分数阶 GL 核把最大权重压在窗口最旧格 |
 | 6 | **z 无 GT,接管时重置误差不可消除** | 锚定时提示"迟滞潜变量已重置,首窗口精度略降" |
@@ -311,29 +320,30 @@ python scripts/real/gen_3chamber_excitation.py \
 
 ```bash
 SEQ=real_capture/data/raw/seq_YYYYMMDD_HHMMSS
-# 1) 阈值分割(须显式 --val 100)
-python scripts/real/segment_batch.py --seq $SEQ --val 100
-# 2) SAM2(训练数据来源;可选但推荐)
+# 1) 动作无关候选mask、自动锚点评分和逐阶段QC
+python scripts/real/prepare_sam2_anchors.py --seq $SEQ --val 100 --chunk-size 200
+# 2) SAM2(训练数据来源)
 CUDA_VISIBLE_DEVICES=3 python sam2/segment_video_full.py --seq $(basename $SEQ)
-# 3) 骨架 + npz(--action-channels 指定驱动通道)
+# 3) 通用主路径骨架 + 六维NPZ(Dataset按合同投影动作)
 python scripts/real/masks_to_transition_npz.py --seq $SEQ \
     --masks-dir sam2/masks/$(basename $SEQ)_full \
-    --out-root data/real_seq/$(basename $SEQ)_n15_sam2_clean \
-    --n-points 15 --action-channels 0,1,2,3,4,5
-# 4) 清洗
-python scripts/real/clean_transition_npz.py --seq $(basename $SEQ)_n15_sam2
+    --out-root data/real_seq/$(basename $SEQ)_n15_sam2 \
+    --n-points 15 --skeleton-method skeletonize \
+    --segment-lengths 1,1 --action-channels auto
 ```
 
-> **验证数据正确**:npz `actions` shape = (T, action_dim) ∈ [0,1];`positions` = (T,3,15);train/val 连续切分(首 80%/末 20%)。**3 腔道若使臂离平面,单相机 2D 骨架假设失效** —— 需先确认运动平面性,必要时升级多视角三角化。
+> **验证数据正确**:npz `actions`始终为`(T,6)`且位于[0,1]，
+> `model_action_dim=len(model_action_channels)`；`positions=(T,3,15)`，关节默认`node7`。
+> 查看候选、SAM2和骨架三个QC目录后再训练。**六通道若使臂离平面，单相机2D骨架假设失效**。
 
 ### 11.4 训练(gt → open_loop)
 
 ```bash
-DATA=data/real_seq/$(basename $SEQ)_n15_sam2_clean/train
+DATA=data/real_seq/$(basename $SEQ)_n15_sam2/train
 CUDA_VISIBLE_DEVICES=1 python scripts/training/train_transition.py --mode gt --data_dir $DATA
 CUDA_VISIBLE_DEVICES=1 python scripts/training/train_transition.py --mode open_loop --data_dir $DATA
 ```
-> `train_transition.py` 自动按 `action_dim` 过滤 gt checkpoint 热启动;action_dim=3/6 无需改代码。确认 `config.json` 的 `action_dim` 与 `data_dirs.sequence`。
+> `train_transition.py`自动从NPZ合同确定1–6D模型动作并过滤匹配的gt checkpoint。
 
 ### 11.5 视野认证 + 部署契约
 

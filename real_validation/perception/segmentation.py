@@ -76,10 +76,10 @@ def build_median_background(cam_dir, n_bg=500):
     return build_median_background_from_frames(frames, n_bg=len(idx)), fs
 
 
-def segment_white_on_blue(bgr, bg_gray, sat=100, val=120, diff=25, dil=35,
-                          open_k=5, close_k=15,
-                          min_area_frac=0.003, min_h_frac=0.15):
-    """白半透明硅胶臂（+ 蓝静态背景 + 白气管）专用分割。
+def segment_white_on_blue_stages(bgr, bg_gray, sat=100, val=120, diff=25, dil=35,
+                                 open_k=5, close_k=15,
+                                 min_area_frac=0.003, min_h_frac=0.15):
+    """白半透明硅胶臂候选分割，并返回可审计的全部中间阶段。
 
     管线（diag 校准）:
       HSV白(S<sat,V>val) ∩ dilate(背景差, dil)
@@ -89,7 +89,10 @@ def segment_white_on_blue(bgr, bg_gray, sat=100, val=120, diff=25, dil=35,
     半透明臂内部与蓝底对比低 → 背景差只抓边；HSV白 抓臂主体 + 杂白(座/眩光)。
     两者交集 = 动且白 = 臂；OPEN 按宽度去细管；取最大连通区。
 
-    Returns: (H,W) uint8 {0,1}。
+    该函数只利用图像，不读取动作通道，因此适用于任意 ``action_dim``。返回字典：
+    ``white``、``moved``、``gated``、``morph``、``final``，每项均为
+    ``(H,W) uint8 {0,1}``。``final`` 适合用作 SAM2 自动锚点候选；中间结果供
+    离线 QC 定位阈值、背景差或形态学在哪一步失败。
     """
     if cv2 is None:
         raise RuntimeError(f"需要 opencv：{_CV2_ERR}")
@@ -100,12 +103,14 @@ def segment_white_on_blue(bgr, bg_gray, sat=100, val=120, diff=25, dil=35,
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     moved = (cv2.absdiff(gray, bg_gray) > diff).astype(np.uint8)
     moved = cv2.dilate(moved, np.ones((dil, dil), np.uint8)) if dil > 1 else moved
-    m = (white & moved).astype(np.uint8)
+    gated = (white & moved).astype(np.uint8)
+    m = gated.copy()
     if open_k > 1:
         m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((open_k, open_k), np.uint8))
     if close_k > 1:
         m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((close_k, close_k), np.uint8))
-    m = binary_fill_holes(m > 0).astype(np.uint8)
+    morph = binary_fill_holes(m > 0).astype(np.uint8)
+    m = morph
     n, lbl, stats, _ = cv2.connectedComponentsWithStats(m, 8)
     out = np.zeros((H, W), np.uint8)
     if n > 1:
@@ -115,7 +120,24 @@ def segment_white_on_blue(bgr, bg_gray, sat=100, val=120, diff=25, dil=35,
         if cands:
             cands.sort(reverse=True)
             out[lbl == cands[0][1]] = 1
-    return out
+    return {
+        "white": white,
+        "moved": moved,
+        "gated": gated,
+        "morph": morph,
+        "final": out,
+    }
+
+
+def segment_white_on_blue(bgr, bg_gray, sat=100, val=120, diff=25, dil=35,
+                          open_k=5, close_k=15,
+                          min_area_frac=0.003, min_h_frac=0.15):
+    """白半透明硅胶臂候选分割；兼容原公开接口，仅返回最终 mask。"""
+    return segment_white_on_blue_stages(
+        bgr, bg_gray, sat=sat, val=val, diff=diff, dil=dil,
+        open_k=open_k, close_k=close_k,
+        min_area_frac=min_area_frac, min_h_frac=min_h_frac,
+    )["final"]
 
 
 def segment_views(images_bgr, method="backlight", bg=None,

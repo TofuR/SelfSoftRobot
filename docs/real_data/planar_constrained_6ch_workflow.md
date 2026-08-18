@@ -1,5 +1,8 @@
 # 六通道来源约束平面实验：实际运行流程
 
+> RGB自动候选锚点、SAM2传播、中轴分段骨架、逐阶段QC及定量评价的当前通用实现见
+> [`general_6ch_postprocess.md`](general_6ch_postprocess.md)。本文重点保留动作来源映射和硬件合同。
+
 > 实施分支：`feat/planar-constrained-control`  
 > 目标：保留六维硬件与原始数据，用通用 `channel_source6` 描述任意同源通道组；
 > 当前双段实验配置恰好形成四维模型动作，先完成单相机 15 节点二维整形与避障，再扩展真实三维。

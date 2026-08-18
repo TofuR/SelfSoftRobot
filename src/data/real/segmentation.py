@@ -13,6 +13,7 @@ from real_validation.perception.segmentation import (  # noqa: F401
     segment_color,
     segment_views,
     segment_white_on_blue,
+    segment_white_on_blue_stages,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "segment_color",
     "segment_views",
     "segment_white_on_blue",
+    "segment_white_on_blue_stages",
 ]

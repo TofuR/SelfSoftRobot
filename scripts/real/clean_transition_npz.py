@@ -1,4 +1,7 @@
-"""clean_transition_npz.py — 增强清洗实物 transition npz（绝对位置锚定静态段共识）。
+"""clean_transition_npz.py — LEGACY：静态近端段专用清洗。
+
+本脚本只用于复现“近端段静止、仅末端段驱动”的旧实验。六通道通用流程不得运行；
+新主线在 masks_to_transition_npz.py 中仅做无静态段假设的提取失败修复和时间QC。
 
 用户选定方案（共识/均值）：静态段(关节以上)用跨帧中位共识替换。
 
@@ -22,8 +25,8 @@
 输出: data/real_seq/<seq>_clean/{train,val}/*.npz  (不覆盖原文件) + qc/
 
 用法:
-  python scripts/real/clean_transition_npz.py --seq seq_20260627_163921
-  python scripts/real/clean_transition_npz.py --seq ... --act-dev-thresh 60
+  python scripts/real/clean_transition_npz.py --seq seq_20260627_163921 \
+    --allow-legacy-static-proximal
 """
 
 import argparse
@@ -37,7 +40,7 @@ import numpy as np
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
-from scripts.real.masks_to_transition_npz import (  # noqa: E402
+from scripts.real.legacy.static_proximal import (  # noqa: E402
     stabilize_static_region, detect_joint_xy)
 
 
@@ -123,7 +126,8 @@ def process_npz(npz_path, out_path, act_dev_thresh, act_nodes, joint_xy=None):
     d = np.load(npz_path)
     pos = d['positions'].astype(np.float32)
     act = d['actions'].astype(np.float32)
-    _meta = {k: d[k].item() for k in ('n_points', 'tip_fix') if k in d}   # 保留数据配置元数据
+    _meta = {k: np.asarray(d[k]).copy() for k in d.files
+             if k not in ('positions', 'actions')}
     if joint_xy is None:
         joint_xy, peak_node = detect_joint_xy(pos)
     else:
@@ -143,8 +147,8 @@ def process_npz(npz_path, out_path, act_dev_thresh, act_nodes, joint_xy=None):
     print(f"    残余离群(动作段>{act_dev_thresh}px)插值: {n_out} 帧")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     kw = dict(positions=cleaned.astype(np.float32), actions=act.astype(np.float32))
-    for k, v in _meta.items():           # 透传 n_points/tip_fix 元数据
-        kw[k] = np.array(v)
+    for k, v in _meta.items():           # 完整透传动作、骨架和分段合同
+        kw[k] = v
     np.savez_compressed(out_path, **kw)
     print(f"    → {os.path.relpath(out_path)}")
     return cleaned, raw, bad, joint_xy
@@ -162,9 +166,14 @@ def main(argv=None):
                     help='动作段核心节点数(用于残余离群检测;默认None=0.6·N 自适应)')
     pa.add_argument('--joint-col', type=float, default=None, help='手动指定关节 col(覆盖自动检测)')
     pa.add_argument('--joint-row', type=float, default=None, help='手动指定关节 row(覆盖自动检测)')
+    pa.add_argument('--allow-legacy-static-proximal', action='store_true',
+                    help='确认输入确实是近端段静止的旧实验；否则拒绝运行')
     pa.add_argument('--cam0', default=None, help='原图目录(默认 real_capture/data/raw/<seq>/cam0)')
     pa.add_argument('--masks-dir', default=None, help='mask 目录(QC;默认 derived/<seq>/masks)')
     args = pa.parse_args(argv)
+    if not args.allow_legacy_static_proximal:
+        pa.error('这是静态近端段LEGACY脚本；旧实验必须显式传 '
+                 '--allow-legacy-static-proximal，六通道通用流程请直接使用masks_to_transition_npz')
 
     in_root = args.in_root or os.path.join(PROJECT_ROOT, 'data', 'real_seq', args.seq)
     out_root = args.out_root or os.path.join(PROJECT_ROOT, 'data', 'real_seq', args.seq + '_clean')

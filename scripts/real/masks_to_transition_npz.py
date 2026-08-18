@@ -3,7 +3,7 @@
 为什么不需要标定（核心）:
   state_transition 模型的 state 是 3D 中心线骨架 s∈R^{N×3}（每个节点 3 坐标），
   模型只消费 (prev_skeleton, action) → next_skeleton，**不碰图像、不需要相机参数**。
-  本序列是单相机 1-DOF 平面弯曲，直接用 mask 的 2D 图像骨架作 state（第 3 维 z=0）：
+  对满足平面约束的单相机实验，直接用 mask 的 2D 图像骨架作 state（第 3 维 z=0）：
     positions[t,:,i] = [col_i, row_i, 0]
   模型在归一化图像坐标空间学动力学；GT-transition vs open-loop 的"预测方法"对比
   在该空间同样有效（对比的是框架，不是度量 3D 精度）。
@@ -17,17 +17,18 @@ action 归一化（**[0,1]，不到负数**）:
   与此无关，保留。
 
 输入:
-  --masks-dir  derived/<seq>/masks/      (segment_batch 产物，0/255 PNG)
+  --masks-dir  sam2/masks/<seq>_full/    (SAM2 产物，0/255 PNG)
   --actions    raw/<seq>/actions6.csv    (表头 t_sec,c0..c5)
   --action-channels auto                 (约束序列自动得到 0,1,3,4 模型视图)
 输出:
   <out-root>/train/<seq>_train.npz  +  <out-root>/val/<seq>_val.npz
   每个 npz: positions:(T,3,15) float32, actions:(T,6) float32 (已归一化到 [0,1])
-  Dataset 再按 model_action_channels 投影为模型使用的四维动作。
+  Dataset 再按 model_action_channels 投影为模型使用的 1–6 维动作。
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import glob
 import json
 import os
@@ -38,7 +39,9 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from src.utils.skeleton_2d import batch_extract_skeleton_2d  # noqa: E402
+from real_validation.perception.skeleton import (  # noqa: E402
+    extract_centerline_2d,
+)
 
 
 EQUALITY_TOLERANCE_KPA = 0.5
@@ -224,25 +227,95 @@ def action_max_per_channel(seq_dir, channels, actions):
     return np.array(maxes, np.float32)
 
 
-def masks_to_positions(mask_dir, n_points=31, tip_fix=True):
+def masks_to_positions(mask_dir, n_points=31, tip_fix=True, endpoint_fix=True,
+                       skeleton_method="row_centroid", segment_lengths=(1.0,),
+                       base_anchor_xy=None, return_qc=False):
     """mask PNG → (T,3,N) positions [col,row,0]。空 mask → 全 0 骨架(下游跳过)。
 
-    tip_fix=True(默认): 末端 node0 做"垂直于局部轴切片"修正, 修弯管 cap 倾斜导致的
-    node0 落角落 + node0-1-2 折角(实物 34% 帧受益, 末端误差 -71%)。详见
-    src/utils/skeleton_2d.extract_skeleton_2d 的 tip_fix 参数。
+    skeletonize/medial_axis 默认使用 endpoint_fix 同时把 tip/base 延伸到端帽宽边中心；
+    tip_fix 只保留给旧 row_centroid 的单端垂直切片兼容逻辑。
     """
     fs = sorted(glob.glob(os.path.join(mask_dir, "*.png")))
     if not fs:
         sys.exit(f"无 mask: {mask_dir}")
-    masks = np.stack([(cv2.imread(f, cv2.IMREAD_GRAYSCALE) > 127).astype(np.uint8)
-                      for f in fs])                         # (T,H,W)
-    sk2d = batch_extract_skeleton_2d(masks, n_points, tip_fix=tip_fix)  # (T,N,2) [col,row]
+    skels = []
+    qc = []
+    for index, path in enumerate(fs):
+        mask = (cv2.imread(path, cv2.IMREAD_GRAYSCALE) > 127).astype(np.uint8)
+        skel, info = extract_centerline_2d(
+            mask, n_points=n_points, method=skeleton_method,
+            segment_lengths=segment_lengths, base_anchor_xy=base_anchor_xy,
+            tip_fix=tip_fix, endpoint_fix=endpoint_fix, return_info=True)
+        skels.append(skel)
+        qc.append({
+            "index": index,
+            "frame": int(os.path.splitext(os.path.basename(path))[0]),
+            "mask_area": int(mask.sum()),
+            **info,
+        })
+    sk2d = np.asarray(skels, dtype=np.float32)
     T, N, _ = sk2d.shape
     positions = np.zeros((T, 3, N), np.float32)
     positions[:, 0, :] = sk2d[:, :, 0]                      # col → x
     positions[:, 1, :] = sk2d[:, :, 1]                      # row → y
-    # z=0（图像平面；1-DOF 平面弯曲在单相机下投影即主体形变）
-    return positions, fs
+    # z=0（图像平面；动作维度与该几何表示相互独立）
+    result = (positions, fs, qc) if return_qc else (positions, fs)
+    return result
+
+
+def temporal_skeleton_qc(positions, extraction_qc):
+    """通用时间QC：只标记，不假设某一段静止，也不自动删除极端合法形态。"""
+    T = positions.shape[0]
+    xy = positions[:, :2, :].transpose(0, 2, 1)
+    residual = np.zeros(T, dtype=np.float32)
+    if T >= 3:
+        midpoint = 0.5 * (xy[:-2] + xy[2:])
+        residual[1:-1] = np.linalg.norm(xy[1:-1] - midpoint, axis=-1).max(axis=1)
+    lengths = np.linalg.norm(np.diff(xy, axis=1), axis=-1).sum(axis=1)
+    hard_invalid = np.array([
+        not bool(item.get("success")) or not np.isfinite(xy[i]).all()
+        for i, item in enumerate(extraction_qc)
+    ], dtype=bool)
+    positive_lengths = lengths[lengths > 0]
+    median_length = float(np.median(positive_lengths)) if len(positive_lengths) else 0.0
+    if median_length > 0:
+        # 软体段会弯曲但物理弧长不会瞬间减半；这是明确的主路径提取失败，可自动修复。
+        hard_invalid |= lengths < 0.5 * median_length
+
+    def robust_flag(values, z=8.0):
+        values = np.asarray(values, dtype=float)
+        med = float(np.median(values))
+        mad = float(np.median(np.abs(values - med)))
+        scale = max(1.4826 * mad, 1.0)
+        return np.abs(values - med) > z * scale
+
+    suspicious = robust_flag(lengths) | robust_flag(residual)
+    for index, item in enumerate(extraction_qc):
+        item["resampled_length_px"] = float(lengths[index])
+        item["temporal_midpoint_residual_px"] = float(residual[index])
+        item["hard_invalid"] = bool(hard_invalid[index])
+        item["suspicious"] = bool(suspicious[index] and not hard_invalid[index])
+    return hard_invalid, suspicious
+
+
+def interpolate_flagged_frames(positions, flagged):
+    """只用于明确指定的坏帧；完整六通道形态不会按全局中位被误删。"""
+    out = positions.copy()
+    good = np.where(~np.asarray(flagged, dtype=bool))[0]
+    if not len(good):
+        return out
+    for index in np.where(flagged)[0]:
+        before = good[good < index]
+        after = good[good > index]
+        if len(before) and len(after):
+            lo, hi = before[-1], after[0]
+            alpha = (index - lo) / max(1, hi - lo)
+            out[index] = positions[lo] * (1 - alpha) + positions[hi] * alpha
+        elif len(before):
+            out[index] = positions[before[-1]]
+        elif len(after):
+            out[index] = positions[after[0]]
+    return out
 
 
 def clean_outlier_skeletons(positions, deviation_px=80):
@@ -275,92 +348,13 @@ def clean_outlier_skeletons(positions, deviation_px=80):
     return out, int(bad.sum()), bad
 
 
-def stabilize_static_region(positions, joint_xy, n_static=None):
-    """绝对位置锚定的静态段共识稳定（用户选定：均值/共识方案）。
-
-    n_static 为 None 时按 N 自适应(max(4, 0.4·N)), 任意 n_points 不需手调。
-
-    双段臂: node0(图底/末端)..关节..node30(图顶/base)。只驱动末端 1-DOF → 动作段=
-    node0..关节(保留每帧真实弯曲)；关节及以上(近端段)静止。但骨架按弧长重采样到 31 点,
-    提取臂长帧间变化(分割差异/管茬)→ 同一物理关节落到不同 node id（实测 19-27, 中位 20；
-    用户提示"不能用相对 node id"）。故用关节**绝对位置**每帧定位:
-      1. 每帧关节 node = 离 joint_xy 最近的 node（handles id 漂移）。
-      2. 静态段 = nodes[joint_node..N-1]，按弧长重采样到 n_static 点 → 跨帧中位 = 共识曲线。
-      3. 每帧静态段 nodes ← 共识按每帧弧长映射回（保持该帧 node 数与序，col/row 都修）。
-    动作段(node0..joint_node-1)原值不动。关节的连接处偏移(node~20 突偏右)、上方 mask
-    缺块致 node30 col 抖动 等，都由共识修复。joint_xy 由调用方 robust 估计(见 detect_joint_xy)。
-
-    Args:
-        positions: (T,3,N) [col,row,0]（建议先过 clean_outlier_skeletons）。
-        joint_xy: (2,) 关节绝对位置 [col,row]（固定；相机/近端不动）。
-        n_static: 静态段弧长重采样点数。
-    Returns:
-        stabilized: (T,3,N)。
-        joint_node: (T,) int 每帧关节 node id（QC 用）。
-        cons_col, cons_row: (n_static,) 静态段共识曲线。
-    """
-    T, _, N = positions.shape
-    if n_static is None:
-        n_static = max(4, int(0.4 * N))            # 静态段弧长重采样点数(随 N 缩放)
-    xy = positions[:, :2, :]
-    out = positions.copy()
-    anchor = np.asarray(joint_xy, np.float64)
-    # 1) 每帧关节 node = 离绝对位置最近
-    dist = np.sqrt(((xy - anchor[None, :, None]) ** 2).sum(1))   # (T,N)
-    jn = dist.argmin(1).astype(int)
-    # 2) 每帧静态段弧长重采样到 n_static 点
-    u_grid = np.linspace(0, 1, n_static)
-    cols = np.full((T, n_static), np.nan)
-    rows = np.full((T, n_static), np.nan)
-    for t in range(T):
-        x = xy[t, 0, jn[t]:N]
-        y = xy[t, 1, jn[t]:N]
-        if len(x) < 2:
-            continue
-        seg = np.concatenate([[0.0], np.sqrt(np.diff(x) ** 2 + np.diff(y) ** 2)]).cumsum()
-        if seg[-1] < 1e-6:
-            continue
-        u = seg / seg[-1]
-        cols[t] = np.interp(u_grid, u, x)
-        rows[t] = np.interp(u_grid, u, y)
-    cons_col = np.nanmedian(cols, axis=0)
-    cons_row = np.nanmedian(rows, axis=0)
-    # 3) 共识按每帧弧长映射回该帧静态段
-    for t in range(T):
-        js = slice(int(jn[t]), N)
-        x = xy[t, 0, js]
-        y = xy[t, 1, js]
-        if len(x) < 2:
-            continue
-        seg = np.concatenate([[0.0], np.sqrt(np.diff(x) ** 2 + np.diff(y) ** 2)]).cumsum()
-        if seg[-1] < 1e-6:
-            continue
-        u = seg / seg[-1]
-        out[t, 0, js] = np.interp(u, u_grid, cons_col)
-        out[t, 1, js] = np.interp(u, u_grid, cons_row)
-    return out, jn, cons_col, cons_row
-
-
-def detect_joint_xy(positions, node_lo=None, node_hi=None):
-    """robust 估计关节绝对位置 [col,row]。node_lo/node_hi 为 None 时按 N 的分数自适应
-    (排除末端弯曲段~前25% 与 上方缺块噪声~后15%), 使任意 n_points 都不需手调。"""
-    T, _, N = positions.shape
-    if node_lo is None:
-        node_lo = max(4, int(0.25 * N))
-    if node_hi is None:
-        node_hi = min(N - 3, int(0.85 * N))
-    xy = positions[:, :2, :]
-    mean_d2 = np.abs(np.diff(xy[:, 0, :], n=2, axis=1)).mean(axis=0)   # idx0..N-3 ↔ node1..N-2
-    sub = mean_d2[node_lo - 1:node_hi]                                  # node_lo..node_hi+1
-    peak_node = (node_lo - 1) + int(sub.argmax()) + 1                   # node id (1..N-2)
-    joint_xy = np.median(xy[:, :, peak_node], axis=0)
-    return joint_xy, peak_node
-
-
 def save_npz(path, positions, actions, n_points=None, tip_fix=None,
+             endpoint_fix=None,
              channel_equalities=(), channel_sources=None,
              pair_residual_max=None, planarity_qc=None,
-             model_action_channels=(), action_expansion=None):
+             model_action_channels=(), action_expansion=None,
+             skeleton_method=None, segment_lengths=(), segment_intervals=(),
+             joint_node_indices=()):
     """存 npz。n_points/tip_fix 作元数据存入(供训练 config.json 记录数据配置, 辨识模型用)。"""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     kw = dict(positions=positions.astype(np.float32), actions=actions.astype(np.float32))
@@ -368,6 +362,14 @@ def save_npz(path, positions, actions, n_points=None, tip_fix=None,
         kw['n_points'] = np.array(n_points)
     if tip_fix is not None:
         kw['tip_fix'] = np.array(bool(tip_fix))
+    if endpoint_fix is not None:
+        kw['endpoint_fix'] = np.array(bool(endpoint_fix))
+    if skeleton_method is not None:
+        kw['skeleton_method'] = np.array(str(skeleton_method))
+    kw['node_order'] = np.array('tip_to_base')
+    kw['segment_lengths'] = np.asarray(segment_lengths, dtype=np.float32)
+    kw['segment_intervals'] = np.asarray(segment_intervals, dtype=np.int64)
+    kw['joint_node_indices'] = np.asarray(joint_node_indices, dtype=np.int64)
     has_source_contract = channel_sources is not None or bool(channel_equalities)
     sources = (normalize_channel_sources(channel_sources, channel_equalities)
                if has_source_contract else ())
@@ -391,6 +393,110 @@ def save_npz(path, positions, actions, n_points=None, tip_fix=None,
     print(f"    {path}  positions={positions.shape} actions={actions.shape}")
 
 
+def save_conversion_qc(out_root, seq, mask_dir, frame_paths, extraction_qc,
+                       raw_positions, final_positions, joint_node_indices):
+    """自动保存骨架阶段的逐帧表、曲线和原图叠加对比。"""
+    qc_dir = os.path.join(out_root, "qc_skeleton")
+    os.makedirs(qc_dir, exist_ok=True)
+    fields = sorted({key for row in extraction_qc for key in row})
+    with open(os.path.join(qc_dir, "skeleton_metrics.csv"), "w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in extraction_qc:
+            writer.writerow({key: (json.dumps(value) if isinstance(value, (tuple, list)) else value)
+                             for key, value in row.items()})
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        x = np.arange(len(extraction_qc))
+        length = np.array([row.get("resampled_length_px", np.nan) for row in extraction_qc])
+        residual = np.array([row.get("temporal_midpoint_residual_px", np.nan)
+                             for row in extraction_qc])
+        area = np.array([row.get("mask_area", 0) for row in extraction_qc])
+        fig, axes = plt.subplots(3, 1, figsize=(12, 7), sharex=True)
+        for ax, values, label in zip(
+                axes, (area, length, residual),
+                ("mask area [px]", "centerline length [px]", "temporal residual [px]")):
+            ax.plot(x, values, lw=.65); ax.set_ylabel(label); ax.grid(alpha=.25)
+        bad = [i for i, row in enumerate(extraction_qc)
+               if row.get("hard_invalid") or row.get("suspicious")]
+        for index in bad:
+            for ax in axes:
+                ax.axvline(index, color="tab:red", alpha=.12, lw=.8)
+        axes[-1].set_xlabel("sample index")
+        fig.tight_layout(); fig.savefig(os.path.join(qc_dir, "skeleton_metrics.png"), dpi=120)
+        plt.close(fig)
+    except Exception as error:
+        print(f"    [QC] 曲线跳过: {error}")
+
+    count = len(frame_paths)
+    chosen = np.linspace(0, count - 1, min(12, count)).astype(int).tolist() if count else []
+    flagged = [i for i, row in enumerate(extraction_qc)
+               if row.get("hard_invalid") or row.get("suspicious")][:8]
+    chosen = list(dict.fromkeys(chosen + flagged))
+    cam0 = os.path.join(seq, "cam0")
+    cells = []
+    palette = [(0, 220, 0), (255, 80, 0), (220, 0, 220), (0, 180, 255)]
+    boundaries = (0,) + tuple(int(v) for v in joint_node_indices) + (raw_positions.shape[2] - 1,)
+    for index in chosen:
+        frame = int(extraction_qc[index]["frame"])
+        image_path = os.path.join(cam0, f"{frame:05d}.png")
+        image = cv2.imread(image_path)
+        mask = cv2.imread(frame_paths[index], cv2.IMREAD_GRAYSCALE)
+        if image is None and mask is not None:
+            image = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+        if image is None:
+            continue
+        if mask is not None:
+            tint = image.copy(); tint[mask > 127] = (0, 0, 255)
+            cv2.addWeighted(tint, .24, image, .76, 0, dst=image)
+        raw_pts = raw_positions[index, :2, :].T.astype(np.int32)
+        final_pts = final_positions[index, :2, :].T.astype(np.int32)
+        if not np.array_equal(raw_pts, final_pts):
+            cv2.polylines(image, [raw_pts.reshape(-1, 1, 2)], False,
+                          (255, 255, 0), 1, cv2.LINE_AA)
+        for seg_index, (lo, hi) in enumerate(zip(boundaries[:-1], boundaries[1:])):
+            pts = final_pts[lo:hi + 1].reshape(-1, 1, 2)
+            cv2.polylines(image, [pts], False, palette[seg_index % len(palette)], 2,
+                          cv2.LINE_AA)
+        for node in range(len(final_pts)):
+            color = (0, 255, 255) if node in joint_node_indices else (255, 255, 255)
+            cv2.circle(image, tuple(final_pts[node]), 2, color, -1, cv2.LINE_AA)
+        row = extraction_qc[index]
+        for raw_key, fixed_key in (("raw_tip_xy", "fixed_tip_xy"),
+                                   ("raw_base_xy", "fixed_base_xy")):
+            if raw_key not in row or fixed_key not in row:
+                continue
+            raw_endpoint = tuple(np.rint(row[raw_key]).astype(int))
+            fixed_endpoint = tuple(np.rint(row[fixed_key]).astype(int))
+            cv2.line(image, raw_endpoint, fixed_endpoint, (255, 255, 0), 1,
+                     cv2.LINE_AA)
+            cv2.drawMarker(image, raw_endpoint, (255, 255, 0), cv2.MARKER_TILTED_CROSS,
+                           7, 1, cv2.LINE_AA)
+            cv2.circle(image, fixed_endpoint, 3, (0, 255, 255), 1, cv2.LINE_AA)
+        state = "INVALID" if row.get("hard_invalid") else (
+            "CHECK" if row.get("suspicious") else "OK")
+        cv2.putText(image, f"f{frame} {state} L={row.get('resampled_length_px', 0):.1f}",
+                    (8, 24), cv2.FONT_HERSHEY_SIMPLEX, .55, (255, 255, 255), 2,
+                    cv2.LINE_AA)
+        cells.append(image)
+    if cells:
+        cols = 4
+        H, W = cells[0].shape[:2]
+        rows = int(np.ceil(len(cells) / cols))
+        canvas = np.zeros((rows * H, cols * W, 3), np.uint8)
+        for k, image in enumerate(cells):
+            r, c = divmod(k, cols)
+            canvas[r * H:(r + 1) * H, c * W:(c + 1) * W] = image
+        cv2.imwrite(os.path.join(qc_dir, "skeleton_overlays.png"), canvas)
+    with open(os.path.join(qc_dir, "README.txt"), "w") as handle:
+        handle.write("红色=输入mask；彩色线=各机器人段；黄色节点=关节；")
+        handle.write("青色线(若出现)=时间自动修复前中心线。\n")
+        handle.write("端部青色叉=细化原端点；黄色圆=双端端帽修正点；短青线=修正位移。\n")
+
+
 def build_parser():
     pa = argparse.ArgumentParser(description="实物 mask+actions → transition npz（免标定）")
     pa.add_argument("--seq", required=True, help="raw 序列目录(取 actions6.csv + 默认 masks 路径)")
@@ -405,10 +511,24 @@ def build_parser():
                     help="每通道归一化上限(逗号分隔, kPa)；默认读 meta.json hi6[ch]")
     pa.add_argument("--n-points", type=int, default=15,
                     help="骨架节点数(默认 15; 实测降节点误差不大, 全管线按 N 分数自适应)")
+    pa.add_argument("--skeleton-method",
+                    choices=("skeletonize", "medial_axis", "row_centroid"),
+                    default="skeletonize",
+                    help="默认快速细化主路径；medial_axis更慢；row_centroid仅兼容旧数据")
+    pa.add_argument("--segment-lengths", default="1,1",
+                    help="tip→base各物理段相对长度；默认两段等长，15节点得到7+7区间")
+    pa.add_argument("--base-anchor", default=None,
+                    help="可选基座像素x,y；默认以主路径较上端为base")
     pa.add_argument("--tip-fix", action=argparse.BooleanOptionalAction, default=True,
-                    help="末端 node0 垂直切片修正(修弯管 cap 角落偏移, 实物默认开; --no-tip-fix 关闭)")
+                    help="仅旧row_centroid：末端node0垂直切片修正")
+    pa.add_argument("--endpoint-fix", action=argparse.BooleanOptionalAction, default=True,
+                    help="skeletonize/medial_axis双端端帽中心修正（默认开）")
     pa.add_argument("--skel-dev-thresh", type=float, default=80.0,
-                    help="骨架离群判据(px)：偏离时间中位>此值→插值修复(默认80，落正常66与离群>100间隙)")
+                    help="仅--legacy-global-outlier时使用的旧全局中位阈值")
+    pa.add_argument("--legacy-global-outlier", action="store_true",
+                    help="旧单通道数据兼容：按全序列中位修复；六通道通用流程禁止默认启用")
+    pa.add_argument("--repair-suspicious", action="store_true",
+                    help="除提取失败外，也插值修复时间QC可疑帧；默认只标记供QC")
     pa.add_argument("--val-frac", type=float, default=0.2,
                     help="末尾连续 val 比例(时序连续切分，避免乱序泄漏)")
     pa.add_argument("--out-root", default=None,
@@ -451,22 +571,48 @@ def main():
     expansion = (action_expansion6(channels, channel_sources=source_contract)
                  if source_contract else None)
 
-    print(f">>> 读 mask → 2D 骨架: {masks_dir}  (tip_fix={args.tip_fix})")
-    positions, fs = masks_to_positions(masks_dir, args.n_points, tip_fix=args.tip_fix)
+    segment_lengths = tuple(float(value) for value in args.segment_lengths.split(",")
+                            if value.strip())
+    base_anchor = (tuple(float(value) for value in args.base_anchor.split(","))
+                   if args.base_anchor else None)
+    if base_anchor is not None and len(base_anchor) != 2:
+        raise ValueError("--base-anchor 必须是 x,y")
+    print(f">>> 读 mask → 2D 骨架: {masks_dir}  method={args.skeleton_method} "
+          f"segments={segment_lengths} endpoint_fix={args.endpoint_fix} "
+          f"legacy_tip_fix={args.tip_fix}")
+    positions, fs, extraction_qc = masks_to_positions(
+        masks_dir, args.n_points, tip_fix=args.tip_fix, endpoint_fix=args.endpoint_fix,
+        skeleton_method=args.skeleton_method, segment_lengths=segment_lengths,
+        base_anchor_xy=base_anchor, return_qc=True)
     T = positions.shape[0]
     valid = int((positions[:, :2, :].sum(axis=(1, 2)) > 0).sum())   # 非空骨架帧
     print(f"    {T} 帧, 非空骨架 {valid} ({valid/T*100:.1f}%)")
 
-    # 清理管-臂合并/管茬导致的离群骨架（防止 col 跑到 [1,636] 污染归一化与监督）
-    positions, n_out, bad = clean_outlier_skeletons(positions, args.skel_dev_thresh)
-    print(f"    离群骨架修复: {n_out} 帧 ({n_out/T*100:.2f}%) → 时间插值替换"
-          f" (阈值 {args.skel_dev_thresh}px)")
+    raw_positions = positions.copy()
+    hard_invalid, suspicious = temporal_skeleton_qc(positions, extraction_qc)
+    repair = hard_invalid | (suspicious if args.repair_suspicious else False)
+    positions = interpolate_flagged_frames(positions, repair)
+    if args.legacy_global_outlier:
+        positions, n_legacy, legacy_bad = clean_outlier_skeletons(
+            positions, args.skel_dev_thresh)
+        repair |= legacy_bad
+        print(f"    [legacy] 全局中位修复 {n_legacy} 帧；仅适用于旧单通道数据")
+    print(f"    提取失败自动插值: {int(hard_invalid.sum())} 帧；"
+          f"时间QC可疑: {int(suspicious.sum())} 帧"
+          f"（{'已插值' if args.repair_suspicious else '仅标记'}）")
     outlier_path = os.path.join(out_root, "skeleton_outlier_frames.txt")
     os.makedirs(out_root, exist_ok=True)
     with open(outlier_path, "w") as f:
-        f.write(f"# 离群骨架帧(管-臂合并等)，已时间插值修复。判据: 偏离时间中位>{args.skel_dev_thresh}px\n")
-        f.write(" ".join(str(int(i)) for i in np.where(bad)[0]) + "\n")
-        f.write(f"# 总计 {n_out}/{T} 帧\n")
+        f.write("# hard_invalid（自动插值）\n")
+        f.write(" ".join(str(int(i)) for i in np.where(hard_invalid)[0]) + "\n")
+        f.write("# suspicious（默认仅标记；--repair-suspicious才插值）\n")
+        f.write(" ".join(str(int(i)) for i in np.where(suspicious)[0]) + "\n")
+
+    layout = next((item for item in extraction_qc if item.get("segment_intervals")), {})
+    segment_intervals = tuple(int(v) for v in layout.get("segment_intervals", ()))
+    joint_nodes = tuple(int(v) for v in layout.get("joint_node_indices", ()))
+    save_conversion_qc(out_root, seq, masks_dir, fs, extraction_qc,
+                       raw_positions, positions, joint_nodes)
 
     print(f">>> 读 actions: {actions_csv} 原始六维；模型动作视图 {channels}")
     raw_actions6 = load_actions(actions_csv, range(6))
@@ -502,18 +648,26 @@ def main():
     print(f">>> 切分: train {n_train} 帧 / val {n_val} 帧  → {out_root}")
     save_npz(os.path.join(out_root, "train", f"{seq_name}_train.npz"), pos_tr, act_tr,
              n_points=args.n_points, tip_fix=args.tip_fix,
+             endpoint_fix=args.endpoint_fix,
              channel_equalities=equalities, channel_sources=source_contract,
              pair_residual_max=pair_residual_max,
              planarity_qc=planarity_qc,
              model_action_channels=channels,
-             action_expansion=expansion)
+             action_expansion=expansion,
+             skeleton_method=args.skeleton_method,
+             segment_lengths=segment_lengths, segment_intervals=segment_intervals,
+             joint_node_indices=joint_nodes)
     save_npz(os.path.join(out_root, "val", f"{seq_name}_val.npz"), pos_va, act_va,
              n_points=args.n_points, tip_fix=args.tip_fix,
+             endpoint_fix=args.endpoint_fix,
              channel_equalities=equalities, channel_sources=source_contract,
              pair_residual_max=pair_residual_max,
              planarity_qc=planarity_qc,
              model_action_channels=channels,
-             action_expansion=expansion)
+             action_expansion=expansion,
+             skeleton_method=args.skeleton_method,
+             segment_lengths=segment_lengths, segment_intervals=segment_intervals,
+             joint_node_indices=joint_nodes)
 
     print(f"\n>>> 完成。训练: --data_dir {os.path.join(out_root,'train')}")
     print(f"           验证: {os.path.join(out_root,'val')}")
