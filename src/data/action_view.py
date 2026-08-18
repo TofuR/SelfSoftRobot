@@ -45,10 +45,57 @@ def parse_action_channels(value) -> tuple[int, ...] | None:
     return channels
 
 
+def normalize_channel_sources(sources=None, equalities=()) -> tuple[int, ...]:
+    if sources is None:
+        values = list(range(6))
+        for leader, follower in equalities or ():
+            leader, follower = int(leader), int(follower)
+            if leader == follower or leader not in range(6) or follower not in range(6):
+                raise ValueError("channel_equalities 必须引用两个不同的 0..5 通道")
+            values[follower] = leader
+    else:
+        values = tuple(int(value) for value in sources)
+        if len(values) != 6 or any(value not in range(6) for value in values):
+            raise ValueError("channel_source6 必须是 6 个 0..5 通道下标")
+
+    def root(start):
+        seen = set()
+        current = start
+        while values[current] != current:
+            if current in seen:
+                raise ValueError("channel_source6 不能包含循环")
+            seen.add(current)
+            current = values[current]
+        return current
+
+    return tuple(root(channel) for channel in range(6))
+
+
+def source_equalities(sources):
+    normalized = normalize_channel_sources(sources)
+    return tuple((source, channel) for channel, source in enumerate(normalized)
+                 if channel != source)
+
+
+def source_model_channels(sources):
+    normalized = normalize_channel_sources(sources)
+    return tuple(channel for channel, source in enumerate(normalized)
+                 if channel == source)
+
+
+def source_expansion6(sources, channels):
+    lookup = {int(channel): index for index, channel in enumerate(channels)}
+    try:
+        return tuple(lookup[source] for source in normalize_channel_sources(sources))
+    except KeyError as error:
+        raise ValueError(f"根通道 ch{int(error.args[0])} 未进入模型动作") from error
+
+
 @dataclass(frozen=True)
 class ActionViewContract:
     raw_action_dim: int
     model_action_channels: tuple[int, ...]
+    channel_source6: tuple[int, ...] = ()
     channel_equalities: tuple[tuple[int, int], ...] = ()
     action_expansion6: tuple[int, ...] = ()
 
@@ -60,34 +107,38 @@ class ActionViewContract:
             raise ValueError("model_action_channels 必须非空且互不重复")
         if any(value < 0 or value >= self.raw_action_dim for value in channels):
             raise ValueError("model_action_channels 超出原始动作维度")
+
+        if self.channel_source6:
+            if self.raw_action_dim != 6:
+                raise ValueError("channel_source6 当前要求原始硬件动作维度为 6")
+            sources = normalize_channel_sources(self.channel_source6)
+        elif self.channel_equalities:
+            sources = normalize_channel_sources(equalities=self.channel_equalities)
+        else:
+            sources = ()
+
+        if sources:
+            expected_channels = source_model_channels(sources)
+            if channels != expected_channels:
+                raise ValueError(
+                    f"model_action_channels={channels} 与 channel_source6 根通道 "
+                    f"{expected_channels} 不一致")
+            equalities = source_equalities(sources)
+            expansion = source_expansion6(sources, channels)
+            supplied_equalities = tuple(tuple(int(v) for v in pair)
+                                        for pair in self.channel_equalities)
+            if supplied_equalities and supplied_equalities != equalities:
+                raise ValueError("channel_equalities 与 channel_source6 不一致")
+            supplied_expansion = tuple(int(v) for v in self.action_expansion6)
+            if supplied_expansion and supplied_expansion != expansion:
+                raise ValueError("action_expansion6 与 channel_source6 不一致")
+        else:
+            equalities = ()
+            expansion = tuple(int(v) for v in self.action_expansion6)
+
         object.__setattr__(self, "model_action_channels", channels)
-        equalities = tuple(tuple(int(value) for value in pair)
-                           for pair in self.channel_equalities)
-        used = set()
-        for pair in equalities:
-            if len(pair) != 2 or pair[0] == pair[1] or any(
-                    value < 0 or value >= self.raw_action_dim for value in pair):
-                raise ValueError("channel_equalities 含非法通道对")
-            if pair[0] in used or pair[1] in used:
-                raise ValueError("channel_equalities 的通道对不能重叠")
-            used.update(pair)
+        object.__setattr__(self, "channel_source6", sources)
         object.__setattr__(self, "channel_equalities", equalities)
-        expansion = tuple(int(value) for value in self.action_expansion6)
-        if expansion and (len(expansion) != 6 or any(
-                value < 0 or value >= len(channels) for value in expansion)):
-            raise ValueError("action_expansion6 必须含 6 个有效模型列下标")
-        if expansion:
-            lookup = {channel: index for index, channel in enumerate(channels)}
-            follower_sources = {follower: leader for leader, follower in equalities}
-            try:
-                expected = tuple(lookup[follower_sources.get(channel, channel)]
-                                 for channel in range(6))
-            except KeyError as error:
-                raise ValueError(
-                    f"model_action_channels 无法展开硬件 ch{int(error.args[0])}") from error
-            if expansion != expected:
-                raise ValueError(
-                    f"action_expansion6={expansion} 与动作视图推导值 {expected} 不同")
         object.__setattr__(self, "action_expansion6", expansion)
 
     @property
@@ -126,13 +177,19 @@ def contract_from_npz(path: str, action_channels=None) -> ActionViewContract:
         if explicit is not None and stored is not None and explicit != stored:
             raise ValueError(
                 f"显式 action_channels={explicit} 与 NPZ 合同 {stored} 不一致: {path}")
+
         equalities = _json_pairs(data, "channel_equalities")
         expansion = (tuple(int(v) for v in np.asarray(data["action_expansion6"]).tolist())
                      if "action_expansion6" in data else ())
+        sources = (tuple(int(v) for v in np.asarray(data["channel_source6"]).tolist())
+                   if "channel_source6" in data else None)
+        if sources is None and expansion and stored:
+            sources = tuple(stored[index] for index in expansion)
         if action_channels is None:
-            equalities = ()
-            expansion = ()
-    return ActionViewContract(raw_dim, channels, equalities, expansion)
+            sources, equalities, expansion = None, (), ()
+    return ActionViewContract(
+        raw_dim, channels, channel_source6=tuple(sources or ()),
+        channel_equalities=equalities, action_expansion6=expansion)
 
 
 def resolve_action_contract(data_dir: str, action_channels=None) -> ActionViewContract:

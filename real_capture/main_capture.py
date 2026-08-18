@@ -47,7 +47,8 @@ from PyQt5.QtWidgets import (
 from recorder import ValveRecorder, build_ndi_tip_npz, export_summary_csv
 from realsense_cam import RealSenseCam
 from valve_control import (N_CHAN, P_MAX, P_MIN,
-                           normalize_channel_equalities)
+                           channel_equalities_from_sources,
+                           normalize_channel_sources)
 
 # 现代白底风格（对齐旧 main_capture.py）
 pg.setConfigOptions(antialias=True)
@@ -164,10 +165,9 @@ class CaptureWindow(QMainWindow):
         self.max_ndi_age = 0.5
         self._rise_sb = []
         self._fall_sb = []
-        self._equality_enabled = []
-        self._equality_leader = []
-        self._equality_follower = []
-        self._equality_widgets = []
+        self._channel_source_boxes = []
+        self._source_widgets = []
+        self._last_valid_channel_sources = tuple(range(N_CHAN))
 
         self._build_ui()
         self._connect_core()
@@ -175,7 +175,7 @@ class CaptureWindow(QMainWindow):
         self._load_config()
         self._apply_camera_config()
         self._on_active_changed()                # 按 restored 主通道：缓存→显示→锁定→曲线显隐
-        self._on_equality_changed()              # 恢复约束后切到 all，并镜像 follower 配置
+        self._on_source_changed()                # 恢复来源图后切到 all，并镜像 follower 配置
 
         # CLI 覆盖（仅端口类参数）
         self.le_g1.setText(group1); self.le_g2.setText(group2)
@@ -243,30 +243,23 @@ class CaptureWindow(QMainWindow):
         g.addWidget(QLabel("组2串口"), 0, 2); self.le_g2 = QLineEdit("COM46"); g.addWidget(self.le_g2, 0, 3)
         g.addWidget(QLabel("波特"), 1, 0); self.sb_baud = QDoubleSpinBox(); self.sb_baud.setRange(1200, 115200); self.sb_baud.setValue(9600); self.sb_baud.setDecimals(0); g.addWidget(self.sb_baud, 1, 1)
         g.addWidget(QLabel("从站"), 1, 2); self.sb_slave = QDoubleSpinBox(); self.sb_slave.setRange(1, 247); self.sb_slave.setValue(1); self.sb_slave.setDecimals(0); g.addWidget(self.sb_slave, 1, 3)
-        equality_row = QHBoxLayout()
-        equality_row.addWidget(QLabel("等值约束"))
-        for index, (leader_default, follower_default) in enumerate(((1, 2), (4, 5))):
-            enabled = QCheckBox(f"链接{index + 1}")
-            leader = QComboBox(); leader.addItems([f"ch{i}" for i in range(N_CHAN)])
-            follower = QComboBox(); follower.addItems([f"ch{i}" for i in range(N_CHAN)])
-            leader.setCurrentIndex(leader_default)
-            follower.setCurrentIndex(follower_default)
-            equality_row.addWidget(enabled)
-            equality_row.addWidget(leader)
-            equality_row.addWidget(QLabel("→ 跟随"))
-            equality_row.addWidget(follower)
-            for widget in (enabled, leader, follower):
-                self._equality_widgets.append(widget)
-            enabled.toggled.connect(self._on_equality_changed)
-            leader.currentIndexChanged.connect(self._on_equality_changed)
-            follower.currentIndexChanged.connect(self._on_equality_changed)
-            self._equality_enabled.append(enabled)
-            self._equality_leader.append(leader)
-            self._equality_follower.append(follower)
-        self.lbl_equality = QLabel("未启用")
+        source_grid = QGridLayout()
+        source_grid.addWidget(QLabel("通道来源（自身=独立）"), 0, 0, 2, 1)
+        for channel in range(N_CHAN):
+            box = QComboBox()
+            box.addItems([f"ch{i}" for i in range(N_CHAN)])
+            box.setCurrentIndex(channel)
+            box.setToolTip(f"硬件 ch{channel} 从哪个根通道取值；选择自身表示独立变量")
+            box.currentIndexChanged.connect(self._on_source_changed)
+            row, col = divmod(channel, 3)
+            source_grid.addWidget(QLabel(f"ch{channel} ←"), row, 1 + col * 2)
+            source_grid.addWidget(box, row, 2 + col * 2)
+            self._channel_source_boxes.append(box)
+            self._source_widgets.append(box)
+        self.lbl_equality = QLabel("全部独立")
         self.lbl_equality.setStyleSheet("color:#888")
-        equality_row.addWidget(self.lbl_equality, 1)
-        g.addLayout(equality_row, N_CHAN + 1, 0, 1, 6)
+        source_grid.addWidget(self.lbl_equality, 2, 0, 1, 7)
+        g.addLayout(source_grid, 3, 0, 1, 4)
 
         row = QHBoxLayout()
         self.btn_g1 = QPushButton("组1 连接"); self.btn_g1.setStyleSheet("background:#2CB1BC;color:white")
@@ -622,13 +615,19 @@ class CaptureWindow(QMainWindow):
                     self._cfg_fall[i] = float(c.get(f"fall{i}", self._cfg_fall[i]))
                     self._rise_sb[i].setValue(self._cfg_rise[i])
                     self._fall_sb[i].setValue(self._cfg_fall[i])
-                for i in range(len(self._equality_enabled)):
-                    self._equality_leader[i].setCurrentIndex(int(c.get(
-                        f"equality{i}_leader", self._equality_leader[i].currentIndex())))
-                    self._equality_follower[i].setCurrentIndex(int(c.get(
-                        f"equality{i}_follower", self._equality_follower[i].currentIndex())))
-                    self._equality_enabled[i].setChecked(
-                        c.get(f"equality{i}_enabled", "0") == "1")
+                if any(f"source{i}" in c for i in range(N_CHAN)):
+                    sources = [int(c.get(f"source{i}", i)) for i in range(N_CHAN)]
+                else:
+                    # 旧版最多两组 equality 配置迁移为统一来源图。
+                    sources = list(range(N_CHAN))
+                    for i in range(2):
+                        if c.get(f"equality{i}_enabled", "0") == "1":
+                            leader = int(c.get(f"equality{i}_leader", i))
+                            follower = int(c.get(f"equality{i}_follower", i))
+                            sources[follower] = leader
+                sources = normalize_channel_sources(sources)
+                for i, source in enumerate(sources):
+                    self._channel_source_boxes[i].setCurrentIndex(source)
             finally:
                 self._guard = False
             self.le_camparam.setText(c.get("cam_param", self.le_camparam.text()))
@@ -665,13 +664,8 @@ class CaptureWindow(QMainWindow):
                 cp["capture"][f"hi{i}"] = str(self._cfg_hi[i])
                 cp["capture"][f"rise{i}"] = str(self._cfg_rise[i])
                 cp["capture"][f"fall{i}"] = str(self._cfg_fall[i])
-            for i in range(len(self._equality_enabled)):
-                cp["capture"][f"equality{i}_enabled"] = (
-                    "1" if self._equality_enabled[i].isChecked() else "0")
-                cp["capture"][f"equality{i}_leader"] = str(
-                    self._equality_leader[i].currentIndex())
-                cp["capture"][f"equality{i}_follower"] = str(
-                    self._equality_follower[i].currentIndex())
+            for i, source in enumerate(self._current_channel_sources()):
+                cp["capture"][f"source{i}"] = str(source)
             with open(self._cfg_path, "w", encoding="utf-8") as f:
                 cp.write(f)
         except Exception as e:
@@ -716,7 +710,7 @@ class CaptureWindow(QMainWindow):
 
     def _on_rec_started(self, seq_dir: str):
         self.btn_start.setEnabled(False); self.btn_stop.setEnabled(True)
-        for widget in self._equality_widgets:
+        for widget in self._source_widgets:
             widget.setEnabled(False)
         self._log(f"录制中 -> {seq_dir}")
 
@@ -727,7 +721,7 @@ class CaptureWindow(QMainWindow):
 
     def _on_rec_stopped(self, seq_dir, frames):
         self.btn_start.setEnabled(True); self.btn_stop.setEnabled(False)
-        for widget in self._equality_widgets:
+        for widget in self._source_widgets:
             widget.setEnabled(True)
         self.lbl_rec.setText(f"已停止：{frames} 帧 -> {seq_dir}"); self.lbl_rec.setStyleSheet("color:#888")
 
@@ -756,51 +750,70 @@ class CaptureWindow(QMainWindow):
             return [self._max_sb[i].value() if (i == idx and i in avail) else 0.0 for i in range(N_CHAN)]
         return [self._max_sb[i].value() if i in avail else 0.0 for i in range(N_CHAN)]
 
-    def _current_channel_equalities(self):
-        pairs = [
-            (leader.currentIndex(), follower.currentIndex())
-            for enabled, leader, follower in zip(
-                self._equality_enabled, self._equality_leader,
-                self._equality_follower)
-            if enabled.isChecked()
-        ]
-        return normalize_channel_equalities(pairs)
+    def _current_channel_sources(self):
+        return normalize_channel_sources(
+            [box.currentIndex() for box in self._channel_source_boxes])
 
-    def _mirror_equalities(self):
-        """把 follower 的显示值与持久化范围同步到 leader。"""
-        pairs = self._current_channel_equalities()
+    def _current_channel_equalities(self):
+        """旧调用兼容；pair 列表始终由权威 source map 推导。"""
+        return channel_equalities_from_sources(self._current_channel_sources())
+
+    def _mirror_channel_sources(self):
+        """把每个 follower 的目标、范围和速率镜像到其根通道。"""
+        sources = self._current_channel_sources()
         previous_guard = self._guard
         self._guard = True
         try:
-            for leader, follower in pairs:
-                self._cfg_lo[follower] = self._cfg_lo[leader]
-                self._cfg_hi[follower] = self._cfg_hi[leader]
-                self._cfg_rise[follower] = self._cfg_rise[leader]
-                self._cfg_fall[follower] = self._cfg_fall[leader]
+            # 链式选择会被规范化为直接指向根，并同步回 GUI。
+            for channel, source in enumerate(sources):
+                self._channel_source_boxes[channel].setCurrentIndex(source)
+                if channel == source:
+                    continue
+                self._cfg_lo[channel] = self._cfg_lo[source]
+                self._cfg_hi[channel] = self._cfg_hi[source]
+                self._cfg_rise[channel] = self._cfg_rise[source]
+                self._cfg_fall[channel] = self._cfg_fall[source]
                 for widgets in (self._target_sb, self._min_sb, self._max_sb,
                                 self._rise_sb, self._fall_sb):
-                    widgets[follower].setValue(widgets[leader].value())
+                    widgets[channel].setValue(widgets[source].value())
         finally:
             self._guard = previous_guard
-        return pairs
+        return sources
 
-    def _on_equality_changed(self, *_args):
+    def _mirror_equalities(self):
+        """旧调用兼容；新代码应使用 _mirror_channel_sources。"""
+        return channel_equalities_from_sources(self._mirror_channel_sources())
+
+    def _on_source_changed(self, *_args):
         if self._guard:
             return
         try:
-            pairs = self._current_channel_equalities()
-            if pairs and self._active_idx() < N_CHAN:
+            sources = self._mirror_channel_sources()
+            self._last_valid_channel_sources = sources
+            equalities = channel_equalities_from_sources(sources)
+            if equalities and self._active_idx() < N_CHAN:
                 self.cb_active.setCurrentIndex(N_CHAN)
-            self._mirror_equalities()
             self.lbl_equality.setText(
-                ", ".join(f"ch{f}=ch{l}" for l, f in pairs) if pairs else "未启用")
-            self.lbl_equality.setStyleSheet("color:#2CB1BC" if pairs else "color:#888")
+                ", ".join(f"ch{f}=ch{root}" for root, f in equalities)
+                if equalities else "全部独立")
+            self.lbl_equality.setStyleSheet("color:#2CB1BC" if equalities else "color:#888")
             self._apply_channel_lock()
             self.core.set_manual_target(self._current_targets())
             self.core.update_ranges(self._current_lo(), self._current_hi())
         except ValueError as error:
-            self.lbl_equality.setText(str(error))
+            previous_guard = self._guard
+            self._guard = True
+            try:
+                for channel, source in enumerate(self._last_valid_channel_sources):
+                    self._channel_source_boxes[channel].setCurrentIndex(source)
+            finally:
+                self._guard = previous_guard
+            self.lbl_equality.setText(f"{error}；已恢复上一有效配置")
             self.lbl_equality.setStyleSheet("color:#EF4E4E")
+
+    def _on_equality_changed(self, *_args):
+        """旧信号/测试兼容。"""
+        self._on_source_changed(*_args)
 
     def _on_target_changed(self):
         if self._guard:
@@ -1038,8 +1051,8 @@ class CaptureWindow(QMainWindow):
             self._log("⚠ 先连接 Modbus。"); return
         idx = self.cb_active.currentIndex()
         try:
-            equalities = self._mirror_equalities()
-            self.controller.configure_channel_equalities(equalities)
+            sources = self._mirror_channel_sources()
+            self.controller.configure_channel_sources(sources)
             self.controller.configure_safety(
                 [sb.value() for sb in self._rise_sb],
                 [sb.value() for sb in self._fall_sb])
@@ -1067,9 +1080,10 @@ class CaptureWindow(QMainWindow):
         mode = ["manual", "random", "sweep", "replay"][self.cb_mode.currentIndex()]
         active_idx = self.cb_active.currentIndex()
         try:
-            equalities = self._mirror_equalities()
+            sources = self._mirror_channel_sources()
+            equalities = channel_equalities_from_sources(sources)
         except ValueError as error:
-            self._log(f"⚠ 等值约束无效：{error}")
+            self._log(f"⚠ 通道来源无效：{error}")
             return
         if equalities and active_idx < N_CHAN:
             self._log("⚠ 等值约束只能在『全部(all)』模式采集。")
@@ -1102,7 +1116,8 @@ class CaptureWindow(QMainWindow):
                                   (self.sb_seed.value() or None), self.sb_steps.value(),
                                   self.le_replay.text().strip() or None,
                                   required_groups, self.sb_max_frame_age.value(),
-                                  self.sb_max_ndi_age.value(), equalities)
+                                  self.sb_max_ndi_age.value(),
+                                  channel_sources=sources)
 
     def _on_browse_replay(self):
         path, _ = QFileDialog.getOpenFileName(self, "选择 actions6.csv", self.le_seq.text(), "CSV (*.csv);;All files (*)")

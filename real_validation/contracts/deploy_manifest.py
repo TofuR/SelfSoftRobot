@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from .models import (normalize_channel_equalities,
+from .models import (channel_equalities_from_sources,
                      validate_hardware_action_contract)
 
 REQUIRED = (
@@ -34,6 +34,7 @@ class DeployManifest:
     checkpoint_sha256: str | None = None
     action_scale_kpa: tuple[float, ...] | None = None
     channel_map: tuple[int, ...] | None = None
+    channel_source6: tuple[int, ...] = ()
     channel_equalities: tuple[tuple[int, int], ...] = ()
     action_expansion6: tuple[int, ...] = ()
     train_dt_nominal_s: float | None = None
@@ -68,14 +69,15 @@ class DeployManifest:
                     v <= 0 or not math.isfinite(v) for v in scale):
                 raise ValueError("action_scale_kpa 必须是 action_dim 个正数")
             object.__setattr__(self, "action_scale_kpa", scale)
-        equalities = normalize_channel_equalities(self.channel_equalities)
-        if equalities:
-            if self.action_scale_kpa is None:
-                raise ValueError("channel_equalities 要求 action_scale_kpa")
-        expansion = validate_hardware_action_contract(
-            self.action_dim, self.channel_map, equalities, self.action_expansion6)
+        sources, expansion = validate_hardware_action_contract(
+            self.action_dim, self.channel_map, self.channel_equalities,
+            self.action_expansion6, self.channel_source6)
+        equalities = channel_equalities_from_sources(sources) if sources else ()
+        if equalities and self.action_scale_kpa is None:
+            raise ValueError("通道来源合同要求 action_scale_kpa")
         if self.channel_map is not None:
             object.__setattr__(self, "channel_map", tuple(int(v) for v in self.channel_map))
+        object.__setattr__(self, "channel_source6", sources)
         object.__setattr__(self, "channel_equalities", equalities)
         object.__setattr__(self, "action_expansion6", expansion)
         if self.train_sequences is not None:

@@ -47,9 +47,10 @@ except Exception:  # pragma: no cover
 
 from valve_control import (EQUALITY_TOLERANCE_KPA, N_CHAN, P_MIN,
                            ReplayDriver, ValveDriver,
-                           apply_channel_equalities,
-                           channel_equality_residuals,
-                           normalize_channel_equalities)
+                           apply_channel_sources,
+                           channel_equalities_from_sources,
+                           channel_source_residuals,
+                           normalize_channel_sources)
 
 
 def _now_iso() -> str:
@@ -191,7 +192,8 @@ class ValveRecorder(QObject):
         self._mode = "manual"
         self._manual_target = [P_MIN] * N_CHAN     # manual 模式每拍重发的目标
         self._active_channel = 0
-        self._channel_equalities = ()
+        self._channel_sources = tuple(range(N_CHAN))
+        self._channel_equalities = ()  # 旧日志字段兼容；始终由 source map 推导
         self._action_interval_s = 0.2
         self._settle_s = 0.19
         self._warned_no_cv2 = False
@@ -280,12 +282,14 @@ class ValveRecorder(QObject):
                         fall_rates=None, random_seed=None, pre_generate_steps=0,
                         replay_path=None, required_groups=None,
                         max_frame_age=0.5, max_ndi_age=0.5,
-                        channel_equalities=()):
+                        channel_equalities=(), channel_sources=None):
         if self.recording:
             self.log.emit("已在录制中。")
             return False
         try:
-            equalities = normalize_channel_equalities(channel_equalities)
+            sources = normalize_channel_sources(
+                channel_sources, pairs=channel_equalities)
+            equalities = channel_equalities_from_sources(sources)
             def _six(values, fill):
                 result = [float(x) for x in list(values or [])[:N_CHAN]]
                 return result + [float(fill)] * (N_CHAN - len(result))
@@ -301,7 +305,9 @@ class ValveRecorder(QObject):
                     if abs(values[leader] - values[follower]) > EQUALITY_TOLERANCE_KPA:
                         raise ValueError(
                             f"等值通道 ch{leader}/ch{follower} 的 {name} 必须相同")
-            if hasattr(self.controller, "configure_channel_equalities"):
+            if hasattr(self.controller, "configure_channel_sources"):
+                self.controller.configure_channel_sources(sources)
+            elif hasattr(self.controller, "configure_channel_equalities"):
                 self.controller.configure_channel_equalities(equalities)
             if hasattr(self.controller, "configure_safety"):
                 self.controller.configure_safety(rates_up, rates_down)
@@ -320,6 +326,7 @@ class ValveRecorder(QObject):
         self._frame_idx = 0
         self._mode = mode
         self._active_channel = int(active_channel)
+        self._channel_sources = sources
         self._channel_equalities = equalities
         self._pending_commands.clear()
         self._replay_done = False
@@ -362,6 +369,7 @@ class ValveRecorder(QObject):
         self._cmd_writer = csv.writer(self._f_cmd)
         self._cmd_writer.writerow(
             ["command_id", "t_command", "t_command_ack",
+             *[f"proposed{i}" for i in range(N_CHAN)],
              *[f"requested{i}" for i in range(N_CHAN)],
              *[f"action_command{i}" for i in range(N_CHAN)],
              *[f"pair_residual{i}" for i in range(len(equalities))],
@@ -384,6 +392,7 @@ class ValveRecorder(QObject):
             "lo6": lo,
             "hi6": hi,
             "active_channel": self._active_channel,
+            "channel_source6": list(sources),
             "channel_equalities": [list(item) for item in equalities],
             "channel_equality_tolerance_kpa": EQUALITY_TOLERANCE_KPA,
             "camera_count": len(self.cams),
@@ -439,10 +448,11 @@ class ValveRecorder(QObject):
                 return
         else:
             action = self._driver.next_action() if self._driver is not None else list(self._manual_target)
-        action = apply_channel_equalities(action, self._channel_equalities)
+        proposed = list(action)
+        action = apply_channel_sources(proposed, self._channel_sources)
         command_id = self.controller.allocate_command_id()
         self._pending_commands[command_id] = {
-            "requested": list(action), "applied": list(action),
+            "proposed": proposed, "requested": list(action), "applied": list(action),
             "t_command": time.monotonic(), "acks": {1: None, 2: None},
             "statuses": {1: "pending", 2: "pending"},
             "required": set(getattr(self.controller, "_required_groups", set()) or set()),
@@ -458,7 +468,7 @@ class ValveRecorder(QObject):
             if len(result) >= 3:
                 self._pending_commands[command_id]["t_command"] = float(result[2])
         applied = list(self._pending_commands[command_id]["applied"])
-        residuals = channel_equality_residuals(applied, self._channel_equalities)
+        residuals = channel_source_residuals(applied, self._channel_sources)
         if any(value > EQUALITY_TOLERANCE_KPA for value in residuals):
             self.log.emit(f"⚠ applied6 等值残差 {residuals} 超限，停止采集。")
             self.stop_recording()
@@ -572,10 +582,11 @@ class ValveRecorder(QObject):
         self._cmd_writer.writerow(
             [str(command_id), f"{record['t_command'] - self.t0:.6f}",
              "nan" if not math.isfinite(t_ack) else f"{t_ack:.6f}"]
+            + [f"{float(v):.4f}" for v in record["proposed"]]
             + [f"{float(v):.4f}" for v in record["requested"]]
             + [f"{float(v):.4f}" for v in record["applied"]]
-            + [f"{value:.6f}" for value in channel_equality_residuals(
-                record["applied"], self._channel_equalities)]
+            + [f"{value:.6f}" for value in channel_source_residuals(
+                record["applied"], self._channel_sources)]
             + [statuses[1], statuses[2], overall])
         self._f_cmd.flush()
 

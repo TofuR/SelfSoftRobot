@@ -32,14 +32,17 @@ python main_capture.py --group1 COM3 --group2 COM46 --ndi COM9
 1. **连接 Modbus**（两组串口；2 组 × 3 通道 = 6 路）→ **连接 NDI**（末端串口）；相机已自动开预览。
 2. GUI「相机」分组设置相机数和序列号（逗号分隔；空白表示自动选择），点击「应用/重连」；右侧可选择单路或平铺预览。
 3. **设通道范围**：每个通道 `min/max`（kPa）。**单通道**：只给目标通道设范围，其余 5 路 `min=max=0`。
-4. 双段平面约束实验：主通道选 `all`，在“等值约束”启用最多两组 `leader → follower`；
-   follower 的 target/min/max/rise/fall 会镜像并锁定。默认选项只是示例，必须先确认真实腔道 mapping。
+4. 受约束实验：主通道选 `all`，在“通道来源”中为每个 `chi` 选择根通道；选择自身表示独立，
+   选择其他通道表示跟随。可配置任意大小的同源组，链式选择会压平，循环会拒绝并恢复上一有效配置。
+   follower 的 target/min/max/rise/fall 会镜像并锁定；必须先确认真实腔道 mapping。
 5. 模式选 **Manual** / **Random** / **Sweep** / **Replay**；设置动作间隔、稳定等待、每通道
    rise/fall 速率上限（kPa/s，填 0 表示不限速），Random 可填 seed 和预生成步数，Replay 选择已有 `actions6.csv`。
 6. **■ 停止采集** → **⚡ 生成 npz**（自动把 `cam0...camN` 全部传给 `capture_to_npz`）/ **📋 导出汇总 CSV**。
 
-等值约束对 Manual/Random/Sweep/Replay 全部生效，并写入 `meta.json.channel_equalities`；
-`commands.csv` 保存每组 `pair_residualN`。linked 通道范围/速率/当前命令不一致或最终
+来源约束对 Manual/Random/Sweep/Replay 全部生效。权威合同写入
+`meta.json.channel_source6`，`channel_equalities` 作为旧工具兼容派生字段；
+`commands.csv` 同时保存约束前 `proposed0..5`、约束后 `requested0..5`、最终
+`action_command0..5` 和每个 follower 的 `pair_residualN`。linked 通道范围/速率/当前命令不一致或最终
 `applied6` 残差超限时会 fail-closed 停止。完整平面实验流程见
 [`docs/real_data/planar_constrained_6ch_workflow.md`](../docs/real_data/planar_constrained_6ch_workflow.md)。
 
@@ -66,9 +69,9 @@ t=0.20s  下一拍
 | `frame_times.txt` | 每帧一行 相对秒 | `--frame-times` |
 | `actions6.csv` | `t_sec, c0..c5`（首行表头） | `--actions --actions-has-timestamps` |
 | `ndi.csv` | `t_sec + ndi0_* ... ndiN_*`（每探头 11 列） | → `tip.npz` → `--ndi-tip` |
-| `commands.csv` | 命令时间、ACK、最终命令、等值 pair residual、分组通信状态 | 通信/约束 QC / 复现 |
+| `commands.csv` | 命令时间、ACK、proposed/requested/applied 六维动作、来源 residual、分组通信状态 | 通信/约束 QC / 复现 |
 | `samples.csv` | `t_grab`、总体/逐相机 `frame_age`、各 NDI age/quality | 数据质量筛选 |
-| `meta.json` | t0 / 相机与 NDI / 模式 / seed / 范围与速率 / channel equalities / age 阈值 / 帧数 | 复现 |
+| `meta.json` | t0 / 相机与 NDI / 模式 / seed / 范围与速率 / `channel_source6` / 兼容 equalities / age 阈值 / 帧数 | 复现 |
 | `summary.csv` | **(可选)** 按帧对齐：6 路气压 + NDI xyz + 图像名 | 人眼检查 |
 
 > 保存路径默认 `<main_capture.py 所在目录>/data/raw/seq_<时间戳>`（按 **py 文件位置**解析，不依赖运行 cwd；

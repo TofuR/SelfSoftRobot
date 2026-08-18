@@ -104,12 +104,21 @@ class CaptureEqualityTest(unittest.TestCase):
         except ValueError:
             pass
 
-    def test_invalid_self_and_overlapping_pairs_fail(self):
-        normalize_channel_equalities = _capture_module(
-            "valve_control").normalize_channel_equalities
-        for pairs in (((1, 1),), ((1, 2), (2, 3)), ((6, 1),)):
+    def test_channel_sources_flatten_chains_and_reject_invalid_graphs(self):
+        valve = _capture_module("valve_control")
+        self.assertEqual(
+            valve.normalize_channel_sources([0, 1, 1, 2, 4, 5]),
+            (0, 1, 1, 1, 4, 5))
+        self.assertEqual(
+            valve.normalize_channel_equalities(((1, 2), (2, 3))),
+            ((1, 2), (1, 3)))
+        for sources in ([0, 1, 2, 3, 4], [0, 2, 1, 3, 4, 5],
+                        [0, 1, 2, 3, 4, 6]):
+            with self.subTest(sources=sources), self.assertRaises(ValueError):
+                valve.normalize_channel_sources(sources)
+        for pairs in (((1, 1),), ((2, 1), (1, 2)), ((6, 1),)):
             with self.subTest(pairs=pairs), self.assertRaises(ValueError):
-                normalize_channel_equalities(pairs)
+                valve.normalize_channel_equalities(pairs)
 
     def test_manual_random_sweep_and_replay_projection_uses_six_columns(self):
         valve = _capture_module("valve_control")
@@ -155,7 +164,7 @@ class CaptureEqualityTest(unittest.TestCase):
                     str(seq), "manual", [0] * 6, [100] * 6,
                     1.0, 0.1, 6, "test", [100] * 6, [100] * 6,
                     required_groups={1, 2},
-                    channel_equalities=((1, 2), (4, 5))))
+                    channel_sources=(0, 1, 1, 1, 4, 4)))
                 recorder._clock.stop()
                 recorder._on_tick()
                 recorder._clock.stop()
@@ -167,12 +176,18 @@ class CaptureEqualityTest(unittest.TestCase):
                 meta = json.loads((seq / "meta.json").read_text())
                 with (seq / "commands.csv").open(newline="") as stream:
                     rows = list(csv.DictReader(stream))
-                self.assertEqual(meta["channel_equalities"], [[1, 2], [4, 5]])
+                self.assertEqual(meta["channel_source6"], [0, 1, 1, 1, 4, 4])
+                self.assertEqual(
+                    meta["channel_equalities"], [[1, 2], [1, 3], [4, 5]])
                 self.assertEqual(len(rows), 1)
-                self.assertEqual(rows[0]["action_command1"], rows[0]["action_command2"])
+                self.assertEqual(float(rows[0]["proposed2"]), 99.0)
+                self.assertEqual(float(rows[0]["proposed5"]), 88.0)
+                self.assertEqual(rows[0]["requested1"], rows[0]["requested2"])
+                self.assertEqual(rows[0]["requested1"], rows[0]["requested3"])
                 self.assertEqual(rows[0]["action_command4"], rows[0]["action_command5"])
                 self.assertEqual(float(rows[0]["pair_residual0"]), 0.0)
                 self.assertEqual(float(rows[0]["pair_residual1"]), 0.0)
+                self.assertEqual(float(rows[0]["pair_residual2"]), 0.0)
             finally:
                 recorder.shutdown()
 
@@ -192,19 +207,28 @@ class CaptureEqualityTest(unittest.TestCase):
         window.show()
         _ensure_app().processEvents()
         try:
-            window._equality_enabled[0].setChecked(True)
+            # ch2 直接跟随 ch1，ch3 先选择 ch2 后应自动压平为跟随根 ch1。
+            window._channel_source_boxes[2].setCurrentIndex(1)
+            window._channel_source_boxes[3].setCurrentIndex(2)
             _ensure_app().processEvents()
-            leader = window._equality_leader[0].currentIndex()
-            follower = window._equality_follower[0].currentIndex()
+            self.assertEqual(window._current_channel_sources(), (0, 1, 1, 1, 4, 5))
+            self.assertEqual(window._channel_source_boxes[3].currentIndex(), 1)
             self.assertEqual(window.cb_active.currentIndex(), N_CHAN)
             for widgets, value in (
                     (window._min_sb, 12.0), (window._max_sb, 140.0),
                     (window._rise_sb, 25.0), (window._fall_sb, 18.0),
                     (window._target_sb, 70.0)):
-                widgets[leader].setValue(value)
+                widgets[1].setValue(value)
                 _ensure_app().processEvents()
-                self.assertEqual(widgets[follower].value(), value)
-                self.assertFalse(widgets[follower].isEnabled())
+                for follower in (2, 3):
+                    self.assertEqual(widgets[follower].value(), value)
+                    self.assertFalse(widgets[follower].isEnabled())
+            window._channel_source_boxes[0].setCurrentIndex(1)
+            valid_before_cycle = window._current_channel_sources()
+            window._channel_source_boxes[1].setCurrentIndex(0)
+            _ensure_app().processEvents()
+            self.assertEqual(window._current_channel_sources(), valid_before_cycle)
+            self.assertIn("已恢复上一有效配置", window.lbl_equality.text())
         finally:
             window.close()
             _ensure_app().processEvents()
@@ -246,6 +270,7 @@ class PreprocessingEqualityTest(unittest.TestCase):
                 action_expansion=(0, 1, 1, 2, 3, 3))
             with np.load(path) as data:
                 self.assertEqual(data["actions"].shape, (2, 6))
+                self.assertEqual(data["channel_source6"].tolist(), [0, 1, 1, 3, 4, 4])
                 self.assertEqual(data["model_action_channels"].tolist(), [0, 1, 3, 4])
                 self.assertEqual(data["action_expansion6"].tolist(), [0, 1, 1, 2, 3, 3])
                 self.assertEqual(json.loads(str(data["channel_equalities"])),
@@ -274,6 +299,36 @@ class PreprocessingEqualityTest(unittest.TestCase):
             self.assertEqual(dataset.action_channels, (0, 1, 3, 4))
             self.assertEqual(dataset.data_cache[0]["actions"].shape, (3, 4))
 
+    def test_identity_and_legacy_npz_keep_distinct_semantics(self):
+        import numpy as np
+
+        with tempfile.TemporaryDirectory(prefix="action_contract_") as root:
+            identity_dir = Path(root) / "identity"
+            identity_path = identity_dir / "seq.npz"
+            save_npz(
+                str(identity_path), np.zeros((3, 3, 15)), np.ones((3, 6)),
+                channel_sources=(0, 1, 2, 3, 4, 5),
+                model_action_channels=(0, 1, 2, 3, 4, 5),
+                action_expansion=(0, 1, 2, 3, 4, 5))
+            with np.load(identity_path) as data:
+                self.assertEqual(
+                    data["channel_source6"].tolist(), [0, 1, 2, 3, 4, 5])
+            identity = SpatialSequenceDataset(
+                str(identity_dir), seq_len=2, pairs=False, action_channels="auto")
+            self.assertEqual(identity.action_dim, 6)
+
+            legacy_dir = Path(root) / "legacy"
+            legacy_path = legacy_dir / "seq.npz"
+            save_npz(
+                str(legacy_path), np.zeros((3, 3, 15)), np.ones((3, 6)),
+                model_action_channels=(0,))
+            with np.load(legacy_path) as data:
+                self.assertNotIn("channel_source6", data.files)
+            legacy = SpatialSequenceDataset(
+                str(legacy_dir), seq_len=2, pairs=False, action_channels="auto")
+            self.assertEqual(legacy.action_dim, 1)
+            self.assertEqual(legacy.action_channels, (0,))
+
     def test_failed_planarity_qc_is_rejected(self):
         with tempfile.TemporaryDirectory(prefix="planarity_qc_") as root:
             path = Path(root) / "planarity_qc.json"
@@ -287,7 +342,7 @@ def _deployment_fixtures(*, history=None, safety=None):
         "mock.pt", "planar", "state_transition", 4, 3, 2,
         k_train=4, k_safe=4,
         action_scale_kpa=(100.0,) * 4, channel_map=(0, 1, 3, 4),
-        channel_equalities=((1, 2), (4, 5)),
+        channel_source6=(0, 1, 1, 3, 4, 4),
         train_dt_nominal_s=0.1, train_dt_measured_s=0.1,
         train_dt_std_s=0.0)
     anchor = Anchor(
@@ -310,23 +365,53 @@ class DeploymentEqualityTest(unittest.TestCase):
     def test_manifest_round_trip_keeps_equalities(self):
         manifest = DeployManifest(
             checkpoint_sha256="deadbeef", action_scale_kpa=(100.0,) * 4,
-            channel_map=(0, 1, 3, 4), channel_equalities=((1, 2), (4, 5)),
+            channel_map=(0, 1, 3, 4),
+            channel_source6=(0, 1, 1, 3, 4, 4),
             train_dt_nominal_s=0.1, mask_source="white_on_blue",
             n_nodes=15, window_size=40, z_dim=16, episode_len=40,
             action_dim=4, encoder_type="fractional", hidden_dim=128, n_scales=4)
         restored = DeployManifest.from_dict(manifest.to_dict())
+        self.assertEqual(restored.channel_source6, (0, 1, 1, 3, 4, 4))
         self.assertEqual(restored.channel_equalities, ((1, 2), (4, 5)))
         self.assertEqual(restored.action_expansion6, (0, 1, 1, 2, 3, 3))
-        with self.assertRaisesRegex(ValueError, "follower"):
+        legacy = DeployManifest(
+            checkpoint_sha256="deadbeef", action_scale_kpa=(100.0,) * 4,
+            channel_map=(0, 1, 3, 4),
+            channel_equalities=((1, 2), (4, 5)),
+            train_dt_nominal_s=0.1, mask_source="white_on_blue",
+            n_nodes=15, window_size=40, z_dim=16, episode_len=40,
+            action_dim=4, encoder_type="fractional", hidden_dim=128, n_scales=4)
+        self.assertEqual(legacy.channel_source6, (0, 1, 1, 3, 4, 4))
+        with self.assertRaisesRegex(ValueError, "根通道"):
             DeployManifest(
                 checkpoint_sha256="deadbeef", action_scale_kpa=(100.0,) * 4,
-                channel_map=(0, 1, 2, 4), channel_equalities=((1, 2),),
+                channel_map=(0, 1, 2, 4),
+                channel_source6=(0, 1, 1, 3, 4, 4),
                 train_dt_nominal_s=0.1, mask_source="white_on_blue",
                 n_nodes=15, window_size=40, z_dim=16, episode_len=40,
                 action_dim=4, encoder_type="fractional", hidden_dim=128, n_scales=4)
 
+    def test_source_contract_derives_arbitrary_model_dimensions(self):
+        cases = (
+            ((0, 1, 2, 3, 4, 5), (0, 1, 2, 3, 4, 5)),
+            ((0, 1, 1, 3, 4, 5), (0, 1, 3, 4, 5)),
+            ((0, 1, 1, 3, 4, 4), (0, 1, 3, 4)),
+            ((0, 0, 0, 3, 3, 5), (0, 3, 5)),
+            ((0, 0, 0, 0, 0, 0), (0,)),
+        )
+        for sources, roots in cases:
+            with self.subTest(sources=sources):
+                descriptor = ModelDescriptor(
+                    "mock.pt", "hash", "state_transition", len(roots), 3, 2,
+                    action_scale_kpa=(100.0,) * len(roots),
+                    channel_map=roots, channel_source6=sources)
+                self.assertEqual(descriptor.channel_map, roots)
+                self.assertEqual(descriptor.channel_source6, sources)
+                self.assertEqual(descriptor.action_dim, len(roots))
+
     def test_build_plan_projects_model_actions_and_records_contract(self):
         model, anchor, scene, safety, plan = _deployment_fixtures()
+        self.assertEqual(plan.channel_source6, model.channel_source6)
         self.assertEqual(plan.channel_equalities, model.channel_equalities)
         self.assertEqual(plan.actions6[0], (1.0, 2.0, 2.0, 3.0, 4.0, 4.0))
         self.assertTrue(validate_plan(plan, model, anchor, scene, safety).ok)
@@ -388,7 +473,7 @@ class DeploymentEqualityTest(unittest.TestCase):
         receipts = PlanExecutor(QuantizedAckTransport(), safety).execute(plan)
         self.assertEqual(len(receipts), 1)
 
-    def test_planner_optimizes_four_variables_and_outputs_equal_six_channels(self):
+    def test_planner_uses_configured_dimension_and_outputs_constrained_six_channels(self):
         import torch
 
         class TinyModel(torch.nn.Module):

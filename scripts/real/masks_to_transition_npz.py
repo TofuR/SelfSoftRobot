@@ -56,41 +56,67 @@ def load_capture_metadata(seq_dir):
     return value
 
 
+def normalize_channel_sources(sources=None, equalities=()):
+    """本地解析权威 channel_source6；旧 channel_equalities 自动迁移。"""
+    if sources is None:
+        values = list(range(6))
+        for item in equalities or ():
+            if not isinstance(item, (list, tuple)) or len(item) != 2:
+                raise ValueError("channel_equalities 每项必须是 [leader, follower]")
+            leader, follower = int(item[0]), int(item[1])
+            if leader == follower or leader not in range(6) or follower not in range(6):
+                raise ValueError("channel_equalities 必须引用两个不同的 0..5 通道")
+            values[follower] = leader
+    else:
+        values = tuple(int(value) for value in sources)
+        if len(values) != 6 or any(value not in range(6) for value in values):
+            raise ValueError("channel_source6 必须是 6 个 0..5 通道下标")
+
+    def root(start):
+        seen = set()
+        current = start
+        while values[current] != current:
+            if current in seen:
+                raise ValueError("channel_source6 不能包含循环")
+            seen.add(current)
+            current = values[current]
+        return current
+
+    return tuple(root(channel) for channel in range(6))
+
+
+def channel_equalities_from_sources(sources):
+    normalized = normalize_channel_sources(sources)
+    return tuple((source, channel) for channel, source in enumerate(normalized)
+                 if channel != source)
+
+
 def normalize_channel_equalities(pairs):
-    """本地校验采集元数据，避免前处理依赖 GUI/Qt 硬件模块。"""
-    result = []
-    used = set()
-    for item in pairs or ():
-        if not isinstance(item, (list, tuple)) or len(item) != 2:
-            raise ValueError("channel_equalities 每项必须是 [leader, follower]")
-        leader, follower = int(item[0]), int(item[1])
-        if leader == follower or leader not in range(6) or follower not in range(6):
-            raise ValueError("channel_equalities 必须引用两个不同的 0..5 通道")
-        if leader in used or follower in used:
-            raise ValueError("channel_equalities 通道对不能重叠")
-        used.update((leader, follower))
-        result.append((leader, follower))
-    return tuple(result)
+    """旧 pair 合同兼容入口。"""
+    return channel_equalities_from_sources(
+        normalize_channel_sources(equalities=pairs))
+
+
+def independent_channels_for_sources(sources):
+    normalized = normalize_channel_sources(sources)
+    return tuple(channel for channel, source in enumerate(normalized)
+                 if channel == source)
 
 
 def independent_channels_for_equalities(equalities):
-    followers = {follower for _leader, follower in normalize_channel_equalities(equalities)}
-    return tuple(channel for channel in range(6) if channel not in followers)
+    return independent_channels_for_sources(
+        normalize_channel_sources(equalities=equalities))
 
 
-def action_expansion6(channel_map, equalities):
-    """返回每个硬件通道应读取的模型动作列；受约束四维例为 (0,1,1,2,3,3)。"""
+def action_expansion6(channel_map, equalities=(), channel_sources=None):
+    """返回每个硬件通道读取的模型动作列。"""
+    sources = normalize_channel_sources(channel_sources, equalities)
     mapping = tuple(int(channel) for channel in channel_map)
     lookup = {channel: index for index, channel in enumerate(mapping)}
-    follower_sources = {follower: leader for leader, follower in
-                        normalize_channel_equalities(equalities)}
-    result = []
-    for hardware_channel in range(6):
-        source = follower_sources.get(hardware_channel, hardware_channel)
-        if source not in lookup:
-            raise ValueError(f"硬件 ch{hardware_channel} 无法从 model action 展开")
-        result.append(lookup[source])
-    return tuple(result)
+    try:
+        return tuple(lookup[source] for source in sources)
+    except KeyError as error:
+        raise ValueError(f"根通道 ch{int(error.args[0])} 未进入 model action") from error
 
 
 def validate_action_equalities(actions, channels, equalities,
@@ -332,7 +358,8 @@ def detect_joint_xy(positions, node_lo=None, node_hi=None):
 
 
 def save_npz(path, positions, actions, n_points=None, tip_fix=None,
-             channel_equalities=(), pair_residual_max=None, planarity_qc=None,
+             channel_equalities=(), channel_sources=None,
+             pair_residual_max=None, planarity_qc=None,
              model_action_channels=(), action_expansion=None):
     """存 npz。n_points/tip_fix 作元数据存入(供训练 config.json 记录数据配置, 辨识模型用)。"""
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -341,8 +368,14 @@ def save_npz(path, positions, actions, n_points=None, tip_fix=None,
         kw['n_points'] = np.array(n_points)
     if tip_fix is not None:
         kw['tip_fix'] = np.array(bool(tip_fix))
+    has_source_contract = channel_sources is not None or bool(channel_equalities)
+    sources = (normalize_channel_sources(channel_sources, channel_equalities)
+               if has_source_contract else ())
+    equalities = channel_equalities_from_sources(sources) if sources else ()
+    if sources:
+        kw['channel_source6'] = np.asarray(sources, dtype=np.int64)
     kw['channel_equalities'] = np.array(json.dumps(
-        [list(pair) for pair in channel_equalities], separators=(",", ":")))
+        [list(pair) for pair in equalities], separators=(",", ":")))
     kw['pair_residual_max'] = np.asarray(
         pair_residual_max if pair_residual_max is not None else [], dtype=np.float32)
     kw['raw_action_dim'] = np.array(actions.shape[1])
@@ -366,8 +399,8 @@ def build_parser():
     pa.add_argument("--actions", default=None,
                     help="actions6.csv(默认 <seq>/actions6.csv)")
     pa.add_argument("--action-channels", default="auto",
-                    help="模型动作对应的独立硬件通道；auto:有等值约束时删除 follower，"
-                         "否则保持旧版单通道 ch0")
+                    help="模型动作对应的来源根通道；auto:按 channel_source6 推导，"
+                         "无合同旧数据沿用 active_channel")
     pa.add_argument("--action-max", default=None,
                     help="每通道归一化上限(逗号分隔, kPa)；默认读 meta.json hi6[ch]")
     pa.add_argument("--n-points", type=int, default=15,
@@ -395,21 +428,28 @@ def main():
     out_root = args.out_root or os.path.abspath(
         os.path.join("data", "real_seq", seq_name))
     meta = load_capture_metadata(seq)
-    equalities = normalize_channel_equalities(meta.get("channel_equalities", ()))
+    has_source_contract = "channel_source6" in meta
+    sources = normalize_channel_sources(
+        meta.get("channel_source6"), meta.get("channel_equalities", ()))
+    equalities = channel_equalities_from_sources(sources)
     equality_tolerance = float(meta.get(
         "channel_equality_tolerance_kpa", EQUALITY_TOLERANCE_KPA))
     planarity_qc = load_planarity_qc(seq, args.planarity_qc)
-    independent_channels = independent_channels_for_equalities(equalities)
+    independent_channels = independent_channels_for_sources(sources)
+    source_contract = sources if (has_source_contract or equalities) else None
     if args.action_channels == "auto":
-        channels = independent_channels if equalities else (0,)
+        # identity source map 表示六路独立；无合同旧数据保持单通道兼容。
+        channels = independent_channels if source_contract else (
+            int(meta.get("active_channel", 0)),)
     else:
         channels = tuple(int(c.strip()) for c in args.action_channels.split(",")
                          if c.strip() != "")
-    if equalities and channels != independent_channels:
+    if source_contract and channels != independent_channels:
         raise ValueError(
-            "带 channel_equalities 的序列必须按 follower 删除后的固定顺序使用 "
+            "带 channel_source6 的序列必须按来源根通道的固定顺序使用 "
             f"--action-channels {','.join(map(str, independent_channels))}")
-    expansion = action_expansion6(independent_channels, equalities) if equalities else None
+    expansion = (action_expansion6(channels, channel_sources=source_contract)
+                 if source_contract else None)
 
     print(f">>> 读 mask → 2D 骨架: {masks_dir}  (tip_fix={args.tip_fix})")
     positions, fs = masks_to_positions(masks_dir, args.n_points, tip_fix=args.tip_fix)
@@ -443,7 +483,8 @@ def main():
         maxes = np.array([float(x) for x in args.action_max.split(",")], np.float32)
         if equalities and len(maxes) == len(channels):
             maxes = maxes[np.asarray(expansion, dtype=np.int64)]
-        assert len(maxes) == 6, "六维 NPZ 的 --action-max 必须为六列，或为可展开的四个独立列"
+        assert len(maxes) == 6, (
+            "六维 NPZ 的 --action-max 必须为六列，或为可按 channel_source6 展开的根通道列")
     else:
         maxes = action_max_per_channel(seq, range(6), raw_actions6)
     if equalities:
@@ -461,13 +502,15 @@ def main():
     print(f">>> 切分: train {n_train} 帧 / val {n_val} 帧  → {out_root}")
     save_npz(os.path.join(out_root, "train", f"{seq_name}_train.npz"), pos_tr, act_tr,
              n_points=args.n_points, tip_fix=args.tip_fix,
-             channel_equalities=equalities, pair_residual_max=pair_residual_max,
+             channel_equalities=equalities, channel_sources=source_contract,
+             pair_residual_max=pair_residual_max,
              planarity_qc=planarity_qc,
              model_action_channels=channels,
              action_expansion=expansion)
     save_npz(os.path.join(out_root, "val", f"{seq_name}_val.npz"), pos_va, act_va,
              n_points=args.n_points, tip_fix=args.tip_fix,
-             channel_equalities=equalities, pair_residual_max=pair_residual_max,
+             channel_equalities=equalities, channel_sources=source_contract,
+             pair_residual_max=pair_residual_max,
              planarity_qc=planarity_qc,
              model_action_channels=channels,
              action_expansion=expansion)

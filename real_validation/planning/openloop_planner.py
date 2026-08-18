@@ -445,5 +445,6 @@ class OpenLoopShootingPlanner:
                 "duration_s": duration_s,
                 "predicted_min_obstacle_clearance": minimum_clearance,
                 "optimizer_action_dim": descriptor.action_dim,
+                "channel_source6": list(descriptor.channel_source6),
                 "channel_equalities": [list(pair) for pair in equalities],
             })

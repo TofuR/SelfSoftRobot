@@ -12,7 +12,7 @@ from ..contracts.models import (
     ModelDescriptor,
     SafetyPolicy,
     Scene,
-    channel_equality_residuals,
+    channel_source_residuals,
 )
 
 
@@ -70,6 +70,8 @@ def validate_plan(plan: ActionPlan, model: ModelDescriptor, anchor: Anchor,
         add("channel_map", "channel_map 必须位于 0..5")
     if model.channel_map is not None and plan.channel_map != model.channel_map:
         add("channel_map_contract", "计划 channel_map 与模型部署合同不一致")
+    if plan.channel_source6 != model.channel_source6:
+        add("channel_source_contract", "计划 channel_source6 与模型部署合同不一致")
     if plan.channel_equalities != model.channel_equalities:
         add("channel_equality_contract", "计划 channel_equalities 与模型部署合同不一致")
     if model.k_safe is not None and plan.horizon > model.k_safe:
@@ -92,7 +94,8 @@ def validate_plan(plan: ActionPlan, model: ModelDescriptor, anchor: Anchor,
                     channel=follower)
     previous = safety.initial_action6
     for step, action in enumerate(plan.actions6):
-        residuals = channel_equality_residuals(action, model.channel_equalities)
+        residuals = (channel_source_residuals(action, model.channel_source6)
+                     if model.channel_source6 else ())
         if any(value > CHANNEL_EQUALITY_TOLERANCE for value in residuals):
             add("plan_equality", f"第 {step} 步违反 channel_equalities: {residuals}", step)
         for channel, value in enumerate(action):

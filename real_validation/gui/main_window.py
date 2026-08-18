@@ -1195,7 +1195,8 @@ class ValidationWindow(QMainWindow):
             self.channel_map.setToolTip("来自 deploy_manifest；模型动作列不能在 GUI 中重新解释")
             from dataclasses import replace
             groups = required_groups_for_channels(
-                descriptor.channel_map, descriptor.channel_equalities)
+                descriptor.channel_map, descriptor.channel_equalities,
+                descriptor.channel_source6)
             if self.session.safety.required_groups != groups:
                 self.session.set_safety(replace(self.session.safety, required_groups=groups))
                 self._log(f"安全所需阀组已按动作展开合同设为 {groups}")
@@ -1209,6 +1210,7 @@ class ValidationWindow(QMainWindow):
             f"train_dt={descriptor.train_dt_measured_s or descriptor.train_dt_nominal_s}\n"
             f"action_scale_kpa={descriptor.action_scale_kpa}\n"
             f"channel_map={descriptor.channel_map}\n"
+            f"channel_source6={descriptor.channel_source6}\n"
             f"channel_equalities={descriptor.channel_equalities}\n"
             f"action_expansion6={descriptor.action_expansion6}\n"
             f"sha256={descriptor.checkpoint_hash}")
@@ -1246,7 +1248,10 @@ class ValidationWindow(QMainWindow):
                                   self.channel_map.text().split(",") if value.strip()))
             equalities = (self.runtime.descriptor.channel_equalities
                           if self.runtime is not None else ())
-            groups = required_groups_for_channels(mapping or (0,), equalities)
+            sources = (self.runtime.descriptor.channel_source6
+                       if self.runtime is not None else ())
+            groups = required_groups_for_channels(
+                mapping or (0,), equalities, sources)
             safety = SafetyPolicy(
                 pressure_min6=tuple(columns[0]), pressure_max6=tuple(columns[1]),
                 rise_rate6=tuple(columns[2]), fall_rate6=tuple(columns[3]),
@@ -1590,7 +1595,8 @@ class ValidationWindow(QMainWindow):
             if not self.session.plan:
                 raise RuntimeError("没有已通过 Preflight 的计划")
             groups = required_groups_for_channels(
-                self.session.plan.channel_map, self.session.plan.channel_equalities)
+                self.session.plan.channel_map, self.session.plan.channel_equalities,
+                self.session.plan.channel_source6)
             self.hardware.require_valves_ready(groups)
             self.session.arm(); self._log("计划已由操作员 Arm")
             self._refresh()
@@ -1602,7 +1608,8 @@ class ValidationWindow(QMainWindow):
         if not self.session or not self.session.plan:
             raise RuntimeError("尚无执行计划")
         groups = required_groups_for_channels(
-            self.session.plan.channel_map, self.session.plan.channel_equalities)
+            self.session.plan.channel_map, self.session.plan.channel_equalities,
+            self.session.plan.channel_source6)
         return self.hardware.create_transport(groups)
 
     def _execute(self) -> None:

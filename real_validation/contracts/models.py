@@ -32,82 +32,116 @@ def _vec6(values: Iterable[float], name: str) -> tuple[float, ...]:
     return _finite_vector(values, N_HARDWARE_CHANNELS, name)
 
 
+def normalize_channel_sources(sources=None, *, pairs=(),
+                              size: int = N_HARDWARE_CHANNELS) -> tuple[int, ...]:
+    """规范化硬件来源图；链式关系压平到根，循环 fail-closed。"""
+    if sources is None:
+        values = list(range(size))
+        for item in pairs or ():
+            values_pair = tuple(item)
+            if len(values_pair) != 2:
+                raise ValueError("每个 channel equality 必须是 [leader, follower]")
+            leader, follower = int(values_pair[0]), int(values_pair[1])
+            if leader == follower or leader not in range(size) or follower not in range(size):
+                raise ValueError(f"channel equality 必须引用两个不同的 0..{size - 1} 通道")
+            values[follower] = leader
+    else:
+        values = tuple(int(value) for value in sources)
+        if len(values) != size or any(value not in range(size) for value in values):
+            raise ValueError(f"channel_source6 必须是 {size} 个 0..{size - 1} 通道下标")
+
+    def root(start):
+        seen = set()
+        current = start
+        while values[current] != current:
+            if current in seen:
+                raise ValueError("channel_source6 不能包含循环")
+            seen.add(current)
+            current = values[current]
+        return current
+
+    return tuple(root(channel) for channel in range(size))
+
+
+def channel_equalities_from_sources(sources, *,
+                                    size: int = N_HARDWARE_CHANNELS
+                                    ) -> tuple[tuple[int, int], ...]:
+    normalized = normalize_channel_sources(sources, size=size)
+    return tuple((source, channel) for channel, source in enumerate(normalized)
+                 if channel != source)
+
+
 def normalize_channel_equalities(pairs: Iterable[Iterable[int]] | None,
                                  *, size: int = N_HARDWARE_CHANNELS
                                  ) -> tuple[tuple[int, int], ...]:
-    """规范化互不重叠的 ``(leader, follower)`` 等值约束。"""
-    result: list[tuple[int, int]] = []
-    used: set[int] = set()
-    for item in pairs or ():
-        values = tuple(item)
-        if len(values) != 2:
-            raise ValueError("每个 channel equality 必须是 [leader, follower]")
-        leader, follower = int(values[0]), int(values[1])
-        if leader == follower:
-            raise ValueError("channel equality 不能跟随自身")
-        if leader not in range(size) or follower not in range(size):
-            raise ValueError(f"channel equality 通道必须位于 0..{size - 1}")
-        if leader in used or follower in used:
-            raise ValueError("channel equalities 必须是互不重叠的通道对")
-        used.update((leader, follower))
-        result.append((leader, follower))
-    return tuple(result)
+    """旧 pair 合同兼容入口；内部统一为来源图。"""
+    return channel_equalities_from_sources(
+        normalize_channel_sources(pairs=pairs, size=size), size=size)
+
+
+def apply_channel_sources(values: Iterable[float], sources,
+                          *, size: int = N_HARDWARE_CHANNELS
+                          ) -> tuple[float, ...]:
+    vector = _finite_vector(values, size, "action")
+    normalized = normalize_channel_sources(sources, size=size)
+    return tuple(vector[source] for source in normalized)
 
 
 def apply_channel_equalities(values: Iterable[float], pairs,
                              *, size: int = N_HARDWARE_CHANNELS
                              ) -> tuple[float, ...]:
-    result = list(_finite_vector(values, size, "action"))
-    for leader, follower in normalize_channel_equalities(pairs, size=size):
-        result[follower] = result[leader]
-    return tuple(result)
+    return apply_channel_sources(
+        values, normalize_channel_sources(pairs=pairs, size=size), size=size)
+
+
+def channel_source_residuals(values: Iterable[float], sources,
+                             *, size: int = N_HARDWARE_CHANNELS
+                             ) -> tuple[float, ...]:
+    vector = _finite_vector(values, size, "action")
+    return tuple(abs(vector[source] - vector[channel])
+                 for source, channel in channel_equalities_from_sources(
+                     sources, size=size))
 
 
 def channel_equality_residuals(values: Iterable[float], pairs,
                                *, size: int = N_HARDWARE_CHANNELS
                                ) -> tuple[float, ...]:
-    vector = _finite_vector(values, size, "action")
-    return tuple(abs(vector[leader] - vector[follower])
-                 for leader, follower in normalize_channel_equalities(pairs, size=size))
+    return channel_source_residuals(
+        values, normalize_channel_sources(pairs=pairs, size=size), size=size)
 
 
-def hardware_action_expansion(channel_map, pairs) -> tuple[int, ...]:
-    """返回 6 个硬件通道各自读取的模型动作列；未驱动通道为 -1。"""
+def hardware_action_expansion(channel_map, pairs=(), channel_sources=None) -> tuple[int, ...]:
+    """返回六个硬件通道各自读取的模型动作列；未驱动通道为 -1。"""
     mapping = tuple(int(value) for value in channel_map)
     lookup = {channel: index for index, channel in enumerate(mapping)}
-    followers = {follower: leader for leader, follower in
-                 normalize_channel_equalities(pairs)}
-    result = []
-    for channel in range(N_HARDWARE_CHANNELS):
-        source = followers.get(channel, channel)
-        result.append(lookup.get(source, -1))
-    return tuple(result)
+    sources = normalize_channel_sources(channel_sources or None, pairs=pairs)
+    return tuple(lookup.get(source, -1) for source in sources)
 
 
-def validate_hardware_action_contract(action_dim, channel_map, pairs,
-                                      action_expansion6=()) -> tuple[int, ...]:
-    """校验模型独立通道到六通道硬件的展开关系。"""
+def validate_hardware_action_contract(action_dim, channel_map, pairs=(),
+                                      action_expansion6=(), channel_sources=None
+                                      ) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """校验模型独立通道到六通道硬件的来源与展开关系。"""
     if channel_map is None:
-        if pairs:
-            raise ValueError("channel_equalities 要求显式 channel_map")
-        return ()
+        if pairs or channel_sources:
+            raise ValueError("通道来源合同要求显式 channel_map")
+        return (), ()
     mapping = tuple(int(value) for value in channel_map)
     if len(mapping) != int(action_dim) or len(set(mapping)) != len(mapping) or any(
             value not in range(N_HARDWARE_CHANNELS) for value in mapping):
         raise ValueError("channel_map 必须是不重复的 0..5 通道,长度等于 action_dim")
-    equalities = normalize_channel_equalities(pairs)
-    mapped = set(mapping)
-    for leader, follower in equalities:
-        if leader not in mapped:
-            raise ValueError(f"等值约束 leader ch{leader} 必须在 channel_map 中")
-        if follower in mapped:
-            raise ValueError(f"等值约束 follower ch{follower} 不应重复进入模型动作")
-    expected = hardware_action_expansion(mapping, equalities)
+    sources = normalize_channel_sources(channel_sources or None, pairs=pairs)
+    roots = tuple(channel for channel, source in enumerate(sources) if channel == source)
+    constrained = bool(channel_sources) or bool(pairs)
+    if constrained and mapping != roots:
+        raise ValueError(
+            f"channel_map={mapping} 必须等于 channel_source6 根通道 {roots}")
+    expected = hardware_action_expansion(mapping, channel_sources=sources)
     expansion = tuple(int(value) for value in action_expansion6 or ())
     if expansion and expansion != expected:
         raise ValueError(
-            f"action_expansion6={expansion} 与 channel_map/equalities 推导值 {expected} 不同")
-    return expected
+            f"action_expansion6={expansion} 与 channel_source6 推导值 {expected} 不同")
+    return (sources if constrained else ()), expected
 
 
 @dataclass(frozen=True)
@@ -126,6 +160,7 @@ class ModelDescriptor:
     # ---- P1b 新增(全部带默认值;缺 manifest 时为 None,由 preflight/planner 阻断) ----
     action_scale_kpa: tuple[float, ...] | None = None
     channel_map: tuple[int, ...] | None = None
+    channel_source6: tuple[int, ...] = ()
     channel_equalities: tuple[tuple[int, int], ...] = ()
     action_expansion6: tuple[int, ...] = ()
     train_dt_nominal_s: float | None = None
@@ -154,14 +189,15 @@ class ModelDescriptor:
             if any(v <= 0 or not math.isfinite(v) for v in values):
                 raise ValueError("action_scale_kpa 必须全为正有限值")
             object.__setattr__(self, "action_scale_kpa", values)
-        equalities = normalize_channel_equalities(self.channel_equalities)
-        if equalities:
-            if self.action_scale_kpa is None:
-                raise ValueError("channel_equalities 要求 action_scale_kpa")
-        expansion = validate_hardware_action_contract(
-            self.action_dim, self.channel_map, equalities, self.action_expansion6)
+        sources, expansion = validate_hardware_action_contract(
+            self.action_dim, self.channel_map, self.channel_equalities,
+            self.action_expansion6, self.channel_source6)
+        equalities = channel_equalities_from_sources(sources) if sources else ()
+        if equalities and self.action_scale_kpa is None:
+            raise ValueError("通道来源合同要求 action_scale_kpa")
         if self.channel_map is not None:
             object.__setattr__(self, "channel_map", tuple(int(v) for v in self.channel_map))
+        object.__setattr__(self, "channel_source6", sources)
         object.__setattr__(self, "channel_equalities", equalities)
         object.__setattr__(self, "action_expansion6", expansion)
 
@@ -367,6 +403,7 @@ class ActionPlan:
     scene_digest: str
     anchor_id: str
     safety_digest: str
+    channel_source6: tuple[int, ...] = ()
     channel_equalities: tuple[tuple[int, int], ...] = ()
     plan_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     random_seed: int | None = None
@@ -379,11 +416,16 @@ class ActionPlan:
         if not actions:
             raise ValueError("计划至少需要一个动作")
         object.__setattr__(self, "actions6", actions)
-        object.__setattr__(self, "channel_map", tuple(int(i) for i in self.channel_map))
-        equalities = normalize_channel_equalities(self.channel_equalities)
+        mapping = tuple(int(i) for i in self.channel_map)
+        sources, _expansion = validate_hardware_action_contract(
+            self.model_action_dim, mapping, self.channel_equalities,
+            channel_sources=self.channel_source6)
+        equalities = channel_equalities_from_sources(sources) if sources else ()
+        object.__setattr__(self, "channel_map", mapping)
+        object.__setattr__(self, "channel_source6", sources)
         object.__setattr__(self, "channel_equalities", equalities)
         for step, action in enumerate(actions):
-            residuals = channel_equality_residuals(action, equalities)
+            residuals = channel_source_residuals(action, sources) if sources else ()
             if any(value > CHANNEL_EQUALITY_TOLERANCE for value in residuals):
                 raise ValueError(f"计划第 {step} 步违反 channel_equalities: {residuals}")
         if self.step_interval_s <= 0:
@@ -402,6 +444,7 @@ class ActionPlan:
         data.pop("schema_version", None)
         data["actions6"] = tuple(tuple(row) for row in data["actions6"])
         data["channel_map"] = tuple(data["channel_map"])
+        data["channel_source6"] = tuple(data.get("channel_source6", ()))
         data["channel_equalities"] = tuple(
             tuple(pair) for pair in data.get("channel_equalities", ()))
         return cls(**data)

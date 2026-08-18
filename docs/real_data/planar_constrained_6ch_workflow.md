@@ -1,22 +1,23 @@
-# 双段六腔等值约束平面实验：实际运行流程
+# 六通道来源约束平面实验：实际运行流程
 
 > 实施分支：`feat/planar-constrained-control`  
-> 目标：保留六维硬件与原始数据，用每段一组 `follower=leader` 形成四维模型动作，
-> 先完成单相机 15 节点二维整形与避障，再扩展真实三维。
+> 目标：保留六维硬件与原始数据，用通用 `channel_source6` 描述任意同源通道组；
+> 当前双段实验配置恰好形成四维模型动作，先完成单相机 15 节点二维整形与避障，再扩展真实三维。
 
 ## 1. 不变与变化的边界
 
 - `real_capture` 仍只采原始 RGB、六维动作、NDI 和时间戳，不做骨架或平面判断。
-- `actions6.csv`、训练 NPZ 和执行命令是六维；Dataset/模型/checkpoint 使用四维独立动作。
-- 默认示例约束为 `ch2=ch1`、`ch5=ch4`（代码索引即 GUI 的 `ch0..ch5`）。
+- `actions6.csv`、训练 NPZ 和执行命令始终是六维；Dataset/模型/checkpoint 只使用来源根通道。
+- 权威合同 `channel_source6[i]` 表示硬件 `chi` 从哪个根通道取值；自身表示独立。
+- 当前示例为 `[0,1,1,3,4,4]`，因此根通道为 `[0,1,3,4]`、`action_dim=4`。
+- identity `[0,1,2,3,4,5]` 是 6D；一组 follower 是 5D；其他合法来源图可自然得到 1–6D。
 - Random、Sweep、Manual、Replay 统一在下发前投影；不能只约束某一种采集模式。
-- Dataset 自动读取 NPZ 动作视图合同，选择 `[ch0,ch1,ch3,ch4]`，模型 `action_dim=4`。
-- Planner 直接优化模型的 4 列，生成 ActionPlan 时才展开为 6 列。
+- Dataset 自动读取 NPZ 动作视图合同；Planner 优化同一组根变量，在 ActionPlan 边界展开为 6 列。
 - NDI 只做末端离面 QC/评价，不作为骨架 GT、模型输入或 Planner 输入。
 
 ## 2. 真机前先确认物理 mapping
 
-GUI 中的默认 pair 只是示例，不能代替真机辨识。先在安全低压范围内逐腔测试并记录：
+GUI 的来源选择必须由真机辨识决定，不能把当前 `[0,1,1,3,4,4]` 示例当作物理事实。先在安全低压范围内逐腔测试并记录：
 
 1. 两段各三个物理腔体到 `ch0..ch5` 的对应关系；
 2. 各腔单独增压时的弯曲方向；
@@ -45,12 +46,13 @@ python real_capture/main_capture.py \
 
 1. 连接两组 Modbus、NDI，确认主相机预览正常；
 2. 主通道选择 `all`；
-3. 在“等值约束”启用两组链接，选择经真机确认的 leader/follower；
-4. 修改 leader 的 target/min/max/rise/fall，确认 follower 自动镜像且不可编辑；
-5. 先“全部归零”，再开始 Manual 小幅测试；
-6. 确认方向与平面性后再运行 Random/Sweep；需要复现实验时使用同一 seed；
-7. Replay 仍读取普通六列 `actions6.csv`，但每拍也会经过同一约束投影；
-8. 停止后检查 `meta.json.channel_equalities` 和 `commands.csv.pair_residual*`。
+3. 在“通道来源”中逐路选择经真机确认的根通道（自身=独立）；
+4. 确认界面显示的规范化来源关系正确；链式选择应压平，循环应自动回退；
+5. 修改根通道的 target/min/max/rise/fall，确认所有 follower 自动镜像且不可编辑；
+6. 先“全部归零”，再开始 Manual 小幅测试；
+7. 确认方向与平面性后再运行 Random/Sweep；需要复现实验时使用同一 seed；
+8. Replay 仍读取普通六列 `actions6.csv`，但每拍也会经过同一来源投影；
+9. 停止后检查 `meta.json.channel_source6`，并对比 `commands.csv` 的 proposed/requested/applied。
 
 约束启用时只允许 `all`，且 linked 通道的范围、rise/fall 和当前命令必须相等。控制器会在逐通道
 限速后再次检查 `applied6`；残差超过记录容差（默认 0.5 kPa）才停止采集，正常量化小误差不会
@@ -91,13 +93,13 @@ python scripts/real/masks_to_transition_npz.py \
   --n-points 15
 ```
 
-只要 `meta.json` 声明了 `channel_equalities`，工具就会：
+只要 `meta.json` 声明了 `channel_source6`（旧 `channel_equalities` 会自动迁移），工具就会：
 
-- 自动确定 `model_action_channels=[0,1,3,4]`；
+- 从来源根自动确定 `model_action_channels`；当前示例得到 `[0,1,3,4]`；
 - 在归一化前逐帧验证原始 kPa 等值残差；
 - 要求 linked 通道的原始归一化上限相同；
-- 保留 `actions:(T,6)`，不压缩为四维；
-- 在 NPZ 保存 `model_action_channels`、`action_expansion6`、`channel_equalities`、
+- 保留 `actions:(T,6)`，不提前压缩；
+- 在 NPZ 保存 `channel_source6`、`model_action_channels`、`action_expansion6`、兼容 `channel_equalities`、
   `pair_residual_max` 和可选 `planarity_qc`。
 
 没有等值元数据的旧单通道序列继续兼容原来的 `--action-channels 0`。
@@ -112,8 +114,9 @@ CUDA_VISIBLE_DEVICES=0 python scripts/training/train_transition.py --mode gt --d
 CUDA_VISIBLE_DEVICES=0 python scripts/training/train_transition.py --mode open_loop --data_dir "$DATA"
 ```
 
-确认训练 `config.json` 中 `action_dim=4`、`action_view.raw_action_dim=6`、
-`model_action_channels=[0,1,3,4]`、`n_nodes=15`。完成独立序列 rollout 和 `K_safe`
+确认训练 `config.json` 中 `action_view.raw_action_dim=6`、`channel_source6`、
+`model_action_channels` 与来源根一致，且 `action_dim=len(model_action_channels)`；当前示例才是
+`action_dim=4`、`model_action_channels=[0,1,3,4]`。完成独立序列 rollout 和 `K_safe`
 认证后生成 manifest：
 
 ```bash
@@ -124,11 +127,12 @@ python scripts/utils/build_deploy_manifest.py \
   --horizon-summary <exp>/eval_horizon/horizon_summary.json
 ```
 
-构建器会从 raw `meta.json` 复制并验证 `channel_equalities`。受约束部署包必须同时满足：
+构建器会交叉验证 raw `meta.json` 与训练 `action_view` 的 `channel_source6`。部署包必须满足：
 
-- `action_dim=4`；
-- `channel_map=[0,1,3,4]`；
-- `action_expansion6=[0,1,1,2,3,3]`；
+- `action_dim` 等于来源根数量；
+- `channel_map` 等于按硬件顺序排列的来源根；
+- `action_expansion6` 完全由 `channel_source6 + channel_map` 推导；
+- 当前示例分别为 `4`、`[0,1,3,4]`、`[0,1,1,2,3,3]`；
 - raw `actions6.csv` 全序列残差在采集 tolerance 内。
 
 ## 7. real_validation 规划与执行
@@ -137,9 +141,10 @@ python scripts/utils/build_deploy_manifest.py \
 Arm → Execute。约束在后台合同中自动生效：
 
 ```text
-optimizer u4
-  → 四维 OpenLoop 模型
-  → 计划展开 a6=[u0,u1,u1,u2,u3,u3]
+optimizer uD（D=来源根数量）
+  → D 维 OpenLoop 模型
+  → 按 action_expansion6 展开 a6
+  → 当前示例 a6=[u0,u1,u1,u2,u3,u3]
   → 六维 kPa ActionPlan
   → preflight
   → transport
@@ -150,7 +155,7 @@ Preflight 会拒绝：plan/model equality 不一致、历史动作维度错误�
 不同、动作越界或超速。执行器仅把通过 ACK 且等值残差合格的 `applied6` 写入历史；失配时归零并
 中止，必须重新锚定和规划。
 
-Mock Warmup 直接生成四维模型历史；真机下发时才展开六维。Real 模式仍允许操作者显式选择零历史起步，但初始窗口
+Mock Warmup 直接生成 D 维模型历史；真机下发时才展开六维。Real 模式仍允许操作者显式选择零历史起步，但初始窗口
 属于 OOD，界面会告警；后续用合格的真实 `applied6` 逐步替换。
 
 ## 8. 第一轮实机验收顺序

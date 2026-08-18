@@ -107,12 +107,16 @@ planarity_threshold_source
 
 只有 `planarity_pass=true` 的序列进入二维训练主集。失败序列保留用于诊断，不静默删除。
 
-## 5. 最小的 GUI 等值约束与数据合同
+## 5. 通用 GUI 来源约束与数据合同
+
+> 实施更新：最初计划的“最多两组 pair”已升级为权威 `channel_source6`。每个硬件通道都选择
+> 一个来源根通道，因而可表达任意大小的同源组；链式关系压平，循环 fail-closed。
+> `action_dim` 是根通道数量的派生值，当前实验恰好为 4，并非代码限制。
 
 ### 5.1 参数化不能硬编码通道编号
 
-GUI 增加两行可选的等值关系，例如“`ch2 跟随 ch1`”“`ch5 跟随 ch4`”。底层仍需要
-一个很小的可配置约束对象，避免只在界面显示值相等而实际命令不同。默认假设只是示例：
+GUI 为六个通道分别提供“`chi ← chX`”来源选择；选择自身表示独立。底层使用同一来源合同，
+避免只在界面显示值相等而实际命令不同。当前物理假设仍只是示例：
 
 ```json
 {
@@ -153,8 +157,8 @@ a6 = [s0, q0, q0, s1, q1, q1]      # 仅为默认 mapping 示例
 `real_capture` 第一版不需要改变采集格式。Replay 仍下发六列，原始目录继续保存：
 
 ```text
-actions6.csv       # 本拍对应的六维动作
-commands.csv       # requested6 / applied6 / 通信状态
+actions6.csv       # 本拍对应的最终 applied 六维动作
+commands.csv       # proposed6 / requested6 / applied6 / 通信状态
 cam0/              # 主训练视角
 ndi.csv            # 独立末端三维质控
 ```
@@ -162,11 +166,12 @@ ndi.csv            # 独立末端三维质控
 第一版离线处理继续直接使用六维动作，只额外验证并保存约束元数据：
 
 ```text
-actions:             (T,6)       # 原始训练文件，等值列保留
-model_action_channels: [0,1,3,4] # Dataset 投影合同
+actions:             (T,6)       # 原始训练文件，同源列保留
+channel_source6:     [0,1,1,3,4,4] # 权威来源合同（当前示例）
+model_action_channels: [0,1,3,4]   # 来源根；Dataset 投影合同
 action_expansion6:   [0,1,1,2,3,3]
-channel_equalities:  JSON/string
-pair_residual:       (T,2)
+channel_equalities:  JSON/string   # 兼容派生字段
+pair_residual:       (T,n_followers)
 planarity_qc:        metadata
 ```
 
@@ -177,12 +182,13 @@ NDI 和侧视 QC 揭示。
 
 ### 5.3 Planner 必须搜索同一个动作流形
 
-训练只覆盖 `a6 = expand(u4)`，Dataset 因此选择 `u4=[ch0,ch1,ch3,ch4]`，模型直接使用
-`action_dim=4`。Planner 优化同一 `u4`，到计划/硬件边界才展开成六维。不能训练时约束等压、
-规划时又让六个通道独立搜索，否则会立即产生
-动作 OOD。
+训练只覆盖 `a6 = expand(uD)`，其中 D 是 `channel_source6` 的根通道数量。Dataset 与
+Planner 必须使用同一组 `uD`，只在计划/硬件边界展开成六维；当前示例
+`u4=[ch0,ch1,ch3,ch4]`、`action_dim=4`。不能训练时约束同源、规划时又让六个通道独立搜索，
+否则会立即产生动作 OOD。
 
-部署合同使用 `channel_map=(0,1,3,4)`、`channel_equalities=((1,2),(4,5))`：
+部署合同以 `channel_source6=(0,1,1,3,4,4)` 为权威，并派生
+`channel_map=(0,1,3,4)`、`channel_equalities=((1,2),(4,5))`：
 
 ```text
 optimizer/model/history u4 → EqualityConstraint.expand → controller actions6
@@ -204,21 +210,21 @@ applied6 → channel_map.project → model history4
 
 停止条件：找不到一组在安全范围内稳定保持平面的 mapping，就不要开始二维训练，转回三维分支。
 
-### P1：在现有 GUI 增加等值约束
+### P1：在现有 GUI 增加通用来源约束
 
-- 增加最多两组 `follower = leader` 选择，禁止 self-link、环和重复 follower；
-- follower 的 target/min/max/rise/fall 镜像 leader；
+- 六路各自选择来源根通道；自身表示独立，链式关系压平，环被拒绝并恢复上一有效配置；
+- 任意数量 follower 的 target/min/max/rise/fall 镜像根通道；
 - 约束统一投影 Manual、Random、Sweep 和 Replay 的每一拍；
-- 配置写入 `meta.json` 和 GUI 持久化文件；
-- 启动时检查两组 Modbus 均连接、链接通道初值相等；
-- 保存前验证最终 `applied6` 的 pair residual 不超过显式容差，默认 0.5 kPa。
+- 权威 `channel_source6` 写入 `meta.json` 和 GUI 持久化文件，旧 equality 配置自动迁移；
+- 启动时检查所需 Modbus 组均连接、同源通道初值相等；
+- 保存前验证最终 `applied6` 的来源 residual 不超过显式容差，默认 0.5 kPa。
 
 Random、Sweep、seed、预生成和每通道安全范围继续复用现有实现，不新增前置动作文件。
 采集层仍只负责原始动作、图像和 NDI，不在其中做骨架或平面判断。
 
 ### P2：离线验证六维受约束数据
 
-- 扩展 `masks_to_transition_npz.py`，读取 `channel_equalities`；
+- 扩展 `masks_to_transition_npz.py`，优先读取 `channel_source6`，兼容迁移旧 `channel_equalities`；
 - 从 `applied6`/`actions6` 验证等值关系，不压缩动作列；
 - 默认 15 节点，保留现有二维分割、tip 修复和清洗流程；
 - 写入平面 QC、六维动作和 equality metadata；
@@ -228,16 +234,18 @@ Random、Sweep、seed、预生成和每通道安全范围继续复用现有实�
 
 - 先训练 GT-observed，用于检查数据和单步模型；
 - 再训练窗口化 OpenLoop，作为部署主线；
-- 原始 NPZ 为六维，Dataset 投影后模型 `action_dim=4`；状态仍为 `(15,3)`，第三维为零；
+- 原始 NPZ 为六维，Dataset 按来源根投影，`action_dim` 动态为 1–6；当前配置为 4；
+  状态仍为 `(15,3)`，第三维为零；
 - 对每段动作历史分别覆盖加载、卸载和 hold；
 - 在从未出现过的联合轨迹上评估单步误差、rollout 漂移和 `K_safe`。
 
-保留六维模型可作为消融；部署主线使用没有冗余等值列的四维模型。
+保留六维 identity 合同可作为消融；部署主线使用没有冗余同源列的 D 维模型，当前 D=4。
 
 ### P4：受约束规划和执行
 
-- 在部署 manifest 保存 model action channels、channel equalities、展开关系和动作尺度；
-- `OpenLoopShootingPlanner` 直接优化四维模型动作，生成计划时展开到六维硬件动作；
+- 在部署 manifest 保存 `channel_source6`，并派生 model action channels、兼容 equalities、
+  展开关系和动作尺度；
+- `OpenLoopShootingPlanner` 直接优化 D 维模型动作，生成计划时展开到六维硬件动作；
 - preflight 在 6 维展开后检查压力、速率、通信组和 pair equality；
 - 执行记录保留真实 `applied6`，模型历史按 channel map 投影为四维；明显违反 pair 容差时归零；
 - NDI 继续只做评价和离面安全监视，不进入模型或 Planner。
