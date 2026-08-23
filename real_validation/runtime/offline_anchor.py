@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import numpy as np
 
@@ -17,8 +18,18 @@ def anchor_from_npz(path: str | Path, frame_index: int, model: ModelDescriptor,
             raise ValueError("NPZ 必须包含 positions 和 actions")
         positions = np.asarray(data["positions"], dtype=np.float32)
         actions = np.asarray(data["actions"], dtype=np.float32)
+        state_frame = str(data["state_coordinate_frame"].item()) \
+            if "state_coordinate_frame" in data else "camera_pixel_v1"
+        state_unit = str(data["state_length_unit"].item()) \
+            if "state_length_unit" in data else "px"
+        transform_payload = (json.loads(str(data["skeleton_frame_transform"].item()))
+                             if "skeleton_frame_transform" in data else None)
     if positions.ndim != 3 or actions.ndim != 2 or len(positions) != len(actions):
         raise ValueError("期望 positions=(T,3,N)/(T,N,3)，actions=(T,D) 且 T 相同")
+    if state_frame != model.state_coordinate_frame:
+        raise ValueError(
+            f"NPZ state_coordinate_frame={state_frame} 与模型 "
+            f"{model.state_coordinate_frame} 不一致")
     if frame_index < 0 or frame_index >= len(positions):
         raise IndexError(f"frame_index={frame_index} 超出 0..{len(positions) - 1}")
     if actions.shape[1] != model.action_dim:
@@ -63,4 +74,11 @@ def anchor_from_npz(path: str | Path, frame_index: int, model: ModelDescriptor,
         prev_state=(None if prev_state is None else float_rows(prev_state)),
         frame_id="model_normalized", state_space="model_normalized",
         action_units="model_normalized",   # B2:npz actions 已归一到 [0,1],不是 kPa
-        source=f"{source}#frame={frame_index}", quality={"kind": "offline_npz", "score": 1.0})
+        source=f"{source}#frame={frame_index}",
+        quality={
+            "kind": "offline_npz", "score": 1.0,
+            "state_coordinate_frame": state_frame,
+            "state_length_unit": state_unit,
+            **({"skeleton_frame_transform": transform_payload}
+               if transform_payload is not None else {}),
+        })

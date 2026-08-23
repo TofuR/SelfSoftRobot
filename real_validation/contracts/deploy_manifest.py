@@ -2,7 +2,7 @@
 
 把部署所需的隐式知识显式化:action_scale_kpa(kPa 上界,训练时 npz 的 /hi6)、
 train_dt(实测采样周期)、mask_source(在线只允许匹配的源)、segment_params(分割参数指纹)、
-camera 指纹、k_safe_table_px(视野认证表)。由 scripts/utils/build_deploy_manifest.py
+camera 指纹、k_safe_table_px(视野认证表)和planning_displacement_px_p95(实测形态位移表)。由 scripts/utils/build_deploy_manifest.py
 从已有实验生成;工作台只读。
 
 缺 manifest 或缺关键字段时:**fail-closed 阻断规划**(action_scale_kpa 缺失不能用
@@ -49,6 +49,15 @@ class DeployManifest:
     mask_area_median_px: int | None = None
     registration_residual_max_px: float = 2.0
     k_safe_table_px: dict[str, int] | None = None
+    k_safe_table: dict[str, int] | None = None
+    k_safe_unit: str | None = None
+    planning_displacement_px_p95: dict[str, float] | None = None
+    planning_displacement_p95: dict[str, float] | None = None
+    robot_diameter_mm: float | None = None
+    robot_diameter_px: float | None = None
+    mm_per_px: float | None = None
+    state_coordinate_frame: str = "camera_pixel_v1"
+    state_length_unit: str = "px"
     train_sequences: tuple[str, ...] = ()
     n_nodes: int | None = None
     window_size: int | None = None
@@ -82,6 +91,46 @@ class DeployManifest:
         object.__setattr__(self, "action_expansion6", expansion)
         if self.train_sequences is not None:
             object.__setattr__(self, "train_sequences", tuple(self.train_sequences))
+        if self.planning_displacement_px_p95 is not None:
+            table = {str(int(k)): float(v)
+                     for k, v in self.planning_displacement_px_p95.items()}
+            if any(int(k) <= 0 or value <= 0 or not math.isfinite(value)
+                   for k, value in table.items()):
+                raise ValueError("planning_displacement_px_p95需要正步数和正有限距离")
+            object.__setattr__(self, "planning_displacement_px_p95", table)
+        if self.planning_displacement_p95 is not None:
+            table = {str(int(k)): float(v)
+                     for k, v in self.planning_displacement_p95.items()}
+            if any(int(k) <= 0 or value <= 0 or not math.isfinite(value)
+                   for k, value in table.items()):
+                raise ValueError("planning_displacement_p95需要正步数和正有限距离")
+            object.__setattr__(self, "planning_displacement_p95", table)
+        scale_values = (self.robot_diameter_mm, self.robot_diameter_px, self.mm_per_px)
+        if any(value is not None for value in scale_values):
+            if any(value is None or float(value) <= 0 or not math.isfinite(float(value))
+                   for value in scale_values):
+                raise ValueError("直径尺度合同需要三个正有限值")
+            expected = float(self.robot_diameter_mm) / float(self.robot_diameter_px)
+            if abs(expected - float(self.mm_per_px)) > max(1e-6, expected * 1e-5):
+                raise ValueError("mm_per_px 与 robot_diameter_mm/px 不一致")
+        allowed_frames = {
+            "camera_pixel_v1": "px",
+            "robot_planar_mm_v1": "mm",
+        }
+        if self.state_coordinate_frame not in allowed_frames:
+            raise ValueError(f"未知 state_coordinate_frame: {self.state_coordinate_frame}")
+        if self.state_length_unit != allowed_frames[self.state_coordinate_frame]:
+            raise ValueError("state_length_unit 与 state_coordinate_frame 不一致")
+        if self.state_coordinate_frame == "robot_planar_mm_v1" and \
+                self.robot_diameter_mm is None:
+            raise ValueError("robot_planar_mm_v1 需要 robot_diameter_mm")
+        if self.k_safe_table is not None:
+            table = {str(key): int(value) for key, value in self.k_safe_table.items()}
+            if any(value <= 0 for value in table.values()):
+                raise ValueError("k_safe_table 的 K 必须为正整数")
+            if self.k_safe_unit != self.state_length_unit:
+                raise ValueError("k_safe_unit 与 state_length_unit 不一致")
+            object.__setattr__(self, "k_safe_table", table)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

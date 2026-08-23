@@ -4,6 +4,7 @@
 """
 
 import unittest
+import tempfile
 
 import numpy as np
 import torch
@@ -58,12 +59,27 @@ class UnitConversionTest(unittest.TestCase):
         self.assertAlmostEqual(with_norm[0, 0], 0.5, places=6)  # /scale /norm
 
     def test_torch_tensor_path(self):
-        from real_validation.planning.units import kPa_to_model
+        from real_validation.planning.units import kPa_to_model, model_to_kPa
         actions = torch.tensor([[0.0], [150.0]])
         out = kPa_to_model(actions, action_scale_kpa=torch.tensor([150.0]),
                            action_norm_factor=1.0)
         self.assertIsInstance(out, torch.Tensor)
         self.assertLessEqual(out.max().item(), 1.0)
+        restored = model_to_kPa(
+            out, action_scale_kpa=torch.tensor([150.0]), action_norm_factor=1.0)
+        self.assertTrue(torch.equal(restored, actions))
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA unavailable")
+    def test_cuda_tensor_scale_stays_on_device(self):
+        from real_validation.planning.units import kPa_to_model, model_to_kPa
+        actions = torch.tensor([[0.0], [0.5], [1.0]], device="cuda")
+        scale = torch.tensor([150.0], device="cuda")
+        restored = model_to_kPa(
+            actions, action_scale_kpa=scale, action_norm_factor=1.0)
+        normalized = kPa_to_model(
+            restored, action_scale_kpa=scale, action_norm_factor=1.0)
+        self.assertEqual(restored.device.type, "cuda")
+        self.assertTrue(torch.equal(normalized, actions))
 
     def test_check_unit_consistency(self):
         from real_validation.planning.units import check_unit_consistency
@@ -155,11 +171,20 @@ class ContractRejectionTest(unittest.TestCase):
             mask_source_provenance="path_suffix",
             segment_params={"val": 100.0}, camera=None,
             k_safe_table_px={"5px": 51, "10px": 124},
+            planning_displacement_px_p95={"4": 12.0, "8": 22.0},
+            robot_diameter_mm=16.0, robot_diameter_px=20.0, mm_per_px=0.8,
             n_nodes=15, window_size=40, z_dim=16, episode_len=40, action_dim=1,
             encoder_type="fractional", hidden_dim=128, n_scales=4)
         restored = DeployManifest.from_dict(manifest.to_dict())
         self.assertEqual(restored.action_scale_kpa, (150.0,))
         self.assertEqual(restored.k_safe_table_px["10px"], 124)
+        self.assertEqual(restored.planning_displacement_px_p95["8"], 22.0)
+        self.assertEqual(restored.mm_per_px, 0.8)
+
+    def test_runtime_uses_tightest_certified_horizon(self):
+        from real_validation.runtime.model_runtime import certified_k_safe
+        self.assertEqual(certified_k_safe({"10px": 124, "5px": 51}), 51)
+        self.assertIsNone(certified_k_safe({}))
 
     def test_manifest_missing_required_raises(self):
         from real_validation.contracts.deploy_manifest import DeployManifest
@@ -208,6 +233,20 @@ class PreflightNewGatesTest(unittest.TestCase):
         plan, model, anchor, scene, safety = self._base(k_safe=None, k_safe_table_px=None)
         codes = {i.code for i in validate_plan(plan, model, anchor, scene, safety).issues}
         self.assertIn("k_safe_uncertified", codes)
+
+    def test_float32_slew_rounding_passes(self):
+        plan, model, anchor, scene, safety = self._base()
+        from dataclasses import replace
+        from real_validation.execution.preflight import validate_plan
+        dt = plan.step_interval_s
+        rate = safety.rise_rate6[0]
+        rounded = rate * dt + 5e-5
+        action = list(plan.actions6[0])
+        action[0] = safety.initial_action6[0] + rounded
+        adjusted = replace(plan, actions6=(tuple(action),) + plan.actions6[1:])
+        codes = {item.code for item in validate_plan(
+            adjusted, model, anchor, scene, safety).issues}
+        self.assertNotIn("slew_rate", codes)
 
     def _plan_for(self, scene, model, anchor, safety, step_interval_s=0.2):
         from real_validation.planning.planner_service import build_plan
@@ -439,28 +478,26 @@ class WarmupTest(unittest.TestCase):
 
 
 class AutoKTest(unittest.TestCase):
-    """B17:step_budget 从学到的 delta_scale 现算;select_k_by_gap 纯函数。"""
+    """目标形态差距与实测可达表的K选择。"""
 
-    def test_select_k_by_gap_clamps(self):
-        from real_validation.planning.auto_k import select_k_by_gap
-        self.assertEqual(select_k_by_gap(10.0, 4.0, 4, 40), 4)   # ceil(10/4)=3 < k_min → clamp 到 4
-        self.assertEqual(select_k_by_gap(200.0, 4.0, 4, 40), 40)  # ceil(50) > k_max → 40
-        self.assertEqual(select_k_by_gap(16.0, 4.0, 4, 40), 4)
-        with self.assertRaises(ValueError):
-            select_k_by_gap(10.0, 4.0, 40, 4)                     # k_min > k_max
+    def test_select_k_by_empirical_displacement(self):
+        from real_validation.planning.auto_k import select_k_by_displacement
+        table = {"4": 30.0, "8": 42.0, "12": 49.0, "40": 56.0}
+        self.assertEqual(select_k_by_displacement(29.0, table, 4, 40), 4)
+        self.assertEqual(select_k_by_displacement(45.0, table, 4, 40), 12)
+        self.assertEqual(select_k_by_displacement(95.0, table, 4, 40), 40)
 
-    def test_step_budget_uses_learned_delta_scale(self):
-        """delta_scale 初值 0.1 → budget ≈ 0.1×pc_scale,不是 1.0×pc_scale(B17)。"""
-        from real_validation.planning.auto_k import step_budget_px
-        from real_validation.runtime.model import OpenLoopTransitionModel
-        model = OpenLoopTransitionModel(1, 3, hidden_dim=8, window_size=4,
-                                        n_orders=2, z_dim=4)
-        model.pc_scale.data = torch.tensor([[1.0, 1.0, 1.0]])   # 归一化 → px
-        self.assertAlmostEqual(model.delta_scale.item(), 0.1)     # 可学参数初值 0.1
-        budget = step_budget_px(model)
-        self.assertAlmostEqual(budget, 0.1, places=6)             # 0.1×1.0,不是 1.0
-        model.delta_scale.data.fill_(0.7)
-        self.assertAlmostEqual(step_budget_px(model), 0.7, places=6)
+    def test_manifest_displacement_table_uses_recorded_skeletons(self):
+        from scripts.utils.build_deploy_manifest import measure_planning_displacement
+        positions = np.zeros((6, 3, 2), dtype=np.float32)
+        positions[:, 0, :] = np.arange(6, dtype=np.float32)[:, None]
+        with tempfile.TemporaryDirectory() as root:
+            path = f"{root}/sequence.npz"
+            np.savez_compressed(path, positions=positions)
+            table = measure_planning_displacement(path, max_horizon=3)
+        self.assertAlmostEqual(table["1"], 1.0)
+        self.assertAlmostEqual(table["2"], 2.0)
+        self.assertAlmostEqual(table["3"], 3.0)
 
     def test_gap_point_subtracts_radius(self):
         from real_validation.planning.auto_k import gap_px_point

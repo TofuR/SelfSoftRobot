@@ -93,7 +93,8 @@ def _scene_metrics(observed: np.ndarray, scene: Scene, tip_node: int) -> dict:
             result["target_success"] = bool(terminal_distance <= radius)
         elif target.kind == "target_skeleton":
             nodes = np.asarray(target.geometry.get("nodes"), dtype=np.float64)
-            tolerance = float(target.geometry.get("tolerance_px", 0.0))
+            tolerance = float(target.geometry.get(
+                "tolerance", target.geometry.get("tolerance_px", 0.0)))
             dists = np.linalg.norm(xy[-1] - nodes[:, :2], axis=1)
             result["terminal_skeleton_mne"] = float(dists.mean())
             result["target_success"] = bool(dists.mean() <= tolerance)
@@ -101,7 +102,10 @@ def _scene_metrics(observed: np.ndarray, scene: Scene, tip_node: int) -> dict:
 
 
 def evaluate_plan_scene(predicted_states, scene: Scene | None,
-                        tip_node: int = 0) -> dict:
+                        tip_node: int = 0,
+                        mm_per_px: float | None = None,
+                        state_unit: str = "px",
+                        mm_per_state: float | None = None) -> dict:
     """仅用**预测**形态算场景指标(计划是否达标 / 计划是否撞障碍)。
 
     与 evaluate_prediction 不同:后者需要 observed_states 算 prediction-to-execution
@@ -114,6 +118,30 @@ def evaluate_plan_scene(predicted_states, scene: Scene | None,
     result = {"steps": int(predicted.shape[0]), "nodes": int(predicted.shape[1])}
     if scene is not None:
         result.update(_scene_metrics(predicted, scene, tip_node))
+    if state_unit not in {"px", "mm"}:
+        raise ValueError("state_unit 必须是 px 或 mm")
+    renames = {
+        "terminal_target_distance": f"predicted_terminal_tip_target_residual_{state_unit}",
+        "terminal_skeleton_mne": f"predicted_terminal_skeleton_target_residual_{state_unit}",
+        "minimum_obstacle_clearance": f"predicted_minimum_obstacle_clearance_{state_unit}",
+        "target_success": "predicted_target_success",
+        "collision": "predicted_collision",
+    }
+    result = {renames.get(key, key): value for key, value in result.items()}
+    conversion = mm_per_state if mm_per_state is not None else mm_per_px
+    if conversion is None and state_unit == "mm":
+        conversion = 1.0
+    if conversion is not None:
+        scale = float(conversion)
+        if not np.isfinite(scale) or scale <= 0:
+            raise ValueError("mm_per_px必须为正有限值")
+        for key in (f"predicted_terminal_tip_target_residual_{state_unit}",
+                    f"predicted_terminal_skeleton_target_residual_{state_unit}",
+                    f"predicted_minimum_obstacle_clearance_{state_unit}"):
+            if key in result:
+                if state_unit != "mm":
+                    result[f"{key.removesuffix('_' + state_unit)}_est_mm"] = (
+                        float(result[key]) * scale)
     return result
 
 

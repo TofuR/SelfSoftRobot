@@ -9,6 +9,7 @@ tool 模式:select(点选原语)/ add_target(点击加目标点)/ add_obstacle(�
 
 from __future__ import annotations
 
+from dataclasses import replace
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -55,6 +56,7 @@ class CameraViewWidget(QWidget):
         self.tool = "select"
         self.read_only = False          # 只读模式(主显示区):禁用鼠标点选 + 隐藏工具提示
         self._scene: Scene | None = None
+        self._frame_transform = None
         self._scene_items: list[tuple[str, object]] = []   # [(primitive_id, item)]
         self.plot.scene().sigMouseClicked.connect(self._on_click)
 
@@ -100,15 +102,43 @@ class CameraViewWidget(QWidget):
         else:
             self.anchor_scatter.setData(x=[], y=[])
 
+    def set_coordinate_transform(self, transform) -> None:
+        """设置 model(mm) ↔ 当前相机像素变换；None 表示 model 已是像素。"""
+        if transform is not None:
+            from ..perception.coordinates import SkeletonFrameTransform
+            if not isinstance(transform, SkeletonFrameTransform):
+                transform = SkeletonFrameTransform.from_dict(transform)
+        self._frame_transform = transform
+        if self._scene is not None:
+            self.set_scene(self._scene)
+        if hasattr(self, "_predicted_states_model"):
+            self.set_predicted_states(self._predicted_states_model)
+
+    def _model_to_camera(self, points):
+        values = np.asarray(points, dtype=np.float64)
+        return (values if self._frame_transform is None
+                else self._frame_transform.model_to_camera(values))
+
+    def _camera_to_model(self, points):
+        values = np.asarray(points, dtype=np.float64)
+        return (values if self._frame_transform is None
+                else self._frame_transform.camera_to_model(values))
+
+    def _model_length_to_camera(self, value):
+        return (float(value) if self._frame_transform is None else
+                self._frame_transform.model_length_to_camera(float(value)))
+
     # ---- 主显示增强图层 ----
     def set_predicted_states(self, states) -> None:
-        """规划预测轨迹:states(K,N,2) 图像像素,每条 K 画一条灰色虚线。"""
+        """规划预测轨迹:states(K,N,2) model坐标，显示时映射到相机像素。"""
         for item in self._predicted_items:
             self.plot.removeItem(item)
         self._predicted_items.clear()   # 保持 _layer_items["predicted"] 引用同一 list
         states = np.asarray(states, dtype=np.float64)
+        self._predicted_states_model = states.copy()
         if states.ndim != 3 or states.shape[2] < 2:
             return
+        states = self._model_to_camera(states[..., :2])
         for k in range(states.shape[0]):
             line = self.plot.plot(states[k, :, 0], states[k, :, 1],
                                   pen=pg.mkPen("#8B9BB4", width=1,
@@ -162,7 +192,32 @@ class CameraViewWidget(QWidget):
         self._layer_items["scene"] = [item for _pid, item in self._scene_items]
 
     def _draw_primitive(self, p: ScenePrimitive):
-        return scene_primitive_item(p, target_color=TARGET_COLOR)
+        if p.frame_id != "model" or self._frame_transform is None:
+            return scene_primitive_item(p, target_color=TARGET_COLOR)
+        geometry = dict(p.geometry)
+        if p.kind in {"target_point", "target_circle", "obstacle_circle"}:
+            key = "xy" if "xy" in geometry else "center"
+            if key in geometry:
+                geometry[key] = self._model_to_camera([geometry[key]])[0].tolist()
+            if "radius" in geometry:
+                geometry["radius"] = self._model_length_to_camera(geometry["radius"])
+            if "r" in geometry:
+                geometry["r"] = self._model_length_to_camera(geometry["r"])
+        elif p.kind == "obstacle_aabb":
+            lo, hi = geometry.get("min"), geometry.get("max")
+            if lo is not None and hi is not None:
+                corners = self._model_to_camera([
+                    [lo[0], lo[1]], [lo[0], hi[1]],
+                    [hi[0], lo[1]], [hi[0], hi[1]],
+                ])
+                geometry["min"] = corners.min(axis=0).tolist()
+                geometry["max"] = corners.max(axis=0).tolist()
+        elif p.kind == "target_skeleton" and geometry.get("nodes"):
+            geometry["nodes"] = self._model_to_camera(geometry["nodes"]).tolist()
+        display = replace(
+            p, geometry=geometry,
+            safety_margin=self._model_length_to_camera(p.safety_margin))
+        return scene_primitive_item(display, target_color=TARGET_COLOR)
 
     # ---- 点出目标骨架(功能③) ----
     def clear_skeleton_points(self) -> None:
@@ -176,7 +231,7 @@ class CameraViewWidget(QWidget):
             return False
         nodes = [[x, y] for x, y in self._skeleton_points]
         self.target_skeleton_picked.emit(ScenePrimitive(
-            "target_skeleton", "model", {"nodes": nodes, "tolerance_px": 4.0},
+            "target_skeleton", "model", {"nodes": nodes, "tolerance": 4.0},
             name=f"目标骨架（{len(nodes)}节点）"))
         self.clear_skeleton_points()
         return True
@@ -195,22 +250,27 @@ class CameraViewWidget(QWidget):
         view = self.plot.getViewBox()
         mapped = view.mapSceneToView(ev.scenePos())
         col, row = int(mapped.x()), int(mapped.y())
+        model_xy = self._camera_to_model([[col, row]])[0]
         self.sig_image_clicked.emit(col, row)
         if self.tool == "add_target_skeleton":
             if ev.double():
                 self.commit_skeleton_target()
                 return
-            self._skeleton_points.append((float(col), float(row)))
-            xs = [p[0] for p in self._skeleton_points]
-            ys = [p[1] for p in self._skeleton_points]
+            self._skeleton_points.append((float(model_xy[0]), float(model_xy[1])))
+            display_points = self._model_to_camera(self._skeleton_points)
+            xs = display_points[:, 0]
+            ys = display_points[:, 1]
             self._skeleton_preview.setData(x=xs, y=ys)
             self.skeleton_draft_changed.emit(len(self._skeleton_points))
             return
         if self.tool == "add_target":
             self.target_picked.emit(ScenePrimitive(
-                "target_point", "model", {"xy": [col, row], "node": 0},
+                "target_point", "model",
+                {"xy": [float(model_xy[0]), float(model_xy[1])], "node": 0},
                 name=f"target_{len(self._scene_items)}"))
         elif self.tool == "add_obstacle":
             self.obstacle_picked.emit(ScenePrimitive(
-                "obstacle_circle", "model", {"center": [col, row], "radius": 10.0},
+                "obstacle_circle", "model",
+                {"center": [float(model_xy[0]), float(model_xy[1])],
+                 "radius": 10.0},
                 name=f"obstacle_{len(self._scene_items)}"))

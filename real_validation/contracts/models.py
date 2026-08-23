@@ -172,6 +172,15 @@ class ModelDescriptor:
     camera_fingerprint: dict[str, Any] | None = None
     reference_frame_hash: str | None = None
     k_safe_table_px: dict[str, int] | None = None
+    k_safe_table: dict[str, int] | None = None
+    k_safe_unit: str | None = None
+    planning_displacement_px_p95: dict[str, float] | None = None
+    planning_displacement_p95: dict[str, float] | None = None
+    robot_diameter_mm: float | None = None
+    robot_diameter_px: float | None = None
+    mm_per_px: float | None = None
+    state_coordinate_frame: str = "camera_pixel_v1"
+    state_length_unit: str = "px"
     registration_residual_max_px: float = 2.0
     provenance: dict[str, str] = field(default_factory=dict)
 
@@ -200,6 +209,35 @@ class ModelDescriptor:
         object.__setattr__(self, "channel_source6", sources)
         object.__setattr__(self, "channel_equalities", equalities)
         object.__setattr__(self, "action_expansion6", expansion)
+        if self.planning_displacement_px_p95 is not None:
+            table = {str(int(k)): float(v)
+                     for k, v in self.planning_displacement_px_p95.items()}
+            if any(int(k) <= 0 or value <= 0 or not math.isfinite(value)
+                   for k, value in table.items()):
+                raise ValueError("planning_displacement_px_p95需要正步数和正有限距离")
+            object.__setattr__(self, "planning_displacement_px_p95", table)
+        if self.planning_displacement_p95 is not None:
+            table = {str(int(k)): float(v)
+                     for k, v in self.planning_displacement_p95.items()}
+            if any(int(k) <= 0 or value <= 0 or not math.isfinite(value)
+                   for k, value in table.items()):
+                raise ValueError("planning_displacement_p95需要正步数和正有限距离")
+            object.__setattr__(self, "planning_displacement_p95", table)
+        allowed_frames = {
+            "camera_pixel_v1": "px",
+            "robot_planar_mm_v1": "mm",
+        }
+        if self.state_coordinate_frame not in allowed_frames:
+            raise ValueError(f"未知 state_coordinate_frame: {self.state_coordinate_frame}")
+        if self.state_length_unit != allowed_frames[self.state_coordinate_frame]:
+            raise ValueError("state_length_unit 与 state_coordinate_frame 不一致")
+        if self.k_safe_table is not None:
+            table = {str(key): int(value) for key, value in self.k_safe_table.items()}
+            if any(value <= 0 for value in table.values()):
+                raise ValueError("k_safe_table 的 K 必须为正整数")
+            if self.k_safe_unit != self.state_length_unit:
+                raise ValueError("k_safe_unit 与 state_length_unit 不一致")
+            object.__setattr__(self, "k_safe_table", table)
 
     def to_dict(self) -> dict[str, Any]:
         return {"schema_version": SCHEMA_VERSION, **asdict(self)}

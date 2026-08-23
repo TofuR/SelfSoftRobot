@@ -118,7 +118,8 @@ def _target(scene: Scene, model, device, expected_nodes: int | None = None):
         weights = item.geometry.get("weights")
         if weights is not None and len(weights) != len(nodes):
             raise ValueError("目标骨架 weights 长度必须与节点数一致")
-        tolerance = float(item.geometry.get("tolerance_px", 0.0))
+        tolerance = float(item.geometry.get(
+            "tolerance", item.geometry.get("tolerance_px", 0.0)))
         if item.frame_id != "model":
             raise ValueError("target_skeleton 必须已在 model 坐标")
         return {"kind": "target_skeleton", "nodes": torch.tensor(
@@ -196,11 +197,10 @@ def _skeleton_dists(predictions, target_nodes, scale, center):
 
 
 def _resolve_k(config, descriptor, model, target, state, center, scale):
-    """固定 K 或 auto_k(step_budget 从学到的 delta_scale 现算)→ (k_effective, gap_px)。"""
+    """固定K或基于实测形态位移表的auto_k。"""
     if config.auto_k:
         from .auto_k import (gap_px_point, gap_px_skeleton,
-                             select_k_by_gap, step_budget_px)
-        budget = step_budget_px(model)
+                             select_k_by_displacement)
         if target["kind"] == "target_skeleton":
             now_px = (state.squeeze(0).detach().cpu().numpy()
                       * scale.detach().cpu().numpy() + center.detach().cpu().numpy())
@@ -211,8 +211,14 @@ def _resolve_k(config, descriptor, model, target, state, center, scale):
                       * scale[:2].cpu().numpy() + center[:2].cpu().numpy())
             gap = gap_px_point(tip_px, target["point"].cpu().numpy(),
                                target["radius"])
-        k = select_k_by_gap(gap, budget, config.k_min, config.k_max)
-        return min(k, descriptor.k_safe or k), gap
+        displacement = (descriptor.planning_displacement_p95 or
+                        descriptor.planning_displacement_px_p95)
+        if not displacement:
+            raise ValueError("auto_k需要部署合同中的planning_displacement_p95")
+        k_max = min(config.k_max, descriptor.k_safe or config.k_max)
+        k = select_k_by_displacement(
+            gap, displacement, config.k_min, k_max)
+        return k, gap
     k = config.horizon
     if descriptor.k_safe is not None and k > descriptor.k_safe:
         raise ValueError(f"K={k} 超过 K_safe={descriptor.k_safe}")
@@ -279,8 +285,10 @@ class OpenLoopShootingPlanner:
         # model_normalized(npz 来源,offline_anchor 新标注)直接用:已是模型单位
 
         # ---- 变长 K(B17):step_budget 从学到的 delta_scale 现算 ----
-        k_effective, auto_k_gap_px = _resolve_k(config, descriptor, model, target,
-                                                state, center, scale)
+        k_effective, auto_k_gap = _resolve_k(config, descriptor, model, target,
+                                             state, center, scale)
+        state_unit = descriptor.state_length_unit
+        residual_key = f"predicted_terminal_target_residual_{state_unit}"
 
         for leader, follower in equalities:
             for field_name in ("pressure_min6", "pressure_max6", "rise_rate6",
@@ -389,13 +397,15 @@ class OpenLoopShootingPlanner:
                         final_distance = float(torch.linalg.vector_norm(
                             final_tip - target["point"]).cpu())
                     candidate = {
-                        "actions": physical.detach().cpu().numpy(),
-                        "predictions": predictions.detach().cpu().numpy(),
+                        "actions": physical.detach().cpu().numpy().copy(),
+                        "predictions": predictions.detach().cpu().numpy().copy(),
                         "loss_curve": loss_curve,
-                        "final_distance_normalized": final_distance,
+                        "predicted_terminal_target_residual": final_distance,
                         "init": init_name,
                     }
-                if best is None or candidate["final_distance_normalized"] < best["final_distance_normalized"]:
+                if (best is None or
+                        candidate["predicted_terminal_target_residual"] <
+                        best["predicted_terminal_target_residual"]):
                     best = candidate
         finally:
             model.train(was_training)
@@ -409,6 +419,14 @@ class OpenLoopShootingPlanner:
         predictions_path = output / "predicted_states.npz"
         states_model = (best["predictions"] * scale.detach().cpu().numpy() +
                         center.detach().cpu().numpy())
+        if target["kind"] == "target_skeleton":
+            target_nodes = target["nodes"].detach().cpu().numpy()
+            predicted_terminal_target_residual = float(np.linalg.norm(
+                states_model[-1, :, :2] - target_nodes[:, :2], axis=1).mean())
+        else:
+            predicted_terminal_target_residual = float(np.linalg.norm(
+                states_model[-1, target["node"], :2] -
+                target["point"].detach().cpu().numpy()))
         minimum_clearance = None
         if obstacles:
             values = []
@@ -428,20 +446,27 @@ class OpenLoopShootingPlanner:
             minimum_clearance = min(values)
         np.savez_compressed(predictions_path,
                             states_normalized=best["predictions"],
-                            states_model=states_model)
+                            states_model=states_model,
+                            state_coordinate_frame=np.array(
+                                descriptor.state_coordinate_frame),
+                            state_length_unit=np.array(state_unit))
         return build_plan(
             model_actions=best["actions"], channel_map=channel_map,
             step_interval_s=step_interval_s, model=descriptor, anchor=anchor,
             scene=scene, safety=safety, random_seed=config.random_seed,
             predicted_states_path=predictions_path.name,
-            loss_terms={"final_target_distance": best["final_distance_normalized"]},
+            loss_terms={
+                residual_key: predicted_terminal_target_residual},
             metadata={
                 "planner": "openloop_shooting_v2", "target_id": target_item.primitive_id,
                 "target_kind": target["kind"],
                 "best_init": best["init"],
                 "loss_curve": best["loss_curve"], "n_iter": config.n_iter,
                 "n_restarts": config.n_restarts, "k_effective": k_effective,
-                "auto_k": config.auto_k, "auto_k_gap_px": auto_k_gap_px,
+                "auto_k": config.auto_k,
+                f"auto_k_gap_{state_unit}": auto_k_gap,
+                "state_coordinate_frame": descriptor.state_coordinate_frame,
+                "state_length_unit": state_unit,
                 "duration_s": duration_s,
                 "predicted_min_obstacle_clearance": minimum_clearance,
                 "optimizer_action_dim": descriptor.action_dim,

@@ -1,9 +1,10 @@
 """从已有实验生成 deploy_manifest.json。
 
-3 源 join,必须在服务器上跑(PC 上没有 real_capture/data/raw):
+4 源 join,必须在服务器上跑(PC 上没有 real_capture/data/raw):
   1. checkpoint + config.json           → 网络形状 + data_dirs
   2. raw/<seq>/meta.json + frame_times  → action_scale_kpa(经 action_max_per_channel)/ train_dt
   3. eval_horizon/horizon_summary.json  → k_safe_table_px
+  4. 训练 transition NPZ                → planning_displacement_px_p95
 
 Usage:
   python scripts/utils/build_deploy_manifest.py \
@@ -22,6 +23,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import numpy as np
+from src.evaluation.diameter_scale import resolve_diameter_scale
 
 from scripts.real.masks_to_transition_npz import (
     EQUALITY_TOLERANCE_KPA,
@@ -73,8 +75,22 @@ def load_actions_kpa(raw_seq, channels):
     return raw[:, cols].astype(np.float32)
 
 
+def measure_planning_displacement(npz_path, max_horizon, quantile=95.0):
+    """训练骨架在各K下的最大节点位移p95，作为自动规划步数合同。"""
+    with np.load(npz_path) as data:
+        positions = np.asarray(data["positions"], dtype=np.float64).transpose(0, 2, 1)
+    xy = positions[..., :2]
+    table = {}
+    for horizon in range(1, min(int(max_horizon), len(xy) - 1) + 1):
+        per_pair = np.linalg.norm(xy[horizon:] - xy[:-horizon], axis=2).max(axis=1)
+        per_pair = per_pair[np.isfinite(per_pair)]
+        if len(per_pair):
+            table[str(horizon)] = float(np.percentile(per_pair, quantile))
+    return table
+
+
 def main():
-    parser = argparse.ArgumentParser(description="生成 deploy_manifest.json(3 源 join)")
+    parser = argparse.ArgumentParser(description="生成 deploy_manifest.json(4 源 join)")
     parser.add_argument("--exp-dir", required=True)
     parser.add_argument("--raw-seq", required=True)
     parser.add_argument("--horizon-summary")
@@ -134,6 +150,23 @@ def main():
     dt_mean, dt_std = measure_train_dt(args.raw_seq)
 
     data_dirs = config.get("data_dirs", {}).get("sequence", "")
+    diameter_scale = None
+    training_npz = sorted(glob.glob(os.path.join(data_dirs, "*.npz")))
+    state_view = dict(config.get("state_view", {}))
+    if training_npz:
+        with np.load(training_npz[0]) as data:
+            diameter_scale = resolve_diameter_scale(data, data_dirs)
+            if "state_coordinate_frame" in data:
+                state_view["state_coordinate_frame"] = str(
+                    data["state_coordinate_frame"].item())
+            if "state_length_unit" in data:
+                state_view["state_length_unit"] = str(data["state_length_unit"].item())
+    state_coordinate_frame = state_view.get(
+        "state_coordinate_frame", "camera_pixel_v1")
+    state_length_unit = state_view.get("state_length_unit", "px")
+    planning_displacement = (measure_planning_displacement(
+        training_npz[0], int(config.get("episode_len", config.get("window_size", 40))))
+        if training_npz else None)
     # 判断完整路径(data_dirs 以 .../train 结尾,os.path.basename 会取到 "train" 而丢掉
     # 目录名里的 _sam2/_rep 后缀 —— 必须对整个路径判断)
     if "_sam2" in data_dirs:
@@ -152,17 +185,32 @@ def main():
                 segment_params = json.load(stream).get("params")
 
     k_safe_table_px = None
+    k_safe_table = None
+    k_safe_unit = None
     if args.horizon_summary and os.path.isfile(args.horizon_summary):
         with open(args.horizon_summary) as stream:
             summary = json.load(stream)
         for entry in summary.get("summaries", []):
             if entry.get("model_type") == "open_loop":
-                k_safe_table_px = {
-                    "5px": entry.get("Kmax_px_5"),
-                    "10px": entry.get("Kmax_px_10"),
-                    "20px": entry.get("Kmax_px_20"),
-                }
-                k_safe_table_px = {k: int(v) for k, v in k_safe_table_px.items() if v is not None}
+                entry_frame = entry.get("state_coordinate_frame", "camera_pixel_v1")
+                if entry_frame != state_coordinate_frame:
+                    raise ValueError("horizon_summary 与训练数据的状态坐标不一致")
+                if entry.get("Kmax_state"):
+                    k_safe_table = {
+                        str(key): int(value)
+                        for key, value in entry["Kmax_state"].items()
+                    }
+                    k_safe_unit = str(entry.get("state_length_unit", state_length_unit))
+                elif state_length_unit == "px":
+                    k_safe_table_px = {
+                        "5px": entry.get("Kmax_px_5"),
+                        "10px": entry.get("Kmax_px_10"),
+                        "20px": entry.get("Kmax_px_20"),
+                    }
+                    k_safe_table_px = {
+                        k: int(v) for k, v in k_safe_table_px.items()
+                        if v is not None
+                    }
                 break
 
     manifest = {
@@ -185,6 +233,18 @@ def main():
         "mask_area_median_px": None,
         "registration_residual_max_px": 2.0,
         "k_safe_table_px": k_safe_table_px,
+        "k_safe_table": k_safe_table,
+        "k_safe_unit": k_safe_unit,
+        "planning_displacement_px_p95": (
+            planning_displacement if state_length_unit == "px" else None),
+        "planning_displacement_p95": planning_displacement,
+        "robot_diameter_mm": (diameter_scale.diameter_mm
+                              if diameter_scale else None),
+        "robot_diameter_px": (diameter_scale.diameter_px
+                              if diameter_scale else None),
+        "mm_per_px": diameter_scale.mm_per_px if diameter_scale else None,
+        "state_coordinate_frame": state_coordinate_frame,
+        "state_length_unit": state_length_unit,
         "train_sequences": [os.path.basename(args.raw_seq)],
         "n_nodes": int(config.get("n_nodes", 15)),
         "window_size": int(config.get("window_size", 40)),

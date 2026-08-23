@@ -428,11 +428,13 @@ class ValidationCoreTest(unittest.TestCase):
             ScenePrimitive("target_circle", "model", {"center": [2, 0], "r": 0.1}),
             ScenePrimitive("obstacle_circle", "model", {"center": [5, 5], "r": 1}),
         ))
-        metrics = evaluate_plan_scene(predicted, scene, tip_node=0)
-        self.assertTrue(metrics["target_success"])
-        self.assertFalse(metrics["collision"])
+        metrics = evaluate_plan_scene(predicted, scene, tip_node=0, mm_per_px=0.8)
+        self.assertTrue(metrics["predicted_target_success"])
+        self.assertFalse(metrics["predicted_collision"])
         self.assertEqual(metrics["steps"], 2)
         self.assertEqual(metrics["nodes"], 3)
+        self.assertEqual(
+            metrics["predicted_terminal_tip_target_residual_est_mm"], 0.0)
         # 无 scene 时只返回步数/节点数,不崩
         bare = evaluate_plan_scene(predicted, None)
         self.assertEqual(bare["steps"], 2)

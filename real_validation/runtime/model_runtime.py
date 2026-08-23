@@ -58,6 +58,25 @@ def _nearby_manifest_path(checkpoint: Path) -> Path | None:
     return None
 
 
+def certified_k_safe(table: dict[str, int] | None) -> int | None:
+    """取认证表中长度容差最严格的一项作为默认规划视野。"""
+    entries = []
+    for label, value in (table or {}).items():
+        try:
+            text = str(label).strip()
+            for suffix in ("px", "mm"):
+                if text.endswith(suffix):
+                    text = text[:-len(suffix)]
+                    break
+            threshold = float(text)
+            steps = int(value)
+        except (TypeError, ValueError):
+            continue
+        if threshold > 0 and steps > 0:
+            entries.append((threshold, steps))
+    return min(entries)[1] if entries else None
+
+
 class ModelLoadError(RuntimeError):
     """预期内的操作员级加载错误(路径/配置/契约),不应向 UI 抛 traceback。"""
 
@@ -95,6 +114,10 @@ class ModelRuntime:
                 manifest = DeployManifest.from_dict(manifest_raw)
             except ValueError:
                 manifest = None   # manifest 残缺 → 字段留 None,由 preflight 阻断规划
+        effective_k_safe = (int(k_safe) if k_safe is not None else
+                            certified_k_safe(
+                                (manifest.k_safe_table or manifest.k_safe_table_px)
+                                if manifest else None))
         self.manifest = manifest
         self.reference_frame_path = None
         if manifest is not None and manifest.reference_frame:
@@ -111,7 +134,7 @@ class ModelRuntime:
             history_steps=history,
             model_class=str(info["model_class"]),
             k_train=int(k_train_value) if k_train_value is not None else None,
-            k_safe=int(k_safe) if k_safe is not None else None,
+            k_safe=effective_k_safe,
             data_dir=str(Path(data_dir).resolve()) if data_dir else None,
             normalization={"action_norm_factor": float(info["norm_factor"])},
             action_scale_kpa=manifest.action_scale_kpa if manifest else None,
@@ -128,6 +151,21 @@ class ModelRuntime:
             camera_fingerprint=manifest.camera if manifest else None,
             reference_frame_hash=manifest.reference_frame_sha256 if manifest else None,
             k_safe_table_px=manifest.k_safe_table_px if manifest else None,
+            k_safe_table=manifest.k_safe_table if manifest else None,
+            k_safe_unit=manifest.k_safe_unit if manifest else None,
+            planning_displacement_px_p95=(
+                manifest.planning_displacement_px_p95 if manifest else None),
+            planning_displacement_p95=(
+                manifest.planning_displacement_p95 if manifest else None),
+            robot_diameter_mm=manifest.robot_diameter_mm if manifest else None,
+            robot_diameter_px=manifest.robot_diameter_px if manifest else None,
+            mm_per_px=manifest.mm_per_px if manifest else None,
+            state_coordinate_frame=(manifest.state_coordinate_frame if manifest
+                                    else config.get("state_view", {}).get(
+                                        "state_coordinate_frame", "camera_pixel_v1")),
+            state_length_unit=(manifest.state_length_unit if manifest
+                               else config.get("state_view", {}).get(
+                                   "state_length_unit", "px")),
             registration_residual_max_px=manifest.registration_residual_max_px
                 if manifest else 2.0,
         )

@@ -413,6 +413,15 @@ class CompactLayoutTest(unittest.TestCase):
         finally:
             w.close()
 
+    def test_plan_page_exposes_distance_based_horizon(self):
+        from real_validation.gui.main_window import ValidationWindow
+        w = ValidationWindow()
+        try:
+            self.assertEqual(w.plan_k.value(), 40)
+            self.assertEqual(w.plan_auto_k.text(), "按目标距离自动K")
+        finally:
+            w.close()
+
     def test_window_default_size(self):
         from real_validation.gui.main_window import ValidationWindow
         w = ValidationWindow()

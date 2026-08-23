@@ -208,6 +208,8 @@ class ValidationWindow(QMainWindow):
         self.ndi_thread = None
         self._camera_frames: dict[int, object] = {}   # 多相机最新帧(cam_index → bgr)
         self._current_cam_index = 0    # 主显示当前相机
+        self._skeleton_frame_transform = None
+        self._coordinate_reference_frame = None
         self._valve_connect_thread: _ValveConnectThread | None = None
         configure_pyqtgraph()          # 任何 PlotWidget 之前,保证白底全局生效
         self._build_ui()
@@ -505,6 +507,8 @@ class ValidationWindow(QMainWindow):
         target_button.clicked.connect(self._set_target)
         obstacle_button = QPushButton("添加障碍"); obstacle_button.setObjectName("accent")
         obstacle_button.clicked.connect(self._add_obstacle)
+        self.scene_unit_label = QLabel("场景单位：加载模型后确定")
+        self.scene_unit_label.setStyleSheet("color:#486581;font-size:11px;")
         row = QHBoxLayout()
         row.addWidget(QLabel("目标")); row.addWidget(self.target_x); row.addWidget(self.target_y); row.addWidget(self.target_radius)
         row.addWidget(target_button); row.addStretch()
@@ -513,6 +517,7 @@ class ValidationWindow(QMainWindow):
         row.addWidget(QLabel("障碍")); row.addWidget(self.obstacle_x); row.addWidget(self.obstacle_y); row.addWidget(self.obstacle_radius)
         row.addWidget(obstacle_button); row.addStretch()
         t.addLayout(row)
+        t.addWidget(self.scene_unit_label)
         root.addWidget(gb_tgt)
 
         # 卡3:相机锚定与工具(交互发生在右上面板主摄像头)
@@ -970,7 +975,10 @@ class ValidationWindow(QMainWindow):
         if self.session is None or self._latest_frame is None or not self.runtime:
             self._error("相机锚定需要：已建实验、已加载模型、相机 READY 并收到帧")
             return
-        if not self._action_history and not self.zero_history_cb.isChecked():
+        buffered_history = getattr(self, "_history_buffer", None)
+        if (not self._action_history and
+                not (buffered_history is not None and buffered_history.ready) and
+                not self.zero_history_cb.isChecked()):
             self._error("无动作历史:勾选『零历史起步』可免 warmup 直接锚定,或先点 Warmup")
             return
         from ..runtime.anchors import anchor_from_camera_frame
@@ -1001,18 +1009,50 @@ class ValidationWindow(QMainWindow):
                 self._error("真实相机锚定需要 deploy_manifest.mask_area_median_px")
                 return
             area_median = float(self._latest_frame.shape[0] * self._latest_frame.shape[1] * 0.035)
+        action_history = self._action_history
+        history_buffer = getattr(self, "_history_buffer", None)
+        if history_buffer is not None and history_buffer.ready:
+            from ..planning.units import kPa_to_model
+            action_history = kPa_to_model(
+                np.asarray(history_buffer.snapshot(), dtype=np.float32),
+                action_scale_kpa=descriptor.action_scale_kpa,
+                action_norm_factor=self.runtime.info["norm_factor"]).tolist()
+        registration_displacement = None
+        if (self.hardware.profile.camera_backend == BackendMode.REAL and
+                self._coordinate_reference_frame is not None):
+            from ..perception.registration import estimate_registration
+            registration = estimate_registration(
+                self._gray(self._coordinate_reference_frame),
+                self._gray(self._latest_frame),
+                max_displacement_px=descriptor.registration_residual_max_px)
+            registration_displacement = (
+                registration.displacement_px if registration.ok else float("nan"))
         anchor, quality, skeleton = anchor_from_camera_frame(
             self._latest_frame, background_gray=bg,
             segment_params=segment_params,
             n_nodes=descriptor.n_nodes, model=self.runtime.model,
-            action_history=self._action_history, area_median_px=float(area_median),
+            action_history=action_history, area_median_px=float(area_median),
             frame_ref=f"camera_live#{self.hardware.profile.camera_backend.value}",
+            registration_displacement_px=registration_displacement,
             zero_pad_history=self.zero_history_cb.isChecked(),
-            segmentation_method=segmentation_method)
+            segmentation_method=segmentation_method,
+            state_coordinate_frame=descriptor.state_coordinate_frame,
+            robot_diameter_mm=descriptor.robot_diameter_mm,
+            frame_transform=self._skeleton_frame_transform)
         if anchor is None:
             self._error(f"帧质量 reject:{quality.reasons};请重试或调场景")
             return
         self.session.set_anchor(anchor)
+        self._apply_anchor_coordinate_transform(anchor)
+        if (self.hardware.profile.camera_backend == BackendMode.REAL and
+                self._coordinate_reference_frame is None):
+            self._coordinate_reference_frame = np.asarray(self._latest_frame).copy()
+            from ..perception._compat import cv2
+            if cv2 is not None:
+                cv2.imwrite(
+                    str(self.session.run_dir / "camera_coordinate_reference.png"),
+                    self._coordinate_reference_frame)
+        self._sync_safety_initial(self.hardware.last_applied6)
         # 打磨③:页间引导 —— 锚定成功提示下一步
         zero_note = " · 零历史起步(OOD)" if self.zero_history_cb.isChecked() else ""
         self.anchor_status.setText(
@@ -1026,14 +1066,18 @@ class ValidationWindow(QMainWindow):
         # 卡1:规划参数(紧凑行,不再每字段独占一行)
         gb_param = QGroupBox("规划参数")
         p = QVBoxLayout(gb_param); p.setContentsMargins(10, 12, 10, 10); p.setSpacing(6)
-        self.plan_k = QSpinBox(); self.plan_k.setRange(1, 10000); self.plan_k.setValue(20)
+        self.plan_k = QSpinBox(); self.plan_k.setRange(1, 10000); self.plan_k.setValue(40)
+        self.plan_auto_k = QCheckBox("按目标距离自动K")
+        self.plan_auto_k.setToolTip(
+            "勾选时K作为上限，根据部署合同的实测形态位移表选择规划步数")
         self.plan_iter = QSpinBox(); self.plan_iter.setRange(1, 100000); self.plan_iter.setValue(400)
         self.plan_restarts = QSpinBox(); self.plan_restarts.setRange(1, 32); self.plan_restarts.setValue(4)
         self.plan_dt = QDoubleSpinBox(); self.plan_dt.setRange(0.01, 60); self.plan_dt.setValue(0.2)
         self.plan_dt.setDecimals(3)
         self.channel_map = QLineEdit("0")
         row = QHBoxLayout()
-        row.addWidget(QLabel("K")); row.addWidget(self.plan_k)
+        row.addWidget(QLabel("K/上限")); row.addWidget(self.plan_k)
+        row.addWidget(self.plan_auto_k)
         row.addWidget(QLabel("迭代")); row.addWidget(self.plan_iter)
         row.addWidget(QLabel("多起点")); row.addWidget(self.plan_restarts)
         p.addLayout(row)
@@ -1125,6 +1169,9 @@ class ValidationWindow(QMainWindow):
     def _new_session(self) -> None:
         try:
             self.session = ExperimentSession.create(self.run_root.text().strip())
+            self._skeleton_frame_transform = None
+            self._coordinate_reference_frame = None
+            self.main_display.set_coordinate_transform(None)
             atomic_write_json(self.session.run_dir / "hardware_profile.json",
                               self.hardware.profile.to_dict())
             self._log(f"创建 {self.session.run_dir}")
@@ -1142,6 +1189,8 @@ class ValidationWindow(QMainWindow):
             self.model_summary.setPlainText(
                 "Replay-only\n" + (f"checkpoint={self.session.model.checkpoint}\n"
                 if self.session.model else "model=None\n"))
+            if self.session.anchor is not None:
+                self._apply_anchor_coordinate_transform(self.session.anchor)
             self._scene_changed(display_only=True)
             if self.session.plan:
                 self.plan_summary.setPlainText("历史计划（只读，不能 Arm）")
@@ -1189,6 +1238,8 @@ class ValidationWindow(QMainWindow):
         assert self.session is not None
         self.session.configure_model(runtime.descriptor)
         descriptor = runtime.descriptor
+        self.scene_unit_label.setText(
+            f"场景单位：{descriptor.state_length_unit}；点击坐标会自动从相机像素转换")
         if descriptor.channel_map is not None:
             self.channel_map.setText(",".join(str(value) for value in descriptor.channel_map))
             self.channel_map.setReadOnly(True)
@@ -1213,25 +1264,36 @@ class ValidationWindow(QMainWindow):
             f"channel_source6={descriptor.channel_source6}\n"
             f"channel_equalities={descriptor.channel_equalities}\n"
             f"action_expansion6={descriptor.action_expansion6}\n"
+            f"state_frame={descriptor.state_coordinate_frame}\n"
+            f"state_unit={descriptor.state_length_unit}\n"
+            f"diameter_scale={descriptor.mm_per_px} mm/px\n"
             f"sha256={descriptor.checkpoint_hash}")
         # B5:plan_dt 默认取训练实测 Δt(不再硬编码 0.2)
         ref_dt = descriptor.train_dt_measured_s or descriptor.train_dt_nominal_s
         if ref_dt:
             self.plan_dt.setValue(float(ref_dt))
-        # B9:K_safe 从 k_safe_table_px 自动读(按 10px 容差),不再手填
-        k_safe_source = "手动"
-        if descriptor.k_safe_table_px:
-            k = (descriptor.k_safe_table_px.get("10px")
-                 or descriptor.k_safe_table_px.get("5px"))
-            if k:
-                self.k_safe.setValue(int(k))
-                k_safe_source = "认证表(10px 容差)" if "10px" in descriptor.k_safe_table_px else "认证表"
-        # 打磨③:K_safe 来源标注(唯一安全门,操作员需知它是自动还是手动)
-        if descriptor.k_safe_table_px:
+        # K_safe 由 runtime 从状态长度单位下最严格的已发布容差解析。
+        self.plan_k.setMaximum(10000)
+        k_safe_source = "显式设置"
+        k_safe_table = descriptor.k_safe_table or descriptor.k_safe_table_px
+        if k_safe_table:
+            if descriptor.k_safe:
+                self.k_safe.setValue(int(descriptor.k_safe))
+                self.plan_k.setMaximum(int(descriptor.k_safe))
+                self.plan_k.setValue(int(descriptor.k_safe))
+                k_safe_source = f"认证表(最严格{descriptor.state_length_unit}容差)"
+        if k_safe_table:
             self.k_safe.setToolTip(f"K_safe 来源: {k_safe_source}(视野认证表)。"
                                    f"这是规划视野上限,修改后 Preflight 按新值门禁。")
         else:
             self.k_safe.setToolTip("K_safe 来源: 手动。该模型无视野认证表,规划由 preflight 的 k_safe_uncertified 门保护。")
+        has_displacement = bool(descriptor.planning_displacement_p95 or
+                                descriptor.planning_displacement_px_p95)
+        self.plan_auto_k.setEnabled(has_displacement)
+        self.plan_auto_k.setChecked(has_displacement)
+        if not has_displacement:
+            self.plan_auto_k.setToolTip(
+                "当前部署合同未提供实测形态位移表，请手动设定K")
         self.model_summary.appendPlainText(f"K_safe 来源: {k_safe_source}")
         self._refresh()
         self._update_main_info()
@@ -1399,6 +1461,8 @@ class ValidationWindow(QMainWindow):
                 self.anchor_npz.text().strip(), self.anchor_index.value(),
                 self.runtime.descriptor, self.runtime.model, padding="reject")
             self.session.set_anchor(anchor)
+            self._apply_anchor_coordinate_transform(anchor)
+            self._sync_safety_initial(self._anchor_initial6(anchor))
             atomic_write_json(self.session.run_dir / "anchor.json", anchor.to_dict())
             self._scene_changed()
         except FileNotFoundError as error:
@@ -1428,6 +1492,36 @@ class ValidationWindow(QMainWindow):
 
     def _load_scene(self) -> None:
         self._load_session_json("scene", Scene.from_dict)
+
+    def _anchor_initial6(self, anchor: Anchor):
+        """把anchor最后一个模型动作恢复成六路kPa，作为下一计划的速率起点。"""
+        if self.runtime is None or self.runtime.descriptor.action_scale_kpa is None:
+            raise RuntimeError("anchor动作恢复需要已加载部署模型")
+        import numpy as np
+        from ..planning.planner_service import expand_model_actions
+        from ..planning.units import model_to_kPa
+        descriptor = self.runtime.descriptor
+        last = np.asarray(anchor.action_history[-1], dtype=np.float32)
+        if anchor.action_units == "model_normalized":
+            last = model_to_kPa(
+                last, action_scale_kpa=descriptor.action_scale_kpa,
+                action_norm_factor=self.runtime.info["norm_factor"])
+        return expand_model_actions(
+            [last], descriptor.channel_map or tuple(range(descriptor.action_dim)),
+            descriptor.channel_equalities, descriptor.channel_source6)[0]
+
+    def _sync_safety_initial(self, initial6) -> None:
+        """同步规划安全合同与界面中的六路当前压力。"""
+        if self.session is None:
+            return
+        from dataclasses import replace
+        values = tuple(float(value) for value in initial6)
+        self.session.set_safety(replace(
+            self.session.safety, initial_action6=values))
+        for channel, value in enumerate(values):
+            self._safety_cells[channel][4].setValue(value)
+        atomic_write_json(self.session.run_dir / "safety.json",
+                          self.session.safety.to_dict())
 
     def _set_target(self) -> None:
         if not self.session:
@@ -1480,11 +1574,24 @@ class ValidationWindow(QMainWindow):
             value = factory(read_json(path))
             if kind == "anchor":
                 self.session.set_anchor(value)
+                self._apply_anchor_coordinate_transform(value)
             else:
                 self.session.set_scene(value)
             self._scene_changed()
         except Exception:
             self._error(traceback.format_exc())
+
+    def _apply_anchor_coordinate_transform(self, anchor: Anchor) -> None:
+        """让规划场景和预测形态按当前 anchor 叠回相机画面。"""
+        payload = anchor.quality.get("skeleton_frame_transform")
+        if payload is None:
+            self._skeleton_frame_transform = None
+            self.main_display.set_coordinate_transform(None)
+            return
+        from ..perception.coordinates import SkeletonFrameTransform
+        transform = SkeletonFrameTransform.from_dict(payload)
+        self._skeleton_frame_transform = transform
+        self.main_display.set_coordinate_transform(transform)
 
     def _load_plan(self) -> None:
         if self.session is None:
@@ -1512,8 +1619,11 @@ class ValidationWindow(QMainWindow):
         try:
             mapping = tuple(int(value.strip()) for value in self.channel_map.text().split(",")
                             if value.strip())
+            auto_k = self.plan_auto_k.isChecked()
             config = ShootingConfig(
-                horizon=self.plan_k.value(), n_iter=self.plan_iter.value(),
+                horizon=None if auto_k else self.plan_k.value(), auto_k=auto_k,
+                k_min=min(4, self.plan_k.value()), k_max=self.plan_k.value(),
+                n_iter=self.plan_iter.value(),
                 n_restarts=self.plan_restarts.value(), random_seed=0)
             self.session.begin_planning()
             kwargs = dict(
@@ -1620,12 +1730,30 @@ class ValidationWindow(QMainWindow):
         from ..runtime.observation_policy import ActionHistoryBuffer
         descriptor = self.runtime.descriptor if self.runtime else None
         if descriptor is not None and descriptor.channel_map is not None:
+            anchor_id = self.session.anchor.anchor_id if self.session.anchor else None
             if (getattr(self, "_history_buffer", None) is None
                     or self._history_buffer.history_steps != descriptor.history_steps
-                    or self._history_buffer.channel_map != descriptor.channel_map):
+                    or self._history_buffer.channel_map != descriptor.channel_map
+                    or getattr(self, "_history_buffer_anchor_id", None) != anchor_id):
                 self._history_buffer = ActionHistoryBuffer(
                     descriptor.history_steps, descriptor.action_dim,
                     descriptor.channel_map)
+                self._history_buffer_anchor_id = anchor_id
+                anchor = self.session.anchor
+                if anchor is not None:
+                    from ..planning.planner_service import expand_model_actions
+                    from ..planning.units import model_to_kPa
+                    import numpy as np
+                    history = np.asarray(anchor.action_history, dtype=np.float32)
+                    if anchor.action_units == "model_normalized":
+                        history = model_to_kPa(
+                            history, action_scale_kpa=descriptor.action_scale_kpa,
+                            action_norm_factor=self.runtime.info["norm_factor"])
+                    expanded = expand_model_actions(
+                        history, descriptor.channel_map,
+                        descriptor.channel_equalities, descriptor.channel_source6)
+                    for applied6 in expanded[-descriptor.history_steps:]:
+                        self._history_buffer.append_applied6(applied6)
         try:
             transport = self._make_transport()
         except Exception as error:
@@ -1681,12 +1809,38 @@ class ValidationWindow(QMainWindow):
                         key = "states_model" if "states_model" in data else "states_normalized"
                         states = np.asarray(data[key], dtype=np.float32)
                     scene_metrics = evaluate_plan_scene(
-                        states, self.session.scene, tip_node=0)
+                        states, self.session.scene, tip_node=0,
+                        mm_per_px=(self.runtime.descriptor.mm_per_px
+                                   if self.runtime else None),
+                        state_unit=(self.runtime.descriptor.state_length_unit
+                                    if self.runtime else "px"))
+                    state_unit = (self.runtime.descriptor.state_length_unit
+                                  if self.runtime else "px")
+                    target_value = scene_metrics.get(
+                        f"predicted_terminal_skeleton_target_residual_{state_unit}",
+                        scene_metrics.get(
+                            f"predicted_terminal_tip_target_residual_{state_unit}",
+                            float("nan")))
+                    target_mm = scene_metrics.get(
+                        "predicted_terminal_skeleton_target_residual_est_mm",
+                        scene_metrics.get(
+                            "predicted_terminal_tip_target_residual_est_mm"))
+                    target_text = f"{target_value:.2f} {state_unit}"
+                    if target_mm is not None:
+                        target_text += f" ≈ {target_mm:.2f} mm"
+                    clearance_value = scene_metrics.get(
+                        f"predicted_minimum_obstacle_clearance_{state_unit}",
+                        float("nan"))
+                    clearance_mm = scene_metrics.get(
+                        "predicted_minimum_obstacle_clearance_est_mm")
+                    clearance_text = f"{clearance_value:.2f} {state_unit}"
+                    if clearance_mm is not None:
+                        clearance_text += f" ≈ {clearance_mm:.2f} mm"
                     plan_scene_summary = (
-                        f"末端目标距离: {scene_metrics.get('terminal_target_distance', float('nan')):.2f} px  "
-                        f"目标达成: {'✓' if scene_metrics.get('target_success') else '✗'}\n"
-                        f"最小障碍间距: {scene_metrics.get('minimum_obstacle_clearance', float('nan')):.2f} px  "
-                        f"碰撞: {'是' if scene_metrics.get('collision') else '否'}\n")
+                        f"模型预测终态→目标残差: {target_text}  "
+                        f"模型内达标: {'✓' if scene_metrics.get('predicted_target_success') else '✗'}\n"
+                        f"模型预测最小障碍间距: {clearance_text}  "
+                        f"模型预测碰撞: {'是' if scene_metrics.get('predicted_collision') else '否'}\n")
                 except Exception as error:
                     plan_scene_summary = f"(计划场景指标不可用: {error})\n"
 
