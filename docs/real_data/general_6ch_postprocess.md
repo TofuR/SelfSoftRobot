@@ -22,14 +22,36 @@ raw RGB
 
 NDI始终是独立评价流，不进入分割、模型、规划器或控制观测。
 
+## 1.1 大图像先做固定ROI裁剪
+
+相机画面中只有局部实验区域有用、且机器人安装位置固定时，先在**源相机坐标**中选择一个
+覆盖完整运动包络的固定ROI。建议使用方形、边长可被常见网络步长整除的尺寸，例如
+`320×320`；同一序列和同一相机合同下所有帧必须使用完全相同的ROI，不能逐帧跟随机器人。
+
+```bash
+python scripts/real/crop_capture.py \
+  --seq real_capture/data/raw/<seq> \
+  --camera cam0 \
+  --roi x,y,w,h
+```
+
+原始图像保持不变，输出到`real_capture/data/derived/<seq>/crop/cam0/`。脚本同时保存
+`crop_meta.json`和跨全时段的`qc/roi_reference.png`、`qc/crop_overview.png`。若已有裁剪合同与
+新请求不同，脚本默认拒绝静默混用；只有确认重建时才显式加`--overwrite`。
+
+裁剪只是SAM2的处理视图。当前状态转移模型输入是15节点骨架而不是RGB；构建NPZ时通过
+`--crop-meta`把局部骨架加回ROI的`(x,y)`偏移，模型状态仍统一为原相机像素坐标。未来若训练
+图像模型，可在这个固定方形ROI上统一resize，但必须另行记录resize尺度。
+
 ## 2. 阶段A：自动候选mask和SAM2锚点
 
 运行：
 
 ```bash
 python scripts/real/prepare_sam2_anchors.py \
-  --seq real_capture/data/raw/<seq> \
+  --seq real_capture/data/derived/<seq>/crop \
   --camera cam0 \
+  --out-root real_capture/data/derived/<seq> \
   --chunk-size 200 \
   --base-side top
 ```
@@ -44,7 +66,12 @@ python scripts/real/prepare_sam2_anchors.py \
 2. `moved`：与全序列中值背景不同的区域；
 3. `gated`：白色与运动区域交集；
 4. `morph`：去细气管、闭合和填洞；
-5. `final`：满足面积/跨度条件的最大主体，作为SAM2候选锚点。
+5. `pretrim`：满足面积/跨度条件的最大主体；
+6. `final`：从base侧按主体管径删除偶发粘连的宽支架短分支，作为SAM2候选锚点。
+
+`base attachment trim`只检查当前mask截面宽度，不使用动作，也不把任何一段视为静态。
+它允许方形RGB裁剪保留基座/支架上下文，同时防止最长骨架沿横梁偏移。可用
+`--base-trim-width-ratio`调节，或传小于等于0显式禁用。
 
 对全部候选按面积、主体宽度、图像跨度和基座侧连续性进行稳健打分，每个SAM2 chunk
 自动选一个高置信帧。该过程不查看 `c0..c5`。输出：
@@ -75,7 +102,10 @@ real_capture/data/derived/<seq>/
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python sam2/segment_video_full.py \
-  --seq real_capture/data/raw/<seq> \
+  --seq real_capture/data/derived/<seq>/crop \
+  --anchor-mask-dir real_capture/data/derived/<seq>/masks_candidate \
+  --anchor-manifest real_capture/data/derived/<seq>/anchor_manifest.csv \
+  --out sam2/masks/<seq>_full \
   --chunk-size 200 \
   --device cuda:0
 ```
@@ -109,10 +139,12 @@ sam2/masks/<seq>_full/
 python scripts/real/masks_to_transition_npz.py \
   --seq real_capture/data/raw/<seq> \
   --masks-dir sam2/masks/<seq>_full \
+  --crop-meta real_capture/data/derived/<seq>/crop/crop_meta.json \
   --skeleton-method skeletonize \
   --endpoint-fix \
   --n-points 15 \
   --segment-lengths 1,1 \
+  --qc-frames 1000,5000 \
   --action-channels auto \
   --out-root data/real_seq/<seq>
 ```
@@ -159,7 +191,24 @@ channel_source6
 model_action_channels
 model_action_dim
 action_expansion6
+robot_diameter_mm=16.0
+robot_diameter_px
+mm_per_px
 ```
+
+### 4.1 由16 mm外径建立图像尺度
+
+软体机器人外径统一按`16 mm`记录。中心线提取后，在弧长20%–80%的主体区域读取距离变换
+半径，以逐帧主体宽度中位数估计`robot_diameter_px`，并计算：
+
+```text
+mm_per_px = 16 mm / robot_diameter_px
+estimated_error_mm = image_error_px * mm_per_px
+```
+
+新数据把三个尺度字段写入train/val NPZ；评价脚本依次读取CLI覆盖值、NPZ合同和
+`qc_skeleton/skeleton_metrics.csv`。该尺度适合相机视场内的平面形态误差、规划视野和
+障碍间距解释。NDI仍提供独立的末端三维毫米评价，用于检验图像尺度估计及离平面运动。
 
 阶段产物：
 
@@ -187,7 +236,7 @@ tip→base序列用同一个GRU传播。当前没有 segment embedding、关节�
 每段刚度参数或关节连续性专用loss。因此模型会从数据中隐式学习两段耦合，但尚未显式使用
 “这是两段机器人”的结构先验。
 
-## 5. 训练
+## 5. 训练与试次归档
 
 训练入口不变：
 
@@ -201,6 +250,10 @@ python scripts/training/train_transition.py \
   --data_dir data/real_seq/<seq>/train
 ```
 
+长时间训练建议显式传`--save_interval 5`。训练器会持续维护`best_model.pt`（当前实现按
+epoch训练loss创新低更新），每5轮覆盖`current_model.pt`、归档`model_epoch_XXXX.pt`，并保存
+包含optimizer/scheduler/epoch的`training_state_latest.pt`；正常结束另有`final_model.pt`。
+
 Dataset读取六维原始动作后，根据 `model_action_channels`投影为D维。因此同一套代码兼容：
 
 - 六路完全独立：`action_dim=6`；
@@ -210,8 +263,45 @@ Dataset读取六维原始动作后，根据 `model_action_channels`投影为D维
 第一版模型仍把整条15节点机器人作为一个耦合对象，不拆成两个独立模型。分段合同首先用于
 稳定节点对应和评价；只有关节/分段误差显示确有必要时，才增加segment embedding或关节loss。
 
+完整真实训练使用统一试次入口：
+
+```bash
+GPU_ID=2 EVAL_GPU_ID=2 \
+bash scripts/real/train_real_transition.sh \
+  data/real_seq/<sequence_tag>/train \
+  data/real_seq/<sequence_tag>/val
+```
+
+每次启动自动创建
+`train_log/real_pipeline/<sequence_tag>/trial_YYYYMMDD_NNN/`。根`config.json`记录
+数据、资源、epoch、batch、seed、窗口和teacher forcing合同；`commands.sh`记录实际命令；
+`artifacts.json`在完成时给出所有关键产物的相对路径。GT与OpenLoop分别保存到`stages/gt/`
+和`stages/open_loop/`，周期评价位于`evaluations/<mode>/periodic/`，最终best定量结果与照片叠图
+位于`evaluations/<mode>/best/{quantitative,overlay}/`。每个试次因此可以整体复制、比较和归档。
+
 正式实验不要只把同一条序列前80%/后20%作为论文训练/测试。应按独立采集run、seed或轨迹
 拆分train/validation/test。
+
+## 5.1 新序列的一键训练前处理
+
+以下入口串联采集审计、固定裁剪、候选锚点、SAM2多GPU传播、完整性检查、15节点骨架和
+全部QC，但**不会启动训练**：
+
+```bash
+python scripts/real/preprocess_capture.py \
+  --seq real_capture/data/raw/<seq> \
+  --roi x,y,w,h \
+  --gpus 1,3 \
+  --n-points 15 \
+  --segment-lengths 1,1 \
+  --qc-frames 1000,5000
+```
+
+每个物理GPU只暴露为其子进程的`cuda:0`，避免`CUDA_VISIBLE_DEVICES`重映射后出现
+`invalid device ordinal`。脚本支持断点续跑；改变ROI时必须显式传`--overwrite-crop`，若已有
+SAM2产物则还必须传`--reset-sam2`，防止旧mask与新空间合同混用。结束后自动写
+`preprocess_manifest.json`和`PREPROCESS_REPORT.md`，其中`training_started=false`；人工检查
+candidate/SAM2/skeleton QC后再单独启动训练。
 
 ## 6. 定量评价
 
@@ -232,6 +322,7 @@ python scripts/evaluation/eval_real_quant.py \
 - 每物理段误差、共享关节误差；
 - 每个独立动作根通道的分箱误差；
 - OpenLoop误差随离真实观测步数`k`的漂移；
+- 由16 mm主体直径换算的tip、全节点、分段及视野误差毫米估计；
 - NDI末端毫米误差；
 - NDI z相对中位平面的p50/p95/max。
 
@@ -239,7 +330,64 @@ python scripts/evaluation/eval_real_quant.py \
 评价必须使用独立calibration序列保存的仿射文件；不提供`--calibration-file`时，脚本会明确
 标记为`same_split_diagnostic`，其结果只能诊断，不能作为held-out论文结果。
 
-## 7. Legacy边界
+视野认证也使用同一尺度：
+
+```bash
+python scripts/evaluation/eval_horizon.py \
+  --checkpoints <OPEN_LOOP_BEST_MODEL_PT> \
+  --data_dir data/real_seq/<test-seq>/val \
+  --max_steps 40 --n_seeds 8 \
+  --out output/horizon
+```
+
+`horizon_summary.json`同时保存`roll_px`、`roll_mm`、`Kmax_px_*`、`Kmax_mm_*`和尺度来源。
+建立部署合同时，还会从训练骨架计算每个K下“起点到K步后的最大节点位移p95”，
+写入`planning_displacement_px_p95`。`auto_k`根据当前目标的最大节点差距，选择位移表覆盖该距离的
+最小K；超出表容量时使用`K_safe`与`k_max`共同限定的上限。
+
+## 7. 目标形态逆规划与执行
+
+完整形态目标使用与模型一致的15个节点，顺序固定为`tip -> base`。工作台将当前相机骨架和
+最近`H`步`applied6`冻结为anchor，shooting planner直接优化`K × action_dim`个独立kPa动作，
+再按`channel_source6`展开为六路压力。本阶段的两对联动关系为：
+
+```text
+模型动作: [ch0, ch1, ch3, ch5]
+硬件展开: [ch0, ch1, ch1, ch3, ch3, ch5]
+```
+
+规划loss由终态全骨架距离、路径距离、单调接近、动作平滑和障碍代价组成；压力上下界、
+rise/fall、训练动作周期和`K_safe`在每次规划后由Preflight检查。通过后，GUI中的
+`Arm / Confirm`放行`PlanExecutor`按训练周期逐拍下发，并把每拍ACK中的`applied6`写入
+`execution.csv`和下一次anchor历史。
+
+离线读取已记录目标骨架并检查规划与Mock命令链：
+
+```bash
+python scripts/control/run_avoidance.py \
+  --checkpoint <OPEN_LOOP_BEST_MODEL_PT> \
+  --data-dir data/real_seq/<seq>/val \
+  --t-init 120 --target-frame 160 \
+  --target-tolerance-px 2 --auto-k --k-min 4 --k-max 40 \
+  --n-iter 400 --n-restarts 4 \
+  --rise 50,50,50,50,50,50 \
+  --fall 50,50,50,50,50,50 \
+  --mock-execute --out output/shape_control
+```
+
+输出目录包含`anchor.json`、`scene.json`、`safety.json`、`plan.json`、
+`planned_actions6.csv`、`predicted_states.npz`和`execution.csv`。真机实验在GUI中加载同一
+checkpoint与部署manifest，实时锚定后定义目标骨架、规划、预览、Preflight、Arm并执行。
+长任务采用“执行不超过`K_safe`步→重新观测→重规划”的滚动方式。
+
+这里需要区分三种数据：前向评价误差来自预测骨架与数据集记录骨架GT；离线规划结果中的
+终态目标残差来自学到的前向模型计算；实物控制误差来自真机执行后重新观测的骨架与目标。
+Mock ACK只检查命令、安全和执行生命周期。
+
+OpenLoop定量表使用`is_prediction`标识预测行。窗口起点的真实骨架是rollout锚点，其后的
+自回归结果才进入前向预测误差、动作分箱、直径尺度换算和节点误差曲线。
+
+## 8. Legacy边界
 
 以下算法只为复现旧“近端段静止、单段驱动”实验保留，不属于六通道主线：
 

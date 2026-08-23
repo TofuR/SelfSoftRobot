@@ -4,6 +4,9 @@
 > 其中 `repair_masks`、静态段共识清洗和全序列中位离群规则不得用于两段均运动的数据。
 > 当前六通道通用主线见
 > [`general_6ch_postprocess.md`](general_6ch_postprocess.md)。
+>
+> 相机安装位置变化、序列专属 ROI 和机器人平面毫米坐标的当前合同见
+> [`camera_pose_robot_frame.md`](camera_pose_robot_frame.md)。
 
 > 实物 1-DOF 双段软体臂的端到端数据处理与训练流程:从原始照片到状态转移模型再到 NDI 度量验证。
 > 本文档是稳定参考(非变更日志),合并并取代以下三份早期文档:
