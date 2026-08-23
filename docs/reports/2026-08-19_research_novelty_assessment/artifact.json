@@ -1,0 +1,250 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "SelfSoftRobot 研究创新性独立评估",
+    "description": "以论文原文与仓库实验为证据，区分已有工作、当前能力、潜在研究空白和必要验证。",
+    "generatedAt": "2026-08-19T12:00:00+08:00",
+    "charts": [
+      {
+        "id": "window_error_chart",
+        "title": "当前单步验证不支持更长历史窗口",
+        "subtitle": "相同验证数据口径下，window=1 的平均节点误差低于 window=40；该结果不能直接外推到多步 OpenLoop。",
+        "type": "bar",
+        "dataset": "window_errors",
+        "sourceId": "window_ablation",
+        "valueFormat": "number",
+        "encodings": {
+          "x": {"field": "window", "type": "nominal", "label": "历史窗口"},
+          "y": {"field": "mean_px", "type": "quantitative", "label": "平均节点误差 (px)"}
+        }
+      }
+    ],
+    "tables": [
+      {
+        "id": "literature_matrix",
+        "title": "代表论文能力边界",
+        "subtitle": "仅代表本地六篇 PDF 的原文核查；不能据此声称全球首次。",
+        "dataset": "literature",
+        "sourceId": "literature_table",
+        "columns": [
+          {"field": "work", "label": "工作", "type": "text"},
+          {"field": "covered", "label": "已覆盖能力", "type": "text"},
+          {"field": "boundary", "label": "与本项目候选问题的边界", "type": "text"}
+        ]
+      },
+      {
+        "id": "evidence_matrix",
+        "title": "当前项目证据等级",
+        "subtitle": "区分代码可用、模型内结果和真实机器人闭环证据。",
+        "dataset": "evidence",
+        "sourceId": "evidence_table",
+        "columns": [
+          {"field": "item", "label": "项目", "type": "text"},
+          {"field": "evidence", "label": "当前可核实证据", "type": "text"},
+          {"field": "status", "label": "可声明程度", "type": "text"},
+          {"field": "gap", "label": "主要缺口", "type": "text"}
+        ]
+      },
+      {
+        "id": "direction_matrix",
+        "title": "候选研究方向筛选",
+        "subtitle": "新颖性风险为初步判断，仍需系统检索。",
+        "dataset": "directions",
+        "sourceId": "direction_table",
+        "columns": [
+          {"field": "direction", "label": "方向", "type": "text"},
+          {"field": "novelty", "label": "新颖性潜力", "type": "text"},
+          {"field": "work", "label": "新增工作", "type": "text"},
+          {"field": "role", "label": "建议角色", "type": "text"}
+        ]
+      },
+      {
+        "id": "experiment_matrix",
+        "title": "最小因果实验矩阵",
+        "subtitle": "每一组实验都对应一个可证伪命题，避免只展示工程功能。",
+        "dataset": "experiments",
+        "sourceId": "experiment_table",
+        "columns": [
+          {"field": "claim", "label": "要证明的命题", "type": "text"},
+          {"field": "protocol", "label": "关键实验", "type": "text"},
+          {"field": "baselines", "label": "必要对照", "type": "text"},
+          {"field": "metrics", "label": "主要指标", "type": "text"}
+        ]
+      }
+    ],
+    "sources": [
+      {"id": "literature_table", "label": "代表论文能力矩阵", "path": "docs/reports/2026-08-19_research_novelty_assessment/source_notes.md"},
+      {"id": "evidence_table", "label": "当前项目证据矩阵", "path": "docs/reports/2026-08-19_research_novelty_assessment/source_notes.md"},
+      {"id": "direction_table", "label": "候选方向筛选矩阵", "path": "docs/reports/2026-08-19_research_novelty_assessment/source_notes.md"},
+      {"id": "experiment_table", "label": "最小因果实验矩阵", "path": "docs/reports/2026-08-19_research_novelty_assessment/source_notes.md"},
+      {"id": "source_notes", "label": "证据与口径说明", "path": "docs/reports/2026-08-19_research_novelty_assessment/source_notes.md"},
+      {"id": "almanzor2023", "label": "Almanzor et al. 2023", "path": "docs/papers/Almanzor 等 - 2023 - Static shape control of soft continuum robots using deep visual inverse kinematic models.pdf"},
+      {"id": "chen2022", "label": "Chen et al. 2022", "path": "docs/papers/Chen 等 - 2022 - Fully body visual self-modeling of robot morphologies.pdf"},
+      {"id": "hu2025", "label": "Hu et al. 2025", "path": "docs/papers/Hu 等 - 2025 - Teaching robots to build simulations of themselves.pdf"},
+      {"id": "shan2024", "label": "Shan et al. 2024", "path": "docs/papers/Shan 等 - 2024 - SoftNeRF A self-modeling soft robot plugin for various tasks.pdf"},
+      {"id": "tang2026", "label": "Tang et al. 2026", "path": "docs/papers/Tang 等 - 2026 - A general soft robotic controller inspired by neuronal structural and plastic synapses that adapts t.pdf"},
+      {"id": "yu2026", "label": "Yu et al. 2026", "path": "docs/papers/Yu 等 - 2026 - Shape-interpretable visual self-modeling enables geometry-aware continuum robot control.pdf"},
+      {"id": "real_quant", "label": "真实 GTObserved 定量结果", "path": "output/real_quant/exp_20260709_5/summary.txt"},
+      {"id": "hysteresis", "label": "真实迟滞回线结果", "path": "output/exp5b_hysteresis_loop/summary.txt"},
+      {"id": "window_ablation", "label": "历史窗口消融", "path": "output/window_ablation/ablation_summary.json"},
+      {"id": "openloop_compare", "label": "OpenLoop 窗口比较", "path": "output/openloop_window_compare/compare_summary.json"},
+      {"id": "plan_result", "label": "模型内规划结果", "path": "train_log/open_loop_transition/exp_20260714_8/eval_plan/plan_result.json"},
+      {"id": "transition_metrics", "label": "OpenLoop 最终评估", "path": "train_log/open_loop_transition/exp_20260714_8/transition_metrics.json"}
+    ],
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "body": "# SelfSoftRobot 研究创新性独立评估\n\n**结论先行：** 当前系统已经形成了真实图像到骨架、形态转移模型、模型内优化规划以及独立验证工作台的工程链条，但还没有形成“真实六通道双段机器人执行规划”的论文证据。最值得优先验证的科学问题不是某个网络结构，而是：**当软体机器人具有不可见的历史状态且视觉只能间歇获得时，能否从一次形态锚点与有限驱动历史出发，在观测空窗中预测全身形态、满足全身约束并安全执行，再按风险触发重新观测？**"
+      },
+      {
+        "id": "scope",
+        "type": "markdown",
+        "sourceId": "source_notes",
+        "body": "## 证据范围与判断规则\n\n你此前写下的方向只作为待检验假设，不参与证明创新。本报告优先核对六篇本地论文 PDF 原文和仓库真实产物。六篇代表论文不足以支持“首次”声明，因此这里给出的是**候选研究空白与实验决策**，不是完整的系统综述结论。\n\n判断创新采用四个条件：问题必须与现有工作有清楚边界；机制必须可被反事实实验检验；能力必须在真实机器人上执行；结果必须用失败率和约束指标而不只是预测均值展示。"
+      },
+      {"id": "literature", "type": "table", "tableId": "literature_matrix", "layout": "full"},
+      {
+        "id": "literature_readout",
+        "type": "markdown",
+        "body": "### 从文献边界得到的直接结论\n\n单相机免标定形态控制、部分遮挡增强、全身视觉自模型、模型内规划、普通全身避障、损坏检测和在线适应，均不能单独作为本项目的头条创新。将这些能力简单组合，也容易被评价为系统集成。真正需要寻找的是已有工作之间没有被同时解决的**条件交集**，并用因果实验证明为什么该交集需要新的方法。"
+      },
+      {"id": "evidence", "type": "table", "tableId": "evidence_matrix", "layout": "full"},
+      {"id": "window_error", "type": "chart", "chartId": "window_error_chart", "layout": "full"},
+      {
+        "id": "current_capability",
+        "type": "markdown",
+        "sourceId": "real_quant",
+        "body": "## 目前实际上能实现什么\n\n现阶段可以诚实地声明：系统能够采集同步的真实视觉与驱动数据；对单通道真实序列自动提取全身骨架；在每步真实形态锚定的条件下学习较高精度的状态转移；观察到毫米级路径/速率相关现象；并在学习模型内部优化动作序列。\n\n现阶段不能声明：已经完成真实六通道双段的形态模型验证；已经在真实机器人执行到达目标或避障规划；已经证明长历史、分数阶记忆或某个隐变量捕获了迟滞；已经证明长期 OpenLoop 控制稳定。`real_validation` 是把这些实验接起来的基础设施，不是结果本身。"
+      },
+      {"id": "directions", "type": "table", "tableId": "direction_matrix", "layout": "full"},
+      {
+        "id": "thesis",
+        "type": "markdown",
+        "body": "## 推荐的论文主线\n\n### 稀疏观测／视觉中断下、历史条件化的软体臂全身控制\n\n核心命题应写得比“软体机器人有迟滞”更强：**即使当前可见骨架与当前压力近似相同，不同加载历史仍可能对应不同隐藏内应力状态；施加同一后续 probe action 时，两者的未来全身轨迹会系统性分叉。**\n\n若该命题成立，论文的因果链就完整了：\n\n1. 障碍：可见形态与当前压力不是完整 Markov 状态。\n2. 机制：历史条件模型识别对未来有用的隐藏状态。\n3. 能力：在 K 步视觉中断中预测全身形态与安全裕度。\n4. 规划：相同目标但不同历史需要不同动作序列。\n5. 应用：双段平面软臂在遮挡区到达目标形态并保持全身避障。\n6. 感知策略：风险升高时才重锚定，量化观测次数与失败率的权衡。\n\n这里的贡献不是“使用 GL 核、GRU 或 TCN”。模型结构必须由公平实验决定；若分数阶方法未在同参数量、未见加载速率和长预测视野中胜出，就应使用更可靠的模型，把创新放在问题定义、历史可辨识实验和稀疏观测控制机制上。"
+      },
+      {"id": "experiments", "type": "table", "tableId": "experiment_matrix", "layout": "full"},
+      {
+        "id": "implementation_plan",
+        "type": "markdown",
+        "body": "## 建议按三阶段推进\n\n### 阶段 A：先决定科学命题是否成立\n\n重新设计六通道平面约束采集，使数据包含多种加载速率、反转点、保持与释放段。构造“当前骨架和压力匹配、历史不同”的成对轨迹，并施加相同 probe action。必须按整条轨迹划分训练/验证/测试，避免相邻帧泄漏。如果未来轨迹并不显著分叉，应及时放弃历史主线。\n\n### 阶段 B：证明历史机制而非数据量收益\n\n比较 current-state、固定窗口 MLP、GRU/TCN、候选分数阶编码器，并加入 shuffled-history 与 wrong-history。控制参数量、训练预算和观测输入；测试未见速度、未见反转点与更长预测窗口。报告多步全身误差、校准误差和失效时间。\n\n### 阶段 C：真实控制闭环\n\n在二维双段实验台上先完成真实执行。连续视觉作为性能上界；固定 K OpenLoop 作为主线；风险触发重锚定作为扩展。规划器只使用部署时允许的相机与状态，NDI 或隐藏评价相机只能用于评价。最后比较 endpoint-only 与 whole-body constraint，并执行 correct-history/wrong-history 交叉规划。"
+      },
+      {
+        "id": "paper_results",
+        "type": "markdown",
+        "body": "## 论文中必须增加的结果\n\n- **物理现象：** matched-state/different-history 样本对在统一 probe action 下的未来轨迹分离量、置信区间和重复性。\n- **模型机制：** correct、shuffled、wrong、zero history 消融，以及未见速度和长视野泛化。\n- **稀疏观测：** K 从 1 到长空窗的误差、碰撞率、成功率、最长安全空窗与观测次数。\n- **规划执行：** 全身节点误差、tip 误差、最小障碍间距、碰撞率、压力变化率、动作约束违例和 prediction-to-execution gap。\n- **历史反事实：** 同一当前状态与目标下，不同历史产生不同计划；把计划交叉发送到另一历史状态时性能恶化。\n- **失败分析：** SAM2/骨架失败、模型漂移、OOD 历史、执行器误差和重锚定失败必须分开统计。\n\n二维平面阶段并不低级：它可以作为控制变量清楚的物理验证台，专门回答“历史依赖 + 视觉中断 + 全身约束”这一科学问题。三维会同时引入多视角标定、自遮挡对应和三维 GT 误差，应在二维命题成立后作为扩展，而不是让第一篇工作同时承担所有不确定性。"
+      },
+      {
+        "id": "non_contributions",
+        "type": "markdown",
+        "body": "## 建议降级为基础设施或支撑工作的内容\n\nSAM2 自动分割、GUI 与硬件生命周期、六通道通用数据格式、15 节点骨架、tip/base 修复、普通图像到形态预测、通用 shooting planner、多相机三角化本身，都很重要，但通常不足以单独构成主要学术贡献。它们的价值是降低实验偏差、让核心命题可重复验证。"
+      },
+      {
+        "id": "limitations",
+        "type": "markdown",
+        "sourceId": "source_notes",
+        "body": "## 限制、后续检索与决策门槛\n\n本报告没有完成 IEEE Xplore、Scopus、Web of Science 和 Google Scholar 的系统检索，尤其需要排查 2024–2026 年间关于 intermittent feedback、occlusion-aware control、hysteresis-aware MPC 和 event-triggered perception 的工作。因此推荐主线目前只能称为**高潜力假设**。\n\n继续投入该方向前设置三个门槛：第一，matched-state/different-history 的未来分叉在重复实验中显著；第二，正确历史在公平条件下优于无历史与错误历史；第三，模型内优势能够转化为真实执行中的更低失败率或更少观测。任一门槛不成立，都应收缩或更换核心主张。"
+      },
+      {
+        "id": "questions",
+        "type": "markdown",
+        "body": "## 进一步可以衍生的研究问题\n\n1. 历史状态在什么加载速率、压力区间和预测时域内才真正必要？\n2. 模型的不确定性是否能可靠预测何时必须重新看一眼？\n3. 全身形态误差与最小障碍裕度之间能否建立可校准的安全边界？\n4. 平面约束下识别出的隐藏状态，哪些部分可以迁移到三维多段运动？\n5. 当视觉重新出现时，怎样平滑融合新锚点而不产生控制跳变？"
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-08-19T12:00:00+08:00",
+    "status": "ready",
+    "datasets": {
+      "window_errors": [
+        {"window": "window=1", "mean_px": 1.2159273764},
+        {"window": "window=40", "mean_px": 2.1013116384}
+      ],
+      "literature": [
+        {"work": "Almanzor 2023", "covered": "单相机免标定；六路气动；手绘 2D 全身静态形态闭环；部分遮挡增强", "boundary": "准静态且每步需要视觉；论文明确认为完全遮挡不能靠该增强解决"},
+        {"work": "Chen 2022", "covered": "全身视觉自模型；模型内运动规划；异常检测与模型更新", "boundary": "不聚焦软体粘弹性历史与视觉中断期间的动态全身预测"},
+        {"work": "Hu 2025", "covered": "从视觉建立自身仿真；几何查询、规划；损坏后更新与恢复", "boundary": "重点是可查询自仿真和形态变化，不是历史条件化的稀疏观测控制"},
+        {"work": "Shan 2024 / SoftNeRF", "covered": "神经辐射场软体自模型；视觉几何和占用相关任务", "boundary": "视觉自模型强，但没有解决观测空窗中的粘弹性状态传播与安全执行"},
+        {"work": "Tang 2026", "covered": "离线共享表示；在线模型/策略适应；负载、风、执行器失效；全身整形", "boundary": "在线适应已有强结果；不是以间歇视觉下的全身预测和逆向规划为核心"},
+        {"work": "Yu 2026", "covered": "多视角免标定；Bézier 形态；NODE；形态—末端控制；避障与 self-motion", "boundary": "依赖持续形态反馈；严重遮挡仍受限；没有显式研究历史可辨识与观测空窗"}
+      ],
+      "evidence": [
+        {"item": "真实视觉形态模型", "evidence": "31 节点 GTObserved：tip 1.929 px，node 3.906 px；NDI tip mean 0.765 mm", "status": "可声明每步锚定下的预测精度", "gap": "不是长期 OpenLoop；当前真实数据为单动作维"},
+        {"item": "迟滞/路径依赖现象", "evidence": "真实回线半高宽约 1.53 mm；动态合并约 2.06 mm", "status": "可声明观察到现象", "gap": "尚无 matched-state 反事实，不能证明历史模型机制"},
+        {"item": "历史窗口", "evidence": "单步验证 window=1 为 1.216 px，window=40 为 2.101 px", "status": "当前为负面/混合证据", "gap": "需公平模型与轨迹级数据；需 shuffled/wrong history"},
+        {"item": "OpenLoop 预测", "evidence": "有限 horizon 可 rollout；window=40 随 K 退化；最终 metrics 含 NaN", "status": "仅可声明原型", "gap": "初始化口径、稳定性、长视野与重复实验未完成"},
+        {"item": "模型内规划", "evidence": "一个样例 planner mean 4.29 px，do-nothing 10.91 px", "status": "可声明模型内可优化", "gap": "尚未下发真实机器人；GT action 对比口径有混杂"},
+        {"item": "六通道/双段能力", "evidence": "采集、通道映射、Dataset 和训练接口已通用化", "status": "只能声明软件支持", "gap": "无真实六通道双段联合数据和实验"},
+        {"item": "真实到达与避障", "evidence": "real_validation 已有规划、preflight、执行、评价工作台", "status": "基础设施", "gap": "无真实执行成功率、碰撞率、约束和重复试验"}
+      ],
+      "directions": [
+        {"direction": "历史条件化 + 稀疏视觉 + 全身规划执行", "novelty": "高潜力；代表论文中未见完整交集", "work": "高：重采六通道数据、因果实验、真实执行", "role": "推荐核心主线"},
+        {"direction": "风险/不确定性触发的重新观测", "novelty": "中高；需核对 event-triggered perception 文献", "work": "中高：可靠校准、触发策略、失败统计", "role": "主线的第二方法贡献"},
+        {"direction": "全身安全约束与模型误差裕度", "novelty": "中；安全控制领域已有大量相关工作", "work": "高：保守边界、真实碰撞/近碰实验", "role": "可作为增强，不宜孤立宣传"},
+        {"direction": "三维多视角 GT 与自遮挡处理", "novelty": "中低；三角化和多视角重建本身成熟", "work": "很高：同步、标定、对应、遮挡、3D 评价", "role": "二维科学命题成立后的扩展"},
+        {"direction": "在线适应扰动/损坏", "novelty": "低到中；Tang、Chen、Hu 已覆盖强叙事", "work": "很高", "role": "暂不作为头条"},
+        {"direction": "自动分割、骨架端点修复、GUI", "novelty": "低", "work": "中", "role": "实验基础设施与可复现性支撑"}
+      ],
+      "experiments": [
+        {"claim": "当前形态+压力不是完整 Markov 状态", "protocol": "匹配当前骨架/压力但历史不同；施加同一 probe action，重复测未来轨迹", "baselines": "同历史重复、不同历史、静态 action→shape", "metrics": "未来轨迹分离、效应量、置信区间、重复内/重复间方差"},
+        {"claim": "历史信息带来因果预测收益", "protocol": "轨迹级划分；未见速度、反转点、hold/relaxation 测试", "baselines": "no-history、correct、shuffled、wrong history；MLP、GRU/TCN、候选 GL", "metrics": "多步节点/tip误差、漂移、失效时间、校准误差"},
+        {"claim": "稀疏观测仍可保持任务能力", "protocol": "连续视觉、固定 K、风险触发重锚定；K 从 1 到长空窗", "baselines": "每步闭环、do-nothing、固定周期、oracle trigger", "metrics": "成功率、碰撞率、观测次数、最长安全空窗、全身误差"},
+        {"claim": "历史会改变最优计划", "protocol": "同当前状态/目标、不同历史规划；correct/wrong history 计划交叉执行", "baselines": "历史无关 planner、endpoint-only、whole-body", "metrics": "真实目标误差、最小障碍间距、prediction-to-execution gap、动作平滑性"},
+        {"claim": "二维结果能迁移为三维方法依据", "protocol": "二维命题通过后，引入第二视角并比较隐藏状态/策略迁移", "baselines": "从零训练、只用投影、多视角 3D GT", "metrics": "迁移样本效率、3D 节点误差、自遮挡失败率"}
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "literature_table",
+      "label": "代表论文能力矩阵",
+      "path": "docs/reports/2026-08-19_research_novelty_assessment/source_notes.md",
+      "query": {"engine": "artifact-snapshot", "sql": "SELECT work, covered, boundary FROM snapshot.literature", "description": "Reads the reviewed literature rows embedded in this artifact.", "executed_at": "2026-08-19T12:00:00+08:00"}
+    },
+    {
+      "id": "evidence_table",
+      "label": "当前项目证据矩阵",
+      "path": "docs/reports/2026-08-19_research_novelty_assessment/source_notes.md",
+      "query": {"engine": "artifact-snapshot", "sql": "SELECT item, evidence, status, gap FROM snapshot.evidence", "description": "Reads the repository evidence rows embedded in this artifact.", "executed_at": "2026-08-19T12:00:00+08:00"}
+    },
+    {
+      "id": "direction_table",
+      "label": "候选方向筛选矩阵",
+      "path": "docs/reports/2026-08-19_research_novelty_assessment/source_notes.md",
+      "query": {"engine": "artifact-snapshot", "sql": "SELECT direction, novelty, work, role FROM snapshot.directions", "description": "Reads the candidate direction rows embedded in this artifact.", "executed_at": "2026-08-19T12:00:00+08:00"}
+    },
+    {
+      "id": "experiment_table",
+      "label": "最小因果实验矩阵",
+      "path": "docs/reports/2026-08-19_research_novelty_assessment/source_notes.md",
+      "query": {"engine": "artifact-snapshot", "sql": "SELECT claim, protocol, baselines, metrics FROM snapshot.experiments", "description": "Reads the causal experiment rows embedded in this artifact.", "executed_at": "2026-08-19T12:00:00+08:00"}
+    },
+    {"id": "source_notes", "label": "证据与口径说明", "path": "docs/reports/2026-08-19_research_novelty_assessment/source_notes.md"},
+    {"id": "almanzor2023", "label": "Almanzor et al. 2023", "path": "docs/papers/Almanzor 等 - 2023 - Static shape control of soft continuum robots using deep visual inverse kinematic models.pdf"},
+    {"id": "chen2022", "label": "Chen et al. 2022", "path": "docs/papers/Chen 等 - 2022 - Fully body visual self-modeling of robot morphologies.pdf"},
+    {"id": "hu2025", "label": "Hu et al. 2025", "path": "docs/papers/Hu 等 - 2025 - Teaching robots to build simulations of themselves.pdf"},
+    {"id": "shan2024", "label": "Shan et al. 2024", "path": "docs/papers/Shan 等 - 2024 - SoftNeRF A self-modeling soft robot plugin for various tasks.pdf"},
+    {"id": "tang2026", "label": "Tang et al. 2026", "path": "docs/papers/Tang 等 - 2026 - A general soft robotic controller inspired by neuronal structural and plastic synapses that adapts t.pdf"},
+    {"id": "yu2026", "label": "Yu et al. 2026", "path": "docs/papers/Yu 等 - 2026 - Shape-interpretable visual self-modeling enables geometry-aware continuum robot control.pdf"},
+    {"id": "real_quant", "label": "真实 GTObserved 定量结果", "path": "output/real_quant/exp_20260709_5/summary.txt"},
+    {"id": "hysteresis", "label": "真实迟滞回线结果", "path": "output/exp5b_hysteresis_loop/summary.txt"},
+    {
+      "id": "window_ablation",
+      "label": "历史窗口消融",
+      "path": "output/window_ablation/ablation_summary.json",
+      "query": {
+        "engine": "duckdb",
+        "sql": "SELECT * FROM (VALUES ('window=1', 1.2159273764), ('window=40', 2.1013116384)) AS t(window, mean_px)",
+        "description": "Transcribes the mean_px values from output/window_ablation/ablation_summary.json for the comparison chart.",
+        "executed_at": "2026-08-19T12:00:00+08:00"
+      }
+    },
+    {"id": "openloop_compare", "label": "OpenLoop 窗口比较", "path": "output/openloop_window_compare/compare_summary.json"},
+    {"id": "plan_result", "label": "模型内规划结果", "path": "train_log/open_loop_transition/exp_20260714_8/eval_plan/plan_result.json"},
+    {"id": "transition_metrics", "label": "OpenLoop 最终评估", "path": "train_log/open_loop_transition/exp_20260714_8/transition_metrics.json"}
+  ],
+  "package_info": {}
+}
