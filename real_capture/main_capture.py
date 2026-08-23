@@ -308,7 +308,10 @@ class CaptureWindow(QMainWindow):
         self.cb_active.currentIndexChanged.connect(self._on_active_changed)
         row.addWidget(self.cb_active)
         self.btn_send = QPushButton("立即下发目标"); self.btn_send.clicked.connect(self._on_send)
+        self.btn_send.setToolTip(
+            "一次性下发当前目标并绕过 rise/fall 命令限速；采集过程仍按 rise/fall 限速。")
         self.btn_zero = QPushButton("全部归零"); self.btn_zero.clicked.connect(self._on_zero)
+        self.btn_zero.setToolTip("安全归零会绕过 rise/fall 命令限速。")
         row.addWidget(self.btn_send); row.addWidget(self.btn_zero)
         g.addLayout(row, N_CHAN + 2, 0, 1, 6)
         ll.addWidget(gb)
@@ -1058,7 +1061,15 @@ class CaptureWindow(QMainWindow):
                 [sb.value() for sb in self._fall_sb])
             self.controller.set_required_groups(
                 {1} if idx < 3 else {2} if idx < N_CHAN else {1, 2})
-            self.controller.set_pressures(self._current_targets())
+            # “立即下发”是一次性操作，没有后续定时命令帮它逐步逼近目标。
+            # 若在 configure_safety() 后立刻走限速器，dt 几乎为零，实际只会
+            # 改变一个不可见的小量；因此这里和安全归零一样明确绕过命令限速。
+            # manual/random/sweep/replay 的采集时钟仍使用正常的 rise/fall 限速。
+            requested = self._current_targets()
+            _, applied, _ = self.controller.set_pressures(
+                requested, bypass_rate=True)
+            self._log("目标已立即下发（不限速）：[" +
+                      " ".join(f"{value:.1f}" for value in applied) + "] kPa")
         except (TypeError, ValueError, RuntimeError) as error:
             self._log(f"⚠ 目标未下发：{error}")
 
