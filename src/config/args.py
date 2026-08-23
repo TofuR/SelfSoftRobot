@@ -65,6 +65,8 @@ def add_common_args(parser, data_dir_default="data/sequence_data"):
     parser.add_argument("--hidden_dim", type=int, default=None)
     parser.add_argument("--eval_interval", type=int, default=None,
                         help="Evaluate every N epochs during training (0=off)")
+    parser.add_argument("--save_interval", type=int, default=None,
+                        help="每N个epoch保存current、归档模型和可恢复训练状态；0关闭")
     parser.add_argument("--seed", type=int, default=None,
                         help="Random seed for reproducibility")
 
@@ -144,6 +146,8 @@ def build_common_overrides(args):
         "temporal.n_scales": getattr(args, "n_scales", None),
         "temporal.hidden_dim": getattr(args, "hidden_dim", None),
         "evaluation.eval_interval": getattr(args, "eval_interval", None),
+        "logging.checkpoint_interval": getattr(args, "save_interval", None),
+        "optimization.seed": getattr(args, "seed", None),
     }
 
 
