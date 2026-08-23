@@ -1,17 +1,8 @@
-"""visualize_real_overlay.py — 实物 transition 模型预测**直接叠在真实机器人照片上**。
+"""visualize_real_overlay.py — 实物 transition 前向预测叠在真实机器人照片上。
 
-为什么不用 3D 散点(visualize_3d_shape.py 那套):
-  sim 数据是度量 3D + 相机, 3D 散点清晰; 实物是**免标定单相机 1-DOF 平面**弯曲,
-  state 本就被定义为图像像素骨架 [col, row, 0]（见 masks_to_transition_npz.py）。
-  把预测投回**真实照片**（原图 + mask + GT 骨架 + 预测骨架同框）比抽象 3D 散点直观得多。
-
-【关键: 模型 3D 输出怎么落到图片上 —— 只有一种正确做法】
-  实物 state = [col, row, 0]（col/row 是图像像素, z=0 是平面假设）。模型 forward 在
-  归一化空间运算, 输出 (N,3) 归一化骨架; 反归一化 world = norm * pc_scale + pc_center
-  得回 [col, row, z] **像素坐标**。故 dim0=col 就是图像 x, dim1=row 就是图像 y →
-  **直接在 (x=col, y=row) 画点, 丢掉 z(≈0)**。这不是"相机投影"——根本没度量 3D、
-  没标定内参; 表示本身就活在图像平面。用相机矩阵 P@[X,Y,Z] 投影是**错的**(二次变换,
-  会扭曲)。z 通道 pc_scale≈eps 使其恒≈0; 若模型预测出非零 z(非平面幻觉)会告警。
+``robot_planar_mm_v1`` 数据先在模型毫米坐标中计算预测误差，再读取 NPZ 保存的
+``SkeletonFrameTransform`` 映射到源相机像素。历史 ``camera_pixel_v1`` 数据直接使用
+像素坐标。两种状态合同共用同一叠图入口，误差单位由 NPZ 明确给出。
 
 模式(从 checkpoint 自动识别, 可 --mode 覆盖):
   gt         GTObservedTransitionModel: 观测驱动单步 ŝ_t=F(GT s_{t-1}, z, a_t)（部署=每步观测）。
@@ -36,6 +27,7 @@
 """
 import argparse
 import glob
+import json
 import os
 import sys
 
@@ -48,6 +40,8 @@ if "CUDA_VISIBLE_DEVICES" not in os.environ:
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from src.utils.model_loader import load_model  # noqa: E402
+from src.data.action_view import project_actions, resolve_action_contract  # noqa: E402
+from real_validation.perception.coordinates import SkeletonFrameTransform  # noqa: E402
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -155,17 +149,25 @@ def overlay(photo, mask, gt_xy, pred_xy, onestep_xy=None, *,
 
 
 # ----------------------------- 路径推断 -----------------------------
-def guess_seq(data_dir):
-    """data_dir=data/real_seq/<seq>[_clean]/{train,val} → 返回原始 seq 名(去 _clean)。"""
-    seq_dir = os.path.basename(os.path.dirname(os.path.normpath(data_dir)))
-    return seq_dir[:-len("_clean")] if seq_dir.endswith("_clean") else seq_dir
+def sequence_from_npz(npz_path):
+    """从通用 transition NPZ 文件名解析原始采集序列名。"""
+    name = os.path.basename(npz_path)
+    for suffix in ("_train.npz", "_val.npz"):
+        if name.endswith(suffix):
+            return name[:-len(suffix)]
+    return os.path.splitext(name)[0]
 
 
-def auto_offset(data_dir):
-    """npz 索引 t → cam0 帧号偏移。train=0; val=len(sibling train)。"""
+def auto_offset(data_dir, selected_npz=None):
+    """npz 索引 t → 原始帧号；多 run 目录按同名 train/val 配对。"""
     base = os.path.dirname(os.path.normpath(data_dir))
     split = os.path.basename(os.path.normpath(data_dir))
     if split == "val":
+        if selected_npz:
+            seq = sequence_from_npz(selected_npz)
+            matching_train = os.path.join(base, "train", f"{seq}_train.npz")
+            if os.path.isfile(matching_train):
+                return int(np.load(matching_train)['positions'].shape[0])
         tr = sorted(glob.glob(os.path.join(base, "train", "*.npz")))
         if tr:
             return int(np.load(tr[0])['positions'].shape[0])
@@ -208,19 +210,52 @@ def main(argv=None):
     mode = args.mode if args.mode != "auto" else detect_mode(model)
 
     files = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
-    raw = np.load(files[args.seq_idx])
-    actions = raw['actions'].astype(np.float32)        # (T,D)
-    positions = raw['positions'].astype(np.float32)    # (T,3,N) [col,row,0] 像素
+    selected_npz = files[args.seq_idx]
+    raw = np.load(selected_npz)
+    raw_actions = raw['actions'].astype(np.float32)
+    action_contract = resolve_action_contract(args.data_dir, "auto")
+    actions = project_actions(
+        raw_actions, action_contract.model_action_channels).astype(np.float32)
+    positions = raw['positions'].astype(np.float32)    # (T,3,N) 模型状态坐标
+    state_frame = (str(raw['state_coordinate_frame'].item())
+                   if 'state_coordinate_frame' in raw else 'camera_pixel_v1')
+    state_unit = (str(raw['state_length_unit'].item())
+                  if 'state_length_unit' in raw else 'px')
+    checkpoint_state = (info.get('saved_config') or {}).get('state_view', {})
+    checkpoint_frame = checkpoint_state.get(
+        'state_coordinate_frame', 'camera_pixel_v1')
+    if checkpoint_frame != state_frame:
+        raise ValueError(
+            f"checkpoint state_coordinate_frame={checkpoint_frame} 与数据 {state_frame} 不一致")
+    frame_transform = (SkeletonFrameTransform.from_dict(json.loads(
+        str(raw['skeleton_frame_transform'].item())))
+        if 'skeleton_frame_transform' in raw else None)
     T = positions.shape[0]
     N = positions.shape[2]
-    print(f"\n模型: {type(model).__name__} → mode={mode} | T={T} N={N} D={actions.shape[1]} "
+    if actions.shape[1] != info['action_dim']:
+        raise ValueError(
+            f"叠图动作视图{actions.shape[1]}D与checkpoint {info['action_dim']}D不一致")
+    print(f"\n模型: {type(model).__name__} → mode={mode} | T={T} N={N} "
+          f"rawD={raw_actions.shape[1]} modelD={actions.shape[1]} "
+          f"channels={action_contract.model_action_channels} "
           f"window={window_size} norm_factor={norm_factor:.4g}")
 
     pred_norm, pc_center, pc_scale = run_rollout(
         model, mode, actions, positions, window_size, norm_factor, device,
         K=args.window_len, max_steps=args.max_steps)
-    pred_world = denorm(pred_norm, pc_scale, pc_center)          # (T,N,3) [col,row,z] 像素
-    gt_world = positions.transpose(0, 2, 1)                       # (T,N,3) 原始像素(无需反归一化)
+    T = pred_norm.shape[0]
+    positions = positions[:T]
+    actions = actions[:T]
+    pred_world = denorm(pred_norm, pc_scale, pc_center)          # (T,N,3) 模型状态坐标
+    gt_world = positions.transpose(0, 2, 1)
+    if frame_transform is not None:
+        pred_camera = frame_transform.model_to_camera(pred_world[:, :, :2])
+        gt_camera = (raw['positions_camera_px'][:T, :2, :].transpose(0, 2, 1)
+                     if 'positions_camera_px' in raw else
+                     frame_transform.model_to_camera(gt_world[:, :, :2]))
+    else:
+        pred_camera = pred_world[:, :, :2]
+        gt_camera = gt_world[:, :, :2]
     z_mag = float(np.abs(pred_world[:, :, 2]).mean())
 
     one_world = None
@@ -228,20 +263,26 @@ def main(argv=None):
         one_norm, _, _ = run_rollout(model, "onestep", actions, positions, window_size,
                                      norm_factor, device, K=args.window_len, max_steps=args.max_steps)
         one_world = denorm(one_norm, pc_scale, pc_center)
+    one_camera = (None if one_world is None else
+                  (frame_transform.model_to_camera(one_world[:, :, :2])
+                   if frame_transform is not None else one_world[:, :, :2]))
 
     tip_err = np.hypot(*(pred_world[:, 0, :2] - gt_world[:, 0, :2]).T)     # (T,)
     node_err = np.sqrt(((pred_world[:, :, :2] - gt_world[:, :, :2]) ** 2).sum(-1)).mean(axis=1)
 
-    seq = guess_seq(args.data_dir)
+    seq = sequence_from_npz(selected_npz)
     cam0 = args.cam0 or os.path.join(PROJECT_ROOT, "real_capture", "data", "raw", seq, "cam0")
     masks_dir = args.masks or os.path.join(PROJECT_ROOT, "real_capture", "data", "derived", seq, "masks")
-    offset = args.frame_offset if args.frame_offset is not None else auto_offset(args.data_dir)
+    offset = (args.frame_offset if args.frame_offset is not None else
+              auto_offset(args.data_dir, selected_npz))
     print(f"  seq={seq} cam0={'OK' if os.path.isdir(cam0) else 'MISSING'} "
           f"masks={'OK' if os.path.isdir(masks_dir) else 'MISSING'} frame_offset={offset}")
-    print(f"  预测 z 量级(应≈0): mean|z|={z_mag:.3f}px" +
-          ("  ⚠ 非平面(>0.5px), 模型可能幻觉出平面外" if z_mag > 0.5 else "  ✓ 平面"))
-    print(f"  末端(tip)误差: mean={tip_err.mean():.2f}px median={np.median(tip_err):.2f}px "
-          f"max={tip_err.max():.1f}px | 全节点均误: mean={node_err.mean():.2f}px")
+    print(f"  state_frame={state_frame} unit={state_unit}")
+    print(f"  预测 z 量级: mean|z|={z_mag:.3f}{state_unit}")
+    print(f"  末端(tip)误差: mean={tip_err.mean():.2f}{state_unit} "
+          f"median={np.median(tip_err):.2f}{state_unit} "
+          f"max={tip_err.max():.1f}{state_unit} | "
+          f"全节点均误: mean={node_err.mean():.2f}{state_unit}")
 
     ckpt_tag = os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(args.checkpoint)))) \
         or os.path.basename(args.checkpoint)
@@ -266,9 +307,24 @@ def main(argv=None):
             continue
         mp = os.path.join(masks_dir, f"{f:05d}.png")
         mask = (cv2.imread(mp, cv2.IMREAD_GRAYSCALE) > 127).astype(np.uint8) if os.path.isfile(mp) else None
-        img = overlay(photo, mask, gt_world[t, :, :2], pred_world[t, :, :2],
-                      onestep_xy=(one_world[t, :, :2] if one_world is not None else None))
-        cv2.putText(img, f"f{f} t{t} {mode} tipErr={tip_err[t]:.1f}px", (8, 26),
+        if mask is not None and mask.shape != photo.shape[:2]:
+            crop = (raw["image_crop_xywh"].astype(int).tolist()
+                    if "image_crop_xywh" in raw else None)
+            if crop and len(crop) == 4:
+                x, y, w_crop, h_crop = crop
+                if mask.shape != (h_crop, w_crop):
+                    mask = cv2.resize(mask, (w_crop, h_crop),
+                                      interpolation=cv2.INTER_NEAREST)
+                restored = np.zeros(photo.shape[:2], dtype=np.uint8)
+                x1, y1 = min(x + w_crop, restored.shape[1]), min(y + h_crop, restored.shape[0])
+                restored[y:y1, x:x1] = mask[:y1 - y, :x1 - x]
+                mask = restored
+            else:
+                print(f"  [忽略 f{f} mask] mask={mask.shape} photo={photo.shape[:2]}且无ROI合同")
+                mask = None
+        img = overlay(photo, mask, gt_camera[t], pred_camera[t],
+                      onestep_xy=(one_camera[t] if one_camera is not None else None))
+        cv2.putText(img, f"f{f} t{t} {mode} tipErr={tip_err[t]:.1f}{state_unit}", (8, 26),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
         cv2.putText(img, "GT green / pred cyan" + (" / onestep orange" if one_world is not None else ""),
                     (8, img.shape[0] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
@@ -291,9 +347,9 @@ def main(argv=None):
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         plt.figure(figsize=(8, 3))
-        plt.plot(tip_err, label="tip (node0) err [px]")
-        plt.plot(node_err, label="mean node err [px]", alpha=0.7)
-        plt.xlabel("frame index (npz)"); plt.ylabel("px")
+        plt.plot(tip_err, label=f"tip (node0) err [{state_unit}]")
+        plt.plot(node_err, label=f"mean node err [{state_unit}]", alpha=0.7)
+        plt.xlabel("frame index (npz)"); plt.ylabel(state_unit)
         plt.title(f"{ckpt_tag}  {mode}  z={z_mag:.3f}")
         plt.legend(); plt.grid(alpha=0.3)
         plt.tight_layout(); plt.savefig(os.path.join(out_dir, "error_plot.png"), dpi=120); plt.close()
@@ -303,10 +359,12 @@ def main(argv=None):
     with open(os.path.join(out_dir, "summary.txt"), "w") as fp:
         fp.write(f"checkpoint: {args.checkpoint}\ndata_dir: {args.data_dir}\nmode: {mode}\n")
         fp.write(f"T={T} N={N} window={window_size} norm_factor={norm_factor:.4g}\n")
-        fp.write(f"pred |z| mean = {z_mag:.4f}px ({'non-planar!' if z_mag > 0.5 else 'planar OK'})\n")
+        fp.write(f"state_frame={state_frame} state_unit={state_unit}\n")
+        fp.write(f"pred |z| mean = {z_mag:.4f}{state_unit}\n")
         fp.write(f"tip err: mean={tip_err.mean():.3f} median={np.median(tip_err):.3f} "
-                 f"max={tip_err.max():.3f} px\n")
-        fp.write(f"node err mean = {node_err.mean():.3f} px\n\nframe,tip_px,node_px\n")
+                 f"max={tip_err.max():.3f} {state_unit}\n")
+        fp.write(f"node err mean = {node_err.mean():.3f} {state_unit}\n\n"
+                 f"frame,tip_{state_unit},node_{state_unit}\n")
         for t, f, te, ne in recs:
             fp.write(f"{t},{f},{te:.2f},{ne:.2f}\n")
 

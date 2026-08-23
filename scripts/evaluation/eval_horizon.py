@@ -8,8 +8,8 @@
 
 做什么:
   - 多种子(从 val 不同帧起 rollout)聚合 error-by-k 曲线(均值), 统计稳健;
-  - 双轨误差: 归一化空间 MSE + 物理空间平均节点 L2(px, col-row 平面);
-  - K_max 在多容差(相对 onestep 的 3/10/30×, 绝对 px 3/5/10/20)的取值;
+  - 双轨误差: 归一化空间 MSE + 模型状态空间平均节点 L2;
+  - K_max 在多容差(相对 onestep 的 3/10/30× + 状态单位绝对阈值)的取值;
   - 可传多个 checkpoint 叠加对比——关键问题: open_loop 训练是否延长可用视野 vs gt;
   - 输出 JSON + 图(error vs k, log-y, 容差线 + drift + z_norm)。
 
@@ -41,6 +41,9 @@ import matplotlib.pyplot as plt
 
 from src.utils.model_loader import load_model
 from src.evaluation.transition_metrics import build_action_window
+from src.data.action_view import project_actions, resolve_action_contract
+from src.evaluation.diameter_scale import (
+    DEFAULT_ROBOT_DIAMETER_MM, resolve_diameter_scale)
 
 
 def rollout_horizon(model, actions_norm, positions, t0, max_k, window_size, device):
@@ -94,26 +97,44 @@ def rollout_horizon(model, actions_norm, positions, t0, max_k, window_size, devi
     return np.stack(roll, 0), np.stack(one, 0), gts, np.array(zn)
 
 
-def px_node_err(pred_norm, gt_norm, pc_center, pc_scale):
-    """平均节点 L2(px), col-row 平面(z=0不计)。pred/gt_norm: (K,N,3) 归一化 → (K,)px。"""
-    p = pred_norm * pc_scale + pc_center   # (K,N,3) px [col,row,0]
+def state_node_err(pred_norm, gt_norm, pc_center, pc_scale):
+    """模型状态平面中的平均节点 L2；单位由 NPZ 合同声明。"""
+    p = pred_norm * pc_scale + pc_center
     g = gt_norm * pc_scale + pc_center
     d = np.sqrt(((p[..., :2] - g[..., :2]) ** 2).sum(-1))  # (K,N)
-    return d.mean(axis=1)  # (K,) 每步平均节点px
+    return d.mean(axis=1)
 
 
-def kmax_above(curve, thr):
-    """首个超过 thr 的步数(1-indexed); 全程未超 → None。"""
-    hits = np.where(curve > thr)[0]
-    return int(hits[0] + 1) if len(hits) > 0 else None
+px_node_err = state_node_err
+
+
+def certified_k(curve, threshold):
+    """返回测试范围内连续满足 ``curve <= threshold`` 的最大步数。"""
+    values = np.asarray(curve, dtype=float)
+    hits = np.where(values > float(threshold))[0]
+    return int(hits[0]) if len(hits) else int(len(values))
 
 
 def characterize(model, ckpt, data_dir, max_steps, n_seeds, window_size,
-                 norm_factor, device):
+                 norm_factor, action_dim, device, robot_diameter_mm,
+                 robot_diameter_px):
     """对一个 checkpoint 在多种子上聚合 error-by-k, 返回 summary + by_k。"""
     files = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
     raw = np.load(files[0])
-    actions = raw["actions"].astype(np.float32)
+    state_frame = (str(raw["state_coordinate_frame"].item())
+                   if "state_coordinate_frame" in raw else "camera_pixel_v1")
+    state_unit = (str(raw["state_length_unit"].item())
+                  if "state_length_unit" in raw else "px")
+    diameter_scale = resolve_diameter_scale(
+        raw, data_dir, diameter_mm=robot_diameter_mm,
+        diameter_px=robot_diameter_px)
+    raw_actions = raw["actions"].astype(np.float32)
+    action_contract = resolve_action_contract(data_dir, "auto")
+    actions = project_actions(
+        raw_actions, action_contract.model_action_channels).astype(np.float32)
+    if actions.shape[1] != int(action_dim):
+        raise ValueError(
+            f"视野认证动作视图{actions.shape[1]}D与checkpoint {action_dim}D不一致")
     positions = raw["positions"].astype(np.float32)  # (T,3,N)
     T = positions.shape[0]
     actions_norm = actions / norm_factor
@@ -124,7 +145,7 @@ def characterize(model, ckpt, data_dir, max_steps, n_seeds, window_size,
     K = min(max_steps, T - 2)
     roll_mse = np.zeros(K)
     one_mse = np.zeros(K)
-    roll_px = np.zeros(K)
+    roll_state = np.zeros(K)
     z_n = np.zeros(K)
     cnt = 0
     for t0 in seeds:
@@ -133,63 +154,95 @@ def characterize(model, ckpt, data_dir, max_steps, n_seeds, window_size,
         kk = r.shape[0]
         roll_mse[:kk] += ((r - g) ** 2).mean(axis=(1, 2))
         one_mse[:kk] += ((o - g) ** 2).mean(axis=(1, 2))
-        roll_px[:kk] += px_node_err(r, g, pc_center, pc_scale)
+        roll_state[:kk] += state_node_err(r, g, pc_center, pc_scale)
         z_n[:kk] += zn
         cnt += 1
     roll_mse /= cnt
     one_mse /= cnt
-    roll_px /= cnt
+    roll_state /= cnt
     z_n /= cnt
     drift = roll_mse / np.maximum(one_mse, 1e-8)
+    roll_mm = (roll_state if state_unit == "mm" else
+               roll_state * diameter_scale.mm_per_px)
+    absolute_thresholds = (2.0, 4.0, 8.0, 16.0) if state_unit == "mm" else \
+        (3.0, 5.0, 10.0, 20.0)
 
     summary = {
+        "metric_semantics": (
+            "forward-model rollout prediction versus recorded skeleton GT "
+            "under the recorded dataset action sequence"),
+        "aggregation": "per exact rollout step k across evaluation seeds and all skeleton nodes",
         "checkpoint": ckpt,
         "n_seeds": int(cnt),
+        "raw_action_dim": int(raw_actions.shape[1]),
+        "model_action_dim": int(actions.shape[1]),
+        "model_action_channels": list(action_contract.model_action_channels),
         "K_evaluated": int(K),
         "rollout_mse_final": float(roll_mse[-1]),
         "onestep_mse_final": float(one_mse[-1]),
         "drift_final_x": float(drift[-1]),
-        "roll_px_final": float(roll_px[-1]),
+        "state_coordinate_frame": state_frame,
+        "state_length_unit": state_unit,
+        "roll_state_final": float(roll_state[-1]),
+        "roll_mm_final": float(roll_mm[-1]),
+        "robot_diameter_mm": float(diameter_scale.diameter_mm),
+        "robot_diameter_px": float(diameter_scale.diameter_px),
+        "mm_per_px": float(diameter_scale.mm_per_px),
+        "diameter_scale_source": diameter_scale.source,
         "z_norm_start": float(z_n[0]),
         "z_norm_final": float(z_n[-1]),
-        "Kmax_drift_3x": kmax_above(drift, 3.0),
-        "Kmax_drift_10x": kmax_above(drift, 10.0),
-        "Kmax_drift_30x": kmax_above(drift, 30.0),
-        "Kmax_px_3": kmax_above(roll_px, 3.0),
-        "Kmax_px_5": kmax_above(roll_px, 5.0),
-        "Kmax_px_10": kmax_above(roll_px, 10.0),
-        "Kmax_px_20": kmax_above(roll_px, 20.0),
+        "Kmax_drift_3x": certified_k(drift, 3.0),
+        "Kmax_drift_10x": certified_k(drift, 10.0),
+        "Kmax_drift_30x": certified_k(drift, 30.0),
+        "Kmax_mm_2": certified_k(roll_mm, 2.0),
+        "Kmax_mm_4": certified_k(roll_mm, 4.0),
+        "Kmax_mm_8": certified_k(roll_mm, 8.0),
+        "Kmax_mm_16": certified_k(roll_mm, 16.0),
     }
+    summary["Kmax_state"] = {
+        f"{threshold:g}{state_unit}": certified_k(roll_state, threshold)
+        for threshold in absolute_thresholds
+    }
+    if state_unit == "px":
+        summary.update({
+            "Kmax_px_3": certified_k(roll_state, 3.0),
+            "Kmax_px_5": certified_k(roll_state, 5.0),
+            "Kmax_px_10": certified_k(roll_state, 10.0),
+            "Kmax_px_20": certified_k(roll_state, 20.0),
+        })
     by_k = {
         "rollout_mse": roll_mse.tolist(),
         "onestep_mse": one_mse.tolist(),
         "drift": drift.tolist(),
-        "roll_px": roll_px.tolist(),
+        "roll_state": roll_state.tolist(),
+        "state_unit": state_unit,
+        "roll_mm": roll_mm.tolist(),
         "z_norm": z_n.tolist(),
     }
     return summary, by_k
 
 
 def plot_comparison(all_by_k, summaries, out_path, max_steps):
-    """3 子图: rollout px(对数y, 含容差线) / drift ratio / z_norm。每 checkpoint 一条线。"""
+    """3 子图: 状态误差 / drift ratio / z_norm。"""
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
     colors = plt.cm.tab10.colors
 
     for i, (label, bk) in enumerate(all_by_k.items()):
         c = colors[i % len(colors)]
-        k = np.arange(1, len(bk["roll_px"]) + 1)
-        axes[0].plot(k, bk["roll_px"], label=label, color=c, lw=1.5)
+        k = np.arange(1, len(bk["roll_state"]) + 1)
+        axes[0].plot(k, bk["roll_state"], label=label, color=c, lw=1.5)
         axes[1].plot(k, bk["drift"], label=label, color=c, lw=1.5)
         axes[2].plot(k, bk["z_norm"], label=label, color=c, lw=1.5)
 
-    # px 容差线
-    for thr in (3, 5, 10, 20):
+    state_unit = summaries[0].get("state_length_unit", "px") if summaries else "px"
+    thresholds = (2, 4, 8, 16) if state_unit == "mm" else (3, 5, 10, 20)
+    for thr in thresholds:
         axes[0].axhline(thr, color="gray", ls=":", lw=0.8, alpha=0.7)
-        axes[0].text(max_steps * 0.99, thr, f"{thr}px", fontsize=7,
+        axes[0].text(max_steps * 0.99, thr, f"{thr}{state_unit}", fontsize=7,
                      color="gray", ha="right", va="bottom")
     axes[0].set_yscale("log")
     axes[0].set_xlabel("rollout step k (距上次观测的步数)")
-    axes[0].set_ylabel("平均节点误差 (px, col-row 平面)")
+    axes[0].set_ylabel(f"平均节点误差 ({state_unit})")
     axes[0].set_title("纯自回归 rollout 误差 vs 步数")
     axes[0].legend(fontsize=8)
     axes[0].grid(True, which="both", alpha=0.3)
@@ -226,6 +279,10 @@ def main():
                         help="种子数(从 val 不同帧起 rollout 后聚合)")
     parser.add_argument("--out", type=str, default="output/horizon",
                         help="输出目录(JSON + PNG)")
+    parser.add_argument("--robot-diameter-mm", type=float,
+                        default=DEFAULT_ROBOT_DIAMETER_MM)
+    parser.add_argument("--robot-diameter-px", type=float, default=None,
+                        help="可选像素直径覆盖值；默认读取NPZ或同序列骨架QC")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -236,6 +293,16 @@ def main():
     for ckpt in args.checkpoints:
         print(f"\n{'='*60}\n认证: {ckpt}")
         info = load_model(ckpt, data_dir=args.data_dir, device=device)
+        first_npz = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))[0]
+        with np.load(first_npz, allow_pickle=False) as contract_npz:
+            data_frame = (str(contract_npz["state_coordinate_frame"].item())
+                          if "state_coordinate_frame" in contract_npz else
+                          "camera_pixel_v1")
+        checkpoint_frame = (info.get("saved_config") or {}).get(
+            "state_view", {}).get("state_coordinate_frame", "camera_pixel_v1")
+        if checkpoint_frame != data_frame:
+            raise ValueError(
+                f"checkpoint state_coordinate_frame={checkpoint_frame} 与数据 {data_frame} 不一致")
         model = info["model"]
         model.eval()
         window_size = info["window_size"]
@@ -246,22 +313,32 @@ def main():
         label = f"{mtype}"
 
         summary, by_k = characterize(model, ckpt, args.data_dir, args.max_steps,
-                                     args.n_seeds, window_size, norm_factor, device)
+                                     args.n_seeds, window_size, norm_factor,
+                                     info["action_dim"], device,
+                                     args.robot_diameter_mm,
+                                     args.robot_diameter_px)
         summary["model_type"] = mtype
         all_by_k[label] = by_k
         all_summaries.append(summary)
 
-        print(f"  [{label}] n_seeds={summary['n_seeds']}, K={summary['K_evaluated']}")
+        print(f"  [{label}] 前向模型rollout预测误差; "
+              f"n_seeds={summary['n_seeds']}, K={summary['K_evaluated']}")
         print(f"  最终: rollout_mse={summary['rollout_mse_final']:.3e}, "
               f"onestep_mse={summary['onestep_mse_final']:.3e}, "
               f"drift={summary['drift_final_x']:.1f}x, "
-              f"px={summary['roll_px_final']:.2f}px")
+              f"error={summary['roll_state_final']:.2f}{summary['state_length_unit']}"
+              f"≈{summary['roll_mm_final']:.2f}mm")
+        print(f"  直径尺度: {summary['robot_diameter_mm']:.2f}mm / "
+              f"{summary['robot_diameter_px']:.2f}px = "
+              f"{summary['mm_per_px']:.6f}mm/px")
         print(f"  z_norm: {summary['z_norm_start']:.2f} → {summary['z_norm_final']:.2f}")
         print(f"  K_max(漂移比): 3x={summary['Kmax_drift_3x']}, "
               f"10x={summary['Kmax_drift_10x']}, 30x={summary['Kmax_drift_30x']}")
-        print(f"  K_max(绝对px): 3px={summary['Kmax_px_3']}, "
-              f"5px={summary['Kmax_px_5']}, 10px={summary['Kmax_px_10']}, "
-              f"20px={summary['Kmax_px_20']}")
+        print(f"  K_max(绝对{summary['state_length_unit']}): " + ", ".join(
+            f"{label}={value}" for label, value in summary["Kmax_state"].items()))
+        print(f"  K_max(估计mm): 2mm={summary['Kmax_mm_2']}, "
+              f"4mm={summary['Kmax_mm_4']}, 8mm={summary['Kmax_mm_8']}, "
+              f"16mm={summary['Kmax_mm_16']}")
 
     # 保存 JSON + 图
     json_path = os.path.join(args.out, "horizon_summary.json")
@@ -275,8 +352,8 @@ def main():
 
     # 一句话结论
     print("\n解读:")
-    print("  - px 曲线缓增 + drift<10x → 模型可作规划仿真器, K_max 取容差交叉点")
-    print("  - px 指数增长 / z_norm 发散 → 模型不可作长程仿真器, 需先改 open_loop 训练")
+    print("  - 状态误差曲线缓增且 drift<10x：按任务容差交叉点选择 K_max")
+    print("  - 状态误差快速增长或 z_norm 发散：缩短规划视野并调整 OpenLoop 训练")
     print("  - open_loop 的 K_max 应 ≥ gt(open_loop 专为 rollout 训练)")
 
 
