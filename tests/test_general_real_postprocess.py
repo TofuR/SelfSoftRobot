@@ -34,6 +34,22 @@ class GeneralCenterlineTest(unittest.TestCase):
             self._s_mask(), n_points=15, method="skeletonize",
             segment_lengths=(1, 1), base_anchor_xy=(90, 175))
         self.assertLess(skeleton[0, 1], skeleton[-1, 1])
+        self.assertTrue(np.allclose(skeleton[-1], [90, 175]))
+
+    def test_base_anchor_excludes_attachment_branch_from_main_path(self):
+        from real_validation.perception.skeleton import extract_centerline_2d
+
+        mask = np.zeros((180, 180), np.uint8)
+        cv2.rectangle(mask, (80, 20), (100, 160), 1, -1)
+        cv2.rectangle(mask, (100, 20), (155, 40), 1, -1)
+        anchor = (90, 30)
+        skeleton = extract_centerline_2d(
+            mask, n_points=15, method="skeletonize",
+            base_anchor_xy=anchor, endpoint_fix=True)
+        self.assertLess(np.linalg.norm(skeleton[-1] - anchor), 8.0)
+        self.assertGreater(skeleton[0, 1], 145)
+        self.assertLess(
+            np.linalg.norm(np.diff(skeleton, axis=0), axis=1).sum(), 150)
 
     def test_endpoint_fix_reaches_both_flat_cap_centers(self):
         from real_validation.perception.skeleton import extract_centerline_2d
@@ -82,8 +98,68 @@ class GeneralCenterlineTest(unittest.TestCase):
         self.assertTrue(np.array_equal(with_endpoint_flag, without_endpoint_flag))
         self.assertEqual(info["reason"], "applied")
 
+    def test_cropped_masks_restore_source_camera_coordinates(self):
+        from scripts.real.masks_to_transition_npz import masks_to_positions
+
+        with tempfile.TemporaryDirectory() as root:
+            cv2.imwrite(os.path.join(root, "00000.png"), self._s_mask() * 255)
+            local, _, local_qc = masks_to_positions(
+                root, n_points=15, skeleton_method="skeletonize",
+                segment_lengths=(1, 1), crop_offset_xy=(0, 0), return_qc=True)
+            source, _, source_qc = masks_to_positions(
+                root, n_points=15, skeleton_method="skeletonize",
+                segment_lengths=(1, 1), crop_offset_xy=(300, 128), return_qc=True)
+        self.assertTrue(np.allclose(source[:, 0, :], local[:, 0, :] + 300))
+        self.assertTrue(np.allclose(source[:, 1, :], local[:, 1, :] + 128))
+        self.assertTrue(np.allclose(
+            source_qc[0]["fixed_tip_xy"],
+            np.asarray(local_qc[0]["fixed_tip_xy"]) + [300, 128]))
+
+    def test_explicit_repairs_use_real_frame_ids(self):
+        from scripts.real.masks_to_transition_npz import frame_ids_to_mask
+
+        qc = [{"frame": 101}, {"frame": 205}, {"frame": 999}]
+        selected = frame_ids_to_mask(qc, (205, 205))
+        self.assertEqual(selected.tolist(), [False, True, False])
+        with self.assertRaisesRegex(ValueError, "不存在的frame ID"):
+            frame_ids_to_mask(qc, (1,))
+
+    def test_centerline_mask_close_fills_narrow_occlusion_slit(self):
+        from scripts.real.masks_to_transition_npz import prepare_centerline_mask
+
+        mask = np.zeros((80, 60), np.uint8)
+        mask[5:75, 20:40] = 1
+        mask[35:75, 29:32] = 0
+        closed = prepare_centerline_mask(mask, close_kernel=5)
+        self.assertTrue(closed[50, 30])
+        self.assertGreater(int(closed.sum()), int(mask.sum()))
+        self.assertTrue(np.array_equal(
+            prepare_centerline_mask(mask, close_kernel=0), mask))
+        with self.assertRaisesRegex(ValueError, "正奇数"):
+            prepare_centerline_mask(mask, close_kernel=4)
+
 
 class CandidateSegmentationTest(unittest.TestCase):
+    def test_wide_base_attachment_is_trimmed_without_shortening_body(self):
+        from scripts.real.prepare_sam2_anchors import trim_wide_base_attachment
+
+        mask = np.zeros((100, 80), np.uint8)
+        mask[10:80, 31:49] = 1
+        mask[10:20, 20:60] = 1  # base处误粘的横向支架
+        trimmed = trim_wide_base_attachment(
+            mask, base_side="top", width_ratio=1.5, stable_span=5)
+        self.assertFalse(trimmed[:20].any())
+        self.assertTrue(trimmed[20:80, 31:49].all())
+        self.assertEqual(int(trimmed.sum()), 60 * 18)
+
+    def test_base_trim_keeps_already_narrow_cap(self):
+        from scripts.real.prepare_sam2_anchors import trim_wide_base_attachment
+
+        mask = np.zeros((100, 80), np.uint8)
+        mask[10:80, 31:49] = 1
+        trimmed = trim_wide_base_attachment(mask, base_side="top")
+        self.assertTrue(np.array_equal(trimmed, mask))
+
     def test_staged_and_compatibility_outputs_match(self):
         from real_validation.perception.segmentation import (
             segment_white_on_blue, segment_white_on_blue_stages,

@@ -30,7 +30,63 @@ from real_validation.perception.segmentation import (  # noqa: E402
 )
 
 
-STAGE_NAMES = ("white", "moved", "gated", "morph", "final")
+STAGE_NAMES = ("white", "moved", "gated", "morph", "pretrim", "final")
+
+
+def trim_wide_base_attachment(mask, base_side="top", width_ratio=1.5,
+                              stable_span=5):
+    """去掉机器人与宽支架相接处的短横向分支。
+
+    方形上下文裁剪会把固定支架一起保留在RGB中。候选分割偶尔在base处粘住一小段
+    横梁；它虽然面积很小，却会让最长骨架主路径的base端沿横梁偏移。这里仅从已分割
+    mask的base侧逐截面检查宽度，删除首个稳定“主体管径”截面之前的宽附件。算法不
+    读取动作，也不假设任何机器人段静止。
+    """
+    result = np.asarray(mask, dtype=np.uint8).copy()
+    if base_side == "none" or width_ratio <= 0 or stable_span <= 0 \
+            or not np.any(result):
+        return result
+    if base_side in ("top", "bottom"):
+        widths = result.sum(axis=1)
+    elif base_side in ("left", "right"):
+        widths = result.sum(axis=0)
+    else:
+        raise ValueError(f"未知base_side: {base_side}")
+    occupied = widths[widths > 0].astype(float)
+    if not len(occupied):
+        return result
+    body_width = float(np.median(occupied))
+    threshold = max(width_ratio * body_width, body_width + 2.0)
+    indices = range(len(widths)) if base_side in ("top", "left") \
+        else range(len(widths) - 1, -1, -1)
+    ordered = list(indices)
+    cut = None
+    for offset in range(0, len(ordered) - stable_span + 1):
+        values = widths[ordered[offset:offset + stable_span]]
+        if np.all((values > 0) & (values <= threshold)):
+            cut = ordered[offset]
+            break
+    if cut is None:
+        return result
+    if base_side == "top":
+        result[:cut] = 0
+    elif base_side == "bottom":
+        result[cut + 1:] = 0
+    elif base_side == "left":
+        result[:, :cut] = 0
+    else:
+        result[:, cut + 1:] = 0
+    return result
+
+
+def candidate_stages(bgr, bg, params, base_side, trim_width_ratio,
+                     trim_stable_span):
+    stages = segment_white_on_blue_stages(bgr, bg, **params)
+    stages["pretrim"] = stages["final"].copy()
+    stages["final"] = trim_wide_base_attachment(
+        stages["final"], base_side=base_side, width_ratio=trim_width_ratio,
+        stable_span=trim_stable_span)
+    return stages
 
 
 def mask_metrics(mask):
@@ -129,7 +185,9 @@ def _overlay(bgr, mask, color=(0, 0, 255), alpha=0.38):
     return out
 
 
-def save_stage_qc(frame_paths, bg, params, rows, selected, qc_dir, n=10):
+def save_stage_qc(frame_paths, bg, params, rows, selected, qc_dir,
+                  base_side="top", trim_width_ratio=1.5,
+                  trim_stable_span=5, n=10):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -149,7 +207,8 @@ def save_stage_qc(frame_paths, bg, params, rows, selected, qc_dir, n=10):
                              figsize=(2.5 * len(cols), 2.25 * len(wanted)), squeeze=False)
     for r, frame in enumerate(wanted):
         bgr = cv2.imread(path_map[frame])
-        stages = segment_white_on_blue_stages(bgr, bg, **params)
+        stages = candidate_stages(
+            bgr, bg, params, base_side, trim_width_ratio, trim_stable_span)
         for c, name in enumerate(cols):
             ax = axes[r, c]
             if name == "rgb":
@@ -159,7 +218,7 @@ def save_stage_qc(frame_paths, bg, params, rows, selected, qc_dir, n=10):
             else:
                 ax.imshow(stages[name], cmap="gray", vmin=0, vmax=1)
             if r == 0:
-                ax.set_title(name)
+                ax.set_title("candidate final\n(not SAM2)" if name == "final" else name)
             ax.set_xticks([]); ax.set_yticks([])
         row = by_frame[frame]
         axes[r, 0].set_ylabel(
@@ -190,7 +249,9 @@ def save_stage_qc(frame_paths, bg, params, rows, selected, qc_dir, n=10):
         fig, axes = plt.subplots(rows_n, cols_n, figsize=(3 * cols_n, 3 * rows_n), squeeze=False)
         for k, frame in enumerate(anchor_frames):
             bgr = cv2.imread(path_map[frame])
-            mask = segment_white_on_blue_stages(bgr, bg, **params)["final"]
+            mask = candidate_stages(
+                bgr, bg, params, base_side, trim_width_ratio,
+                trim_stable_span)["final"]
             axes.flat[k].imshow(cv2.cvtColor(_overlay(bgr, mask, (0, 255, 0)), cv2.COLOR_BGR2RGB))
             axes.flat[k].set_title(f"f{frame} q={by_frame[frame]['quality']:.3f}", fontsize=8)
             axes.flat[k].axis("off")
@@ -214,6 +275,10 @@ def build_parser():
                     help="可选无机器人参考背景；未提供则自动使用全序列中值背景")
     pa.add_argument("--base-side", choices=("top", "bottom", "left", "right", "none"),
                     default="top", help="固定基座靠近哪一侧；只用于锚点打分")
+    pa.add_argument("--base-trim-width-ratio", type=float, default=1.5,
+                    help="删除base处宽支架分支的截面宽度阈值；<=0禁用")
+    pa.add_argument("--base-trim-stable-span", type=int, default=5,
+                    help="判定进入机器人主体所需的连续窄截面数")
     pa.add_argument("--sat", type=int, default=100)
     pa.add_argument("--val", type=int, default=120)
     pa.add_argument("--diff", type=int, default=25)
@@ -265,7 +330,9 @@ def main(argv=None):
         if bgr is None:
             continue
         frame = int(os.path.splitext(os.path.basename(path))[0])
-        final = segment_white_on_blue_stages(bgr, bg, **params)["final"]
+        final = candidate_stages(
+            bgr, bg, params, args.base_side, args.base_trim_width_ratio,
+            args.base_trim_stable_span)["final"]
         cv2.imwrite(os.path.join(mask_dir, f"{frame:05d}.png"), final * 255)
         row = {"frame": frame, "file": os.path.basename(path), **mask_metrics(final)}
         rows.append(row)
@@ -300,6 +367,10 @@ def main(argv=None):
         "n_selected_anchors": len(selected),
         "chunk_size": args.chunk_size,
         "base_side": args.base_side,
+        "base_attachment_trim": {
+            "width_ratio": args.base_trim_width_ratio,
+            "stable_span": args.base_trim_stable_span,
+        },
         "background_source": background_source,
         "segmentation_params": params,
         "robust_feature_stats": {k: {"median": v[0], "scale": v[1]}
@@ -307,7 +378,11 @@ def main(argv=None):
     }
     with open(os.path.join(out_root, "candidate_summary.json"), "w") as handle:
         json.dump(summary, handle, indent=2, ensure_ascii=False)
-    save_stage_qc(frame_paths, bg, params, rows, selected, qc_dir)
+    save_stage_qc(
+        frame_paths, bg, params, rows, selected, qc_dir,
+        base_side=args.base_side,
+        trim_width_ratio=args.base_trim_width_ratio,
+        trim_stable_span=args.base_trim_stable_span)
     print(f"完成：candidate={mask_dir} anchors={anchor_dir}")
     print(f"      manifest={os.path.join(out_root, 'anchor_manifest.csv')} qc={qc_dir}")
 

@@ -60,8 +60,8 @@ def _resample_path_segmented(path, n_points, segment_lengths):
     return out, intervals, tuple(joint_nodes)
 
 
-def _medial_longest_path(binary_img, algorithm="skeletonize"):
-    """mask细化图的直径路径，自动剪掉不在主干直径上的短分支。"""
+def _medial_longest_path(binary_img, algorithm="skeletonize", anchor_xy=None):
+    """提取主路径；有base锚点时从锚点到最远tip，否则使用图直径。"""
     try:
         from skimage.morphology import medial_axis, skeletonize
     except ImportError as error:  # pragma: no cover - 依赖缺失应明确暴露
@@ -106,6 +106,19 @@ def _medial_longest_path(binary_img, algorithm="skeletonize"):
         farthest = max(distance, key=distance.get)
         return farthest, previous
 
+    if anchor_xy is not None:
+        anchor = np.asarray(anchor_xy, dtype=np.float64).reshape(2)
+        base = min(points, key=lambda point: float(np.linalg.norm(
+            np.asarray(point, dtype=np.float64) - anchor)))
+        tip, previous = bfs(base)
+        ordered = []
+        current = tip
+        while current is not None:
+            ordered.append(current)
+            current = previous[current]
+        path = np.asarray(ordered, dtype=np.float64) if len(ordered) > 1 else None
+        return path, int(len(points))
+
     unseen = set(points)
     best_path = []
     while unseen:
@@ -137,6 +150,7 @@ ENDPOINT_FIX_SKIP_SHORT_PATH = "path_too_short"
 ENDPOINT_FIX_SKIP_WIDTH = "width_estimate_failed"
 ENDPOINT_FIX_SKIP_TANGENT = "local_tangent_failed"
 ENDPOINT_FIX_SKIP_SECTION = "full_width_section_not_found"
+ENDPOINT_FIX_BASE_ANCHORED = "base_anchor"
 
 
 def _path_cumulative(path):
@@ -258,13 +272,16 @@ def _fix_one_endcap(mask, path_from_end, width_ratio=0.85):
     }, ENDPOINT_FIX_APPLIED
 
 
-def _fix_path_endcaps(mask, path, enabled=True):
+def _fix_path_endcaps(mask, path, enabled=True, fix_base=True):
     """同时修正 tip/base；任一端失败时只保留该端原路径，绝不让整帧失效。"""
     path = np.asarray(path, dtype=np.float64)
     if not enabled:
         return path, None, None, ENDPOINT_FIX_NOT_REQUESTED, ENDPOINT_FIX_NOT_REQUESTED
     tip, tip_reason = _fix_one_endcap(mask, path)
-    base, base_reason = _fix_one_endcap(mask, path[::-1])
+    if fix_base:
+        base, base_reason = _fix_one_endcap(mask, path[::-1])
+    else:
+        base, base_reason = None, ENDPOINT_FIX_BASE_ANCHORED
 
     tip_join = tip["join_index"] if tip is not None else 0
     base_join = base["join_index"] if base is not None else 0
@@ -327,7 +344,8 @@ def extract_centerline_2d(binary_img, n_points=15, method="skeletonize",
     if method not in ("skeletonize", "medial_axis"):
         raise ValueError(f"未知中心线方法: {method}")
 
-    path, n_medial = _medial_longest_path(mask, algorithm=method)
+    path, n_medial = _medial_longest_path(
+        mask, algorithm=method, anchor_xy=base_anchor_xy)
     info["n_medial_pixels"] = n_medial
     if path is None or len(path) < 2:
         result = np.zeros((n_points, 2), np.float32)
@@ -340,9 +358,15 @@ def extract_centerline_2d(binary_img, n_points=15, method="skeletonize",
         first_is_base = np.linalg.norm(path[0] - anchor) <= np.linalg.norm(path[-1] - anchor)
     if first_is_base:
         path = path[::-1]
+    if base_anchor_xy is not None:
+        # 显式base锚点是物理固定端合同：细化中轴会在圆帽内收若干像素，直接把
+        # 权威锚点接回路径，避免nodeN-1随细化端点抖动或停在管体内部。
+        anchor = np.asarray(base_anchor_xy, dtype=np.float64).reshape(2)
+        if np.linalg.norm(path[-1] - anchor) > 1e-6:
+            path = np.concatenate([path, anchor[None]], axis=0)
     raw_path = path.copy()
     path, tip_cap, base_cap, tip_reason, base_reason = _fix_path_endcaps(
-        mask, path, enabled=endpoint_fix)
+        mask, path, enabled=endpoint_fix, fix_base=base_anchor_xy is None)
     result, intervals, joints = _resample_path_segmented(
         path, n_points=n_points, segment_lengths=segment_lengths)
     info.update({

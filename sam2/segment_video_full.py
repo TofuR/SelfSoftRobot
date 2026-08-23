@@ -6,13 +6,13 @@
     旧序列没有清单时才回退到顶部/面积启发式。
   - 块内**双向传播**: 官方 propagate_in_video(reverse=False) 前向 max=100 + (reverse=True) 反向
     max=100, 一个锚帧覆盖整块(无需重叠拼接)。
-  - 块间隔离(每块独立 init_state): 一块的漂移/失败不污染其他块; 失败块记 failures.txt 继续。
+  - 块间隔离(每块独立 init_state): 各块独立传播; 失败块记 failures_shardK.txt 继续。
   - 多 GPU 分片: --shards N --shard k 取 chunk_idx % N == k 的块(各分片写同一 out 目录,
     帧不重叠)。
   - 断点续跑: 块内所有输出帧已存在则跳过。
 
 输出**单独保存, 不覆盖候选mask**: sam2/masks/<seq>_full/<NNNNN>.png + area_curve.txt
-+ failures.txt + run_meta + candidate/SAM2对比QC。
++ failures_shardK.txt + run_meta + candidate/SAM2对比QC。
 
 用法(单卡):
   CUDA_VISIBLE_DEVICES=3 python sam2/segment_video_full.py --seq seq_20260627_163921
@@ -304,6 +304,10 @@ def main():
     os.makedirs(jpeg_root, exist_ok=True)
 
     all_fs = sorted(int(os.path.basename(p).split(".")[0]) for p in glob.glob(os.path.join(cam0, "*.png")))
+    first_image = (cv2.imread(os.path.join(cam0, f"{all_fs[0]:05d}.png"))
+                   if all_fs else None)
+    input_size_wh = ([int(first_image.shape[1]), int(first_image.shape[0])]
+                     if first_image is not None else [])
     f_lo = max(args.start_frame, all_fs[0]) if all_fs else args.start_frame
     f_hi = min(args.end_frame if args.end_frame is not None else all_fs[-1], all_fs[-1]) if all_fs else (args.end_frame or 0)
     chunks = [(s, min(s + args.chunk_size - 1, f_hi)) for s in range(f_lo, f_hi + 1, args.chunk_size)]
@@ -321,8 +325,9 @@ def main():
     predictor = build_predictor(args.device)
 
     area_log = os.path.join(out_dir, "area_curve.txt")
-    fail_log = os.path.join(out_dir, "failures.txt")
-    with open(area_log, "a") as fa, open(fail_log, "a") as ff:
+    fail_log = os.path.join(out_dir, f"failures_shard{args.shard}.txt")
+    # 每次 shard 调用重写自己的失败清单；成功断点续算会清除该 shard 的历史失败状态。
+    with open(area_log, "a") as fa, open(fail_log, "w") as ff:
         fa.write(f"# shard {args.shard}/{args.shards} start; med_area={med:.0f}\n")
         for ci, (c_start, c_end) in my_chunks:
             try:
@@ -346,6 +351,9 @@ def main():
         json.dump({
             "schema_version": 1,
             "sequence": seq_name,
+            "input_sequence_path": os.path.abspath(raw_seq_dir),
+            "input_image_size_wh": input_size_wh,
+            "input_frame_count": len(all_fs),
             "camera": args.camera,
             "anchor_mask_dir": os.path.abspath(anchor_dir),
             "anchor_manifest": os.path.abspath(manifest_path) if anchor_manifest else None,

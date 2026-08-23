@@ -20,6 +20,13 @@ from torch.utils.data import Dataset
 from .action_view import project_actions, resolve_action_contract
 
 
+def _npz_text(data, key, default):
+    if key not in data:
+        return str(default)
+    value = data[key]
+    return str(value.item() if hasattr(value, "item") else value)
+
+
 class SpatialSequenceDataset(Dataset):
     """空间序列数据集。
 
@@ -45,6 +52,19 @@ class SpatialSequenceDataset(Dataset):
         self.action_contract = resolve_action_contract(data_dir, action_channels)
         self.action_channels = self.action_contract.model_action_channels
         self.action_dim = self.action_contract.model_action_dim
+
+        state_contracts = []
+        for path in file_list:
+            with np.load(path, allow_pickle=False) as data:
+                state_contracts.append((
+                    _npz_text(data, "state_coordinate_frame", "camera_pixel_v1"),
+                    _npz_text(data, "state_length_unit", "px"),
+                ))
+        unique_state_contracts = tuple(dict.fromkeys(state_contracts))
+        if len(unique_state_contracts) != 1:
+            raise ValueError(
+                f"数据目录混用了多个状态坐标合同: {unique_state_contracts}")
+        self.state_coordinate_frame, self.state_length_unit = unique_state_contracts[0]
 
         # 动作归一化因子
         all_acts = []
@@ -81,7 +101,9 @@ class SpatialSequenceDataset(Dataset):
         print(f"SpatialSequenceDataset: {len(self.samples)} samples, "
               f"raw_action_dim={self.action_contract.raw_action_dim}, "
               f"action_dim={self.action_dim}, channels={self.action_channels}, "
-              f"n_seqs={len(self.data_cache)}")
+              f"n_seqs={len(self.data_cache)}, "
+              f"state_frame={self.state_coordinate_frame}, "
+              f"unit={self.state_length_unit}")
 
         # 计算归一化参数（基于中心线坐标范围）
         self._compute_normalization()
@@ -152,6 +174,12 @@ class SpatialSequenceDataset(Dataset):
     def get_normalization_params(self):
         """返回归一化参数。"""
         return self.pc_center, self.pc_scale
+
+    def get_state_contract(self):
+        return {
+            "state_coordinate_frame": self.state_coordinate_frame,
+            "state_length_unit": self.state_length_unit,
+        }
 
     def _get_action_window(self, data, t):
         """获取以 t 结尾的时序动作窗口，不足时 zero-pad。"""

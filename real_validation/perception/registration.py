@@ -1,17 +1,14 @@
-"""相机位姿注册：证明"live 像素 == 训练期像素"这个恒等映射仍成立。
+"""一次在线实验内的相机稳定性注册。
 
-免标定路线把 state 定义成绝对图像像素，于是 pc_center/pc_scale、背景图、关节锚点、
-NDI 仿射全部绑死在采集时那个相机位姿上。相机一动，失效方式是**静默的**：分割照样
-出 mask、骨架照样出 15 点，数值全错。
+``robot_planar_mm_v1`` 在首次 Anchor 时吸收当前相机的平移、旋转和统一尺度，随后固定
+使用该正反变换。本模块比较 Anchor 参考帧与后续 live 帧，检测实验进行中相机是否发生
+移动；新相机安装通过新实验和新 Anchor 建立新的机器人坐标变换。
 
-本模块只做**检测**，不做 warp：重采后采集位姿 == 部署位姿，camera_pixel → model 是
-恒等映射 + 一个残差门。输出两个数字，门控用 displacement_px：
+本模块只做检测，输出两个数字，门控用 displacement_px：
   fit_residual_px  内点重投影误差中位数 —— 拟合质量
   displacement_px  H 作用到图像四角的最大位移 —— 位姿到底移了多远
 
-失败时 displacement_px 是 NaN，绝不是 0 —— 否则"配准通过"会成为默认值。
-同理失败时 homography 是 None，绝不是单位阵 —— 消费者必须查 `ok`，否则会把
-恒等 warp 当成有效位姿变换静默应用。
+失败时 displacement_px 是 NaN，homography 是 None；消费者检查 `ok` 后再更新质量门。
 """
 
 from __future__ import annotations

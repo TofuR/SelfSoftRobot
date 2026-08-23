@@ -1,13 +1,8 @@
-"""masks_to_transition_npz.py — 实物 mask + actions → transition 训练 npz（免标定）。
+"""masks_to_transition_npz.py — 实物 mask + actions → transition 训练 npz。
 
-为什么不需要标定（核心）:
-  state_transition 模型的 state 是 3D 中心线骨架 s∈R^{N×3}（每个节点 3 坐标），
-  模型只消费 (prev_skeleton, action) → next_skeleton，**不碰图像、不需要相机参数**。
-  对满足平面约束的单相机实验，直接用 mask 的 2D 图像骨架作 state（第 3 维 z=0）：
-    positions[t,:,i] = [col_i, row_i, 0]
-  模型在归一化图像坐标空间学动力学；GT-transition vs open-loop 的"预测方法"对比
-  在该空间同样有效（对比的是框架，不是度量 3D 精度）。
-  → 不标定、不 planar-lift、不 NeRF。需要度量 3D 时再标定（NDI 末端可作独立验证）。
+默认状态为 ``robot_planar_mm_v1``：源像素骨架通过一次序列固定的基座/纵轴/直径
+相似变换进入机器人平面毫米坐标。NPZ 同时保存 ``positions_camera_px`` 与正反变换，
+供 QC、照片叠图和在线部署使用。``--state-frame camera_pixel`` 用于历史像素基线复现。
 
 action 归一化（**[0,1]，不到负数**）:
   气动单向 + 半自由度：ch0 只能充气(0→150)把臂往一个方向弯；负值 = 反向驱动(拮抗
@@ -22,7 +17,8 @@ action 归一化（**[0,1]，不到负数**）:
   --action-channels auto                 (约束序列自动得到 0,1,3,4 模型视图)
 输出:
   <out-root>/train/<seq>_train.npz  +  <out-root>/val/<seq>_val.npz
-  每个 npz: positions:(T,3,15) float32, actions:(T,6) float32 (已归一化到 [0,1])
+  每个 npz: positions:(T,3,15) float32, positions_camera_px:(T,3,15),
+  actions:(T,6) float32 (已归一化到 [0,1])
   Dataset 再按 model_action_channels 投影为模型使用的 1–6 维动作。
 """
 from __future__ import annotations
@@ -42,6 +38,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from real_validation.perception.skeleton import (  # noqa: E402
     extract_centerline_2d,
 )
+from real_validation.perception.coordinates import (  # noqa: E402
+    CAMERA_PIXEL_FRAME,
+    ROBOT_PLANAR_FRAME,
+    estimate_skeleton_frame,
+    transform_positions_to_model,
+)
+from src.evaluation.diameter_scale import estimate_diameter_px  # noqa: E402
 
 
 EQUALITY_TOLERANCE_KPA = 0.5
@@ -227,9 +230,22 @@ def action_max_per_channel(seq_dir, channels, actions):
     return np.array(maxes, np.float32)
 
 
+def prepare_centerline_mask(mask, close_kernel=0):
+    """填合线缆遮挡造成的窄裂缝，但不做跨帧或动作相关修复。"""
+    result = (np.asarray(mask) > 0).astype(np.uint8)
+    kernel = int(close_kernel)
+    if kernel < 0 or (kernel > 0 and kernel % 2 == 0):
+        raise ValueError("mask close kernel 必须为0或正奇数")
+    if kernel >= 3:
+        element = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel, kernel))
+        result = cv2.morphologyEx(result, cv2.MORPH_CLOSE, element)
+    return result
+
+
 def masks_to_positions(mask_dir, n_points=31, tip_fix=True, endpoint_fix=True,
                        skeleton_method="row_centroid", segment_lengths=(1.0,),
-                       base_anchor_xy=None, return_qc=False):
+                       base_anchor_xy=None, crop_offset_xy=(0.0, 0.0),
+                       mask_close_kernel=0, return_qc=False):
     """mask PNG → (T,3,N) positions [col,row,0]。空 mask → 全 0 骨架(下游跳过)。
 
     skeletonize/medial_axis 默认使用 endpoint_fix 同时把 tip/base 延伸到端帽宽边中心；
@@ -238,19 +254,41 @@ def masks_to_positions(mask_dir, n_points=31, tip_fix=True, endpoint_fix=True,
     fs = sorted(glob.glob(os.path.join(mask_dir, "*.png")))
     if not fs:
         sys.exit(f"无 mask: {mask_dir}")
+    offset = np.asarray(crop_offset_xy, dtype=np.float32).reshape(2)
     skels = []
     qc = []
     for index, path in enumerate(fs):
-        mask = (cv2.imread(path, cv2.IMREAD_GRAYSCALE) > 127).astype(np.uint8)
+        raw_mask = (cv2.imread(path, cv2.IMREAD_GRAYSCALE) > 127).astype(np.uint8)
+        mask = prepare_centerline_mask(raw_mask, mask_close_kernel)
         skel, info = extract_centerline_2d(
             mask, n_points=n_points, method=skeleton_method,
             segment_lengths=segment_lengths, base_anchor_xy=base_anchor_xy,
             tip_fix=tip_fix, endpoint_fix=endpoint_fix, return_info=True)
+        if bool(info.get("success")) and np.isfinite(skel).all():
+            local_skel = np.asarray(skel, dtype=np.float32)
+            distance = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+            start = max(1, int(np.floor(0.2 * len(local_skel))))
+            stop = min(len(local_skel) - 1,
+                       int(np.ceil(0.8 * len(local_skel))))
+            body = np.rint(local_skel[start:stop]).astype(np.int32)
+            body[:, 0] = np.clip(body[:, 0], 0, mask.shape[1] - 1)
+            body[:, 1] = np.clip(body[:, 1], 0, mask.shape[0] - 1)
+            widths = 2.0 * distance[body[:, 1], body[:, 0]]
+            widths = widths[np.isfinite(widths) & (widths > 0)]
+            info["body_width_px"] = float(np.median(widths)) if len(widths) else 0.0
+            skel = local_skel + offset[None, :]
+            # 端点诊断也统一写成源相机像素坐标，保证QC叠回原图时不混坐标系。
+            for key in tuple(info):
+                if key.endswith("_xy") and isinstance(info[key], (tuple, list)) \
+                        and len(info[key]) == 2:
+                    info[key] = tuple((np.asarray(info[key], dtype=float) + offset).tolist())
         skels.append(skel)
         qc.append({
             "index": index,
             "frame": int(os.path.splitext(os.path.basename(path))[0]),
-            "mask_area": int(mask.sum()),
+            "mask_area": int(raw_mask.sum()),
+            "centerline_mask_area": int(mask.sum()),
+            "mask_close_kernel": int(mask_close_kernel),
             **info,
         })
     sk2d = np.asarray(skels, dtype=np.float32)
@@ -318,6 +356,20 @@ def interpolate_flagged_frames(positions, flagged):
     return out
 
 
+def frame_ids_to_mask(extraction_qc, frame_ids):
+    """把真实frame ID转换为样本布尔mask，并拒绝静默错位。"""
+    index_by_frame = {int(item["frame"]): index
+                      for index, item in enumerate(extraction_qc)}
+    requested = tuple(dict.fromkeys(int(frame) for frame in frame_ids))
+    missing = [frame for frame in requested if frame not in index_by_frame]
+    if missing:
+        raise ValueError(f"--repair-frames包含不存在的frame ID: {missing}")
+    selected = np.zeros(len(extraction_qc), dtype=bool)
+    for frame in requested:
+        selected[index_by_frame[frame]] = True
+    return selected
+
+
 def clean_outlier_skeletons(positions, deviation_px=80):
     """检测并修复离群骨架帧（管-臂合并/管茬使骨架中心线跑偏到画面边缘）。
 
@@ -354,10 +406,26 @@ def save_npz(path, positions, actions, n_points=None, tip_fix=None,
              pair_residual_max=None, planarity_qc=None,
              model_action_channels=(), action_expansion=None,
              skeleton_method=None, segment_lengths=(), segment_intervals=(),
-             joint_node_indices=()):
+             joint_node_indices=(), image_crop_xywh=(),
+             source_image_size_wh=(), processed_image_size_wh=(),
+             mask_close_kernel=0, robot_diameter_mm=16.0,
+             robot_diameter_px=None, positions_camera_px=None,
+             state_coordinate_frame=CAMERA_PIXEL_FRAME,
+             state_length_unit="px", frame_transform=None,
+             raw_action_scale6_kpa=None, action_scale_kpa=None):
     """存 npz。n_points/tip_fix 作元数据存入(供训练 config.json 记录数据配置, 辨识模型用)。"""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     kw = dict(positions=positions.astype(np.float32), actions=actions.astype(np.float32))
+    if positions_camera_px is not None:
+        camera_positions = np.asarray(positions_camera_px, dtype=np.float32)
+        if camera_positions.shape != positions.shape:
+            raise ValueError("positions_camera_px 必须与 positions 同形状")
+        kw['positions_camera_px'] = camera_positions
+    kw['state_coordinate_frame'] = np.array(str(state_coordinate_frame))
+    kw['state_length_unit'] = np.array(str(state_length_unit))
+    if frame_transform is not None:
+        kw['skeleton_frame_transform'] = np.array(json.dumps(
+            frame_transform.to_dict(), ensure_ascii=False, separators=(",", ":")))
     if n_points is not None:
         kw['n_points'] = np.array(n_points)
     if tip_fix is not None:
@@ -366,10 +434,21 @@ def save_npz(path, positions, actions, n_points=None, tip_fix=None,
         kw['endpoint_fix'] = np.array(bool(endpoint_fix))
     if skeleton_method is not None:
         kw['skeleton_method'] = np.array(str(skeleton_method))
+    kw['mask_close_kernel'] = np.array(int(mask_close_kernel))
     kw['node_order'] = np.array('tip_to_base')
     kw['segment_lengths'] = np.asarray(segment_lengths, dtype=np.float32)
     kw['segment_intervals'] = np.asarray(segment_intervals, dtype=np.int64)
     kw['joint_node_indices'] = np.asarray(joint_node_indices, dtype=np.int64)
+    kw['image_crop_xywh'] = np.asarray(image_crop_xywh, dtype=np.int64)
+    kw['source_image_size_wh'] = np.asarray(source_image_size_wh, dtype=np.int64)
+    kw['processed_image_size_wh'] = np.asarray(
+        processed_image_size_wh, dtype=np.int64)
+    if robot_diameter_px is not None:
+        diameter_mm = float(robot_diameter_mm)
+        diameter_px = float(robot_diameter_px)
+        kw['robot_diameter_mm'] = np.array(diameter_mm, dtype=np.float32)
+        kw['robot_diameter_px'] = np.array(diameter_px, dtype=np.float32)
+        kw['mm_per_px'] = np.array(diameter_mm / diameter_px, dtype=np.float32)
     has_source_contract = channel_sources is not None or bool(channel_equalities)
     sources = (normalize_channel_sources(channel_sources, channel_equalities)
                if has_source_contract else ())
@@ -386,6 +465,12 @@ def save_npz(path, positions, actions, n_points=None, tip_fix=None,
         model_action_channels or tuple(range(actions.shape[1])), dtype=np.int64)
     kw['action_expansion6'] = np.asarray(
         action_expansion if action_expansion is not None else [], dtype=np.int64)
+    kw['raw_action_scale6_kpa'] = np.asarray(
+        raw_action_scale6_kpa if raw_action_scale6_kpa is not None else [],
+        dtype=np.float32)
+    kw['action_scale_kpa'] = np.asarray(
+        action_scale_kpa if action_scale_kpa is not None else [],
+        dtype=np.float32)
     if planarity_qc is not None:
         kw['planarity_qc'] = np.array(json.dumps(
             planarity_qc, ensure_ascii=False, separators=(",", ":")))
@@ -394,7 +479,8 @@ def save_npz(path, positions, actions, n_points=None, tip_fix=None,
 
 
 def save_conversion_qc(out_root, seq, mask_dir, frame_paths, extraction_qc,
-                       raw_positions, final_positions, joint_node_indices):
+                       raw_positions, final_positions, joint_node_indices,
+                       image_crop_xywh=(), extra_qc_frames=()):
     """自动保存骨架阶段的逐帧表、曲线和原图叠加对比。"""
     qc_dir = os.path.join(out_root, "qc_skeleton")
     os.makedirs(qc_dir, exist_ok=True)
@@ -435,7 +521,11 @@ def save_conversion_qc(out_root, seq, mask_dir, frame_paths, extraction_qc,
     chosen = np.linspace(0, count - 1, min(12, count)).astype(int).tolist() if count else []
     flagged = [i for i, row in enumerate(extraction_qc)
                if row.get("hard_invalid") or row.get("suspicious")][:8]
-    chosen = list(dict.fromkeys(chosen + flagged))
+    index_by_frame = {int(row["frame"]): index
+                      for index, row in enumerate(extraction_qc)}
+    requested = [index_by_frame[frame] for frame in extra_qc_frames
+                 if frame in index_by_frame]
+    chosen = list(dict.fromkeys(chosen + flagged + requested))
     cam0 = os.path.join(seq, "cam0")
     cells = []
     palette = [(0, 220, 0), (255, 80, 0), (220, 0, 220), (0, 180, 255)]
@@ -450,6 +540,17 @@ def save_conversion_qc(out_root, seq, mask_dir, frame_paths, extraction_qc,
         if image is None:
             continue
         if mask is not None:
+            if mask.shape != image.shape[:2]:
+                if len(image_crop_xywh) != 4:
+                    raise ValueError(
+                        "mask与原图尺寸不同，但未提供 image_crop_xywh")
+                x, y, w, h = (int(value) for value in image_crop_xywh)
+                if mask.shape != (h, w):
+                    raise ValueError(
+                        f"crop mask尺寸 {mask.shape[::-1]} != 合同 {(w, h)}")
+                full_mask = np.zeros(image.shape[:2], dtype=mask.dtype)
+                full_mask[y:y + h, x:x + w] = mask
+                mask = full_mask
             tint = image.copy(); tint[mask > 127] = (0, 0, 255)
             cv2.addWeighted(tint, .24, image, .76, 0, dst=image)
         raw_pts = raw_positions[index, :2, :].T.astype(np.int32)
@@ -523,18 +624,32 @@ def build_parser():
                     help="仅旧row_centroid：末端node0垂直切片修正")
     pa.add_argument("--endpoint-fix", action=argparse.BooleanOptionalAction, default=True,
                     help="skeletonize/medial_axis双端端帽中心修正（默认开）")
+    pa.add_argument("--mask-close-k", type=int, default=11,
+                    help="骨架化前闭运算核：填合线缆遮挡形成的窄裂缝；0禁用，默认11")
+    pa.add_argument("--robot-diameter-mm", type=float, default=16.0,
+                    help="软体机器人外径毫米值；与mask主体宽度共同建立近似mm/px尺度")
+    pa.add_argument("--state-frame", choices=("robot_planar_mm", "camera_pixel"),
+                    default="robot_planar_mm",
+                    help="训练状态坐标；默认机器人基座平面毫米坐标，camera_pixel用于历史基线复现")
     pa.add_argument("--skel-dev-thresh", type=float, default=80.0,
                     help="仅--legacy-global-outlier时使用的旧全局中位阈值")
     pa.add_argument("--legacy-global-outlier", action="store_true",
                     help="旧单通道数据兼容：按全序列中位修复；六通道通用流程禁止默认启用")
     pa.add_argument("--repair-suspicious", action="store_true",
                     help="除提取失败外，也插值修复时间QC可疑帧；默认只标记供QC")
+    pa.add_argument("--repair-frames", default="",
+                    help="按真实frame ID显式插值修复人工确认的坏帧，逗号分隔；"
+                         "不等价于--repair-suspicious全局修复")
     pa.add_argument("--val-frac", type=float, default=0.2,
                     help="末尾连续 val 比例(时序连续切分，避免乱序泄漏)")
     pa.add_argument("--out-root", default=None,
                     help="输出根(默认 data/real_seq/<seq名>)")
     pa.add_argument("--planarity-qc", default=None,
                     help="可选 planarity_qc.json；默认读取 <seq>/planarity_qc.json")
+    pa.add_argument("--crop-meta", default=None,
+                    help="crop_capture.py输出的crop_meta.json；骨架自动恢复到源相机像素坐标")
+    pa.add_argument("--qc-frames", default="",
+                    help="额外放入骨架叠加QC的帧号，逗号分隔；用于线缆/遮挡重点帧")
     return pa
 
 
@@ -548,6 +663,26 @@ def main():
     out_root = args.out_root or os.path.abspath(
         os.path.join("data", "real_seq", seq_name))
     meta = load_capture_metadata(seq)
+    crop_meta = {}
+    if args.crop_meta:
+        with open(args.crop_meta, encoding="utf-8") as stream:
+            crop_meta = json.load(stream)
+        required = ("crop_xywh", "source_image_size_wh", "processed_image_size_wh")
+        missing = [key for key in required if key not in crop_meta]
+        if missing:
+            raise ValueError(f"crop_meta缺少字段: {missing}")
+        if crop_meta.get("complete") is False:
+            raise ValueError("crop_meta标记为未完成，不能构建训练数据")
+    crop_xywh = tuple(int(value) for value in crop_meta.get("crop_xywh", ()))
+    extra_qc_frames = tuple(int(value) for value in args.qc_frames.split(",")
+                            if value.strip())
+    explicit_repair_frames = tuple(dict.fromkeys(
+        int(value) for value in args.repair_frames.split(",") if value.strip()))
+    crop_offset = crop_xywh[:2] if crop_xywh else (0, 0)
+    source_image_size = tuple(int(value) for value in
+                              crop_meta.get("source_image_size_wh", ()))
+    processed_image_size = tuple(int(value) for value in
+                                 crop_meta.get("processed_image_size_wh", ()))
     has_source_contract = "channel_source6" in meta
     sources = normalize_channel_sources(
         meta.get("channel_source6"), meta.get("channel_equalities", ()))
@@ -577,20 +712,39 @@ def main():
                    if args.base_anchor else None)
     if base_anchor is not None and len(base_anchor) != 2:
         raise ValueError("--base-anchor 必须是 x,y")
+    if base_anchor is not None and crop_xywh:
+        base_anchor = tuple(value - crop_offset[index]
+                            for index, value in enumerate(base_anchor))
     print(f">>> 读 mask → 2D 骨架: {masks_dir}  method={args.skeleton_method} "
           f"segments={segment_lengths} endpoint_fix={args.endpoint_fix} "
-          f"legacy_tip_fix={args.tip_fix}")
+          f"mask_close_k={args.mask_close_k} legacy_tip_fix={args.tip_fix}")
     positions, fs, extraction_qc = masks_to_positions(
         masks_dir, args.n_points, tip_fix=args.tip_fix, endpoint_fix=args.endpoint_fix,
         skeleton_method=args.skeleton_method, segment_lengths=segment_lengths,
-        base_anchor_xy=base_anchor, return_qc=True)
+        base_anchor_xy=base_anchor, crop_offset_xy=crop_offset,
+        mask_close_kernel=args.mask_close_k, return_qc=True)
     T = positions.shape[0]
     valid = int((positions[:, :2, :].sum(axis=(1, 2)) > 0).sum())   # 非空骨架帧
     print(f"    {T} 帧, 非空骨架 {valid} ({valid/T*100:.1f}%)")
 
     raw_positions = positions.copy()
     hard_invalid, suspicious = temporal_skeleton_qc(positions, extraction_qc)
-    repair = hard_invalid | (suspicious if args.repair_suspicious else False)
+    explicit_repair = frame_ids_to_mask(
+        extraction_qc, explicit_repair_frames)
+    repair = hard_invalid | explicit_repair
+    if args.repair_suspicious:
+        repair |= suspicious
+    for index, item in enumerate(extraction_qc):
+        item["explicit_repair"] = bool(explicit_repair[index])
+        item["interpolated"] = bool(repair[index])
+        reasons = []
+        if hard_invalid[index]:
+            reasons.append("hard_invalid")
+        if explicit_repair[index]:
+            reasons.append("explicit_frame")
+        if args.repair_suspicious and suspicious[index]:
+            reasons.append("suspicious_opt_in")
+        item["repair_reason"] = "+".join(reasons)
     positions = interpolate_flagged_frames(positions, repair)
     if args.legacy_global_outlier:
         positions, n_legacy, legacy_bad = clean_outlier_skeletons(
@@ -598,21 +752,53 @@ def main():
         repair |= legacy_bad
         print(f"    [legacy] 全局中位修复 {n_legacy} 帧；仅适用于旧单通道数据")
     print(f"    提取失败自动插值: {int(hard_invalid.sum())} 帧；"
+          f"人工指定插值: {int(explicit_repair.sum())} 帧；"
           f"时间QC可疑: {int(suspicious.sum())} 帧"
           f"（{'已插值' if args.repair_suspicious else '仅标记'}）")
     outlier_path = os.path.join(out_root, "skeleton_outlier_frames.txt")
     os.makedirs(out_root, exist_ok=True)
     with open(outlier_path, "w") as f:
+        f.write("# 以下均为真实frame ID，不是数组下标\n")
         f.write("# hard_invalid（自动插值）\n")
-        f.write(" ".join(str(int(i)) for i in np.where(hard_invalid)[0]) + "\n")
+        f.write(" ".join(str(int(extraction_qc[i]["frame"]))
+                         for i in np.where(hard_invalid)[0]) + "\n")
+        f.write("# explicit_repair（人工确认后由--repair-frames插值）\n")
+        f.write(" ".join(str(int(extraction_qc[i]["frame"]))
+                         for i in np.where(explicit_repair)[0]) + "\n")
         f.write("# suspicious（默认仅标记；--repair-suspicious才插值）\n")
-        f.write(" ".join(str(int(i)) for i in np.where(suspicious)[0]) + "\n")
+        f.write(" ".join(str(int(extraction_qc[i]["frame"]))
+                         for i in np.where(suspicious)[0]) + "\n")
 
     layout = next((item for item in extraction_qc if item.get("segment_intervals")), {})
     segment_intervals = tuple(int(v) for v in layout.get("segment_intervals", ()))
     joint_nodes = tuple(int(v) for v in layout.get("joint_node_indices", ()))
+    robot_diameter_px, diameter_source = estimate_diameter_px(extraction_qc)
+    mm_per_px = args.robot_diameter_mm / robot_diameter_px
+    print(f"    直径尺度: {args.robot_diameter_mm:.3f}mm / {robot_diameter_px:.3f}px "
+          f"= {mm_per_px:.6f}mm/px ({diameter_source})")
+
+    positions_camera_px = positions.copy()
+    frame_transform = None
+    if args.state_frame == "robot_planar_mm":
+        frame_transform = estimate_skeleton_frame(
+            positions_camera_px, robot_diameter_mm=args.robot_diameter_mm,
+            robot_diameter_px=robot_diameter_px,
+            source="sequence_median_base_tangent_and_body_width")
+        positions = transform_positions_to_model(positions_camera_px, frame_transform)
+        state_coordinate_frame = ROBOT_PLANAR_FRAME
+        state_length_unit = "mm"
+        print("    模型状态: robot_planar_mm_v1 "
+              f"origin_px={frame_transform.origin_camera_px} "
+              f"axis={frame_transform.axial_axis_camera} "
+              f"scale={frame_transform.pixels_per_mm:.6f}px/mm")
+    else:
+        state_coordinate_frame = CAMERA_PIXEL_FRAME
+        state_length_unit = "px"
+        print("    模型状态: camera_pixel_v1（历史像素基线）")
     save_conversion_qc(out_root, seq, masks_dir, fs, extraction_qc,
-                       raw_positions, positions, joint_nodes)
+                       raw_positions, positions_camera_px, joint_nodes,
+                       image_crop_xywh=crop_xywh,
+                       extra_qc_frames=extra_qc_frames)
 
     print(f">>> 读 actions: {actions_csv} 原始六维；模型动作视图 {channels}")
     raw_actions6 = load_actions(actions_csv, range(6))
@@ -644,6 +830,8 @@ def main():
     n_val = int(T * args.val_frac)
     n_train = T - n_val
     pos_tr, pos_va = positions[:n_train], positions[n_train:]
+    camera_tr = positions_camera_px[:n_train]
+    camera_va = positions_camera_px[n_train:]
     act_tr, act_va = actions[:n_train], actions[n_train:]
     print(f">>> 切分: train {n_train} 帧 / val {n_val} 帧  → {out_root}")
     save_npz(os.path.join(out_root, "train", f"{seq_name}_train.npz"), pos_tr, act_tr,
@@ -656,7 +844,19 @@ def main():
              action_expansion=expansion,
              skeleton_method=args.skeleton_method,
              segment_lengths=segment_lengths, segment_intervals=segment_intervals,
-             joint_node_indices=joint_nodes)
+             joint_node_indices=joint_nodes,
+             image_crop_xywh=crop_xywh,
+             source_image_size_wh=source_image_size,
+             processed_image_size_wh=processed_image_size,
+             mask_close_kernel=args.mask_close_k,
+             robot_diameter_mm=args.robot_diameter_mm,
+             robot_diameter_px=robot_diameter_px,
+             positions_camera_px=camera_tr,
+             state_coordinate_frame=state_coordinate_frame,
+             state_length_unit=state_length_unit,
+             frame_transform=frame_transform,
+             raw_action_scale6_kpa=maxes,
+             action_scale_kpa=maxes[np.asarray(channels, dtype=np.int64)])
     save_npz(os.path.join(out_root, "val", f"{seq_name}_val.npz"), pos_va, act_va,
              n_points=args.n_points, tip_fix=args.tip_fix,
              endpoint_fix=args.endpoint_fix,
@@ -667,7 +867,19 @@ def main():
              action_expansion=expansion,
              skeleton_method=args.skeleton_method,
              segment_lengths=segment_lengths, segment_intervals=segment_intervals,
-             joint_node_indices=joint_nodes)
+             joint_node_indices=joint_nodes,
+             image_crop_xywh=crop_xywh,
+             source_image_size_wh=source_image_size,
+             processed_image_size_wh=processed_image_size,
+             mask_close_kernel=args.mask_close_k,
+             robot_diameter_mm=args.robot_diameter_mm,
+             robot_diameter_px=robot_diameter_px,
+             positions_camera_px=camera_va,
+             state_coordinate_frame=state_coordinate_frame,
+             state_length_unit=state_length_unit,
+             frame_transform=frame_transform,
+             raw_action_scale6_kpa=maxes,
+             action_scale_kpa=maxes[np.asarray(channels, dtype=np.int64)])
 
     print(f"\n>>> 完成。训练: --data_dir {os.path.join(out_root,'train')}")
     print(f"           验证: {os.path.join(out_root,'val')}")
