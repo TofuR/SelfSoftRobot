@@ -26,7 +26,7 @@ from tqdm import tqdm
 from src.training.phase_strategy import PhaseStrategy
 from src.rendering.view_strategy import ViewStrategy
 from src.training.dataset_factory import create_dataset, get_collate_fn
-from src.utils.experiment import create_experiment
+from src.utils.experiment import create_experiment, save_config
 from src.evaluation.shape_evaluation import evaluate_shape_during_training, evaluate_skeleton_during_training, evaluate_transition_during_training
 from config.params import load_config
 from src.evaluation.surface_sampling import sample_gt_surface, model_output_to_pointcloud
@@ -54,6 +54,12 @@ class UnifiedTrainer:
         """从 config 中获取 loss 权重。"""
         lw = self.config.get("loss_weights", {})
         return lw.get(loss_name, lw.get(f"w_{loss_name}", default))
+
+    @staticmethod
+    def _sum_optimization_losses(losses):
+        """只汇总真正参与反向传播的loss，排除total和*_monitor诊断量。"""
+        return sum(value for name, value in losses.items()
+                   if name != "total" and not name.endswith("_monitor"))
 
     def _effective_tf_ratio(self, phase_spec):
         """计算当前 epoch 的有效 teacher forcing 比例（支持 epoch 退火）。
@@ -119,7 +125,7 @@ class UnifiedTrainer:
             w = self._get_loss_weight(name, 1.0)
             losses[name] = val * w
 
-        losses["total"] = sum(v for k, v in losses.items() if not k.endswith("_monitor"))
+        losses["total"] = self._sum_optimization_losses(losses)
         return losses
 
     def _compute_sequence_losses(self, batch, phase_spec):
@@ -201,7 +207,7 @@ class UnifiedTrainer:
         losses["z_norm_monitor"] = torch.stack(z_norms).mean()
         losses["tf_ratio_monitor"] = torch.tensor(float(tf_ratio))
 
-        losses["total"] = sum(v for k, v in losses.items() if not k.endswith("_monitor"))
+        losses["total"] = self._sum_optimization_losses(losses)
         return losses
 
     def _build_exp_config(self, data_dirs, n_epochs_per_phase):
@@ -250,13 +256,18 @@ class UnifiedTrainer:
                 "optimizer": "Adam",
                 "scheduler": "ReduceLROnPlateau",
                 "scheduler_patience": opt_cfg["scheduler_patience"],
+                "seed": opt_cfg.get("seed"),
             },
             "loss_weights": self.config.get("loss_weights", {}),
+            "checkpoint_interval": self.config.get("logging", {}).get(
+                "checkpoint_interval", 5),
             "data_dirs": {k: str(v) for k, v in data_dirs.items()},
             "view_strategy": type(self.views).__name__ if self.views else None,
         }
         if self.config.get("action_view"):
             config["action_view"] = self.config["action_view"]
+        if self.config.get("state_view"):
+            config["state_view"] = self.config["state_view"]
 
         # 模型特有参数
         for attr in ('skeleton_mode', 'rod_radius', 'd_filter', 'n_freqs',
@@ -275,7 +286,8 @@ class UnifiedTrainer:
             if _npzs:
                 try:
                     _d = np.load(_npzs[0], allow_pickle=False)
-                    for _k in ('n_points', 'tip_fix'):
+                    for _k in ('n_points', 'tip_fix', 'state_coordinate_frame',
+                               'state_length_unit'):
                         if _k in _d:
                             _v = _d[_k]
                             data_prep[_k] = _v.item() if hasattr(_v, 'item') else _v
@@ -352,6 +364,31 @@ class UnifiedTrainer:
                 module.load_state_dict(prev_data[mod_name])
                 print(f"    Loaded {mod_name} from phase '{prev_phase_name}'")
 
+    def _save_periodic_checkpoint(self, phase_dir, phase_name, epoch,
+                                  optimizer, scheduler, best_loss):
+        """保存推理兼容权重，以及含优化器和调度器的恢复状态。"""
+        model_dir = os.path.join(phase_dir, "model")
+        archive_dir = os.path.join(phase_dir, "checkpoints")
+        os.makedirs(model_dir, exist_ok=True)
+        os.makedirs(archive_dir, exist_ok=True)
+        state_dict = self.model.state_dict()
+        current_path = os.path.join(model_dir, "current_model.pt")
+        archive_path = os.path.join(
+            archive_dir, f"model_epoch_{int(epoch):04d}.pt")
+        training_state_path = os.path.join(
+            archive_dir, "training_state_latest.pt")
+        torch.save(state_dict, current_path)
+        torch.save(state_dict, archive_path)
+        torch.save({
+            "phase": phase_name,
+            "epoch": int(epoch),
+            "best_loss": float(best_loss),
+            "model_state_dict": state_dict,
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+        }, training_state_path)
+        return current_path, archive_path, training_state_path
+
     def _create_loader(self, data_dir, phase_spec):
         """根据 phase_spec 创建 DataLoader。"""
         ds = create_dataset(
@@ -393,10 +430,17 @@ class UnifiedTrainer:
 
         opt_cfg = self.config["optimization"]
 
+        exp_config = self._build_exp_config(data_dirs, n_epochs_per_phase)
         if exp_dir is None:
-            exp_config = self._build_exp_config(data_dirs, n_epochs_per_phase)
             exp_dir = create_experiment(f"train_log/{self.model_tag}", exp_config)
-            self._write_model_card(exp_dir, exp_config)
+        else:
+            exp_dir = os.path.normpath(exp_dir)
+            os.makedirs(exp_dir, exist_ok=True)
+            config_path = os.path.join(exp_dir, "config.json")
+            if not os.path.isfile(config_path):
+                save_config(exp_dir, exp_config)
+            print(f"Experiment: {exp_dir}")
+        self._write_model_card(exp_dir, exp_config)
 
         saved_modules_by_phase = {}
 
@@ -472,7 +516,7 @@ class UnifiedTrainer:
                         for key in ("reproj", "consist"):
                             if key in losses:
                                 losses[key] = losses[key] * self._warmup_factor
-                        losses["total"] = sum(v for k, v in losses.items() if k != "total")
+                        losses["total"] = self._sum_optimization_losses(losses)
 
                     optimizer.zero_grad()
                     losses["total"].backward()
@@ -548,6 +592,16 @@ class UnifiedTrainer:
                     scheduler.step(avg)
                 else:
                     scheduler.step()
+
+                checkpoint_interval = int(
+                    self.config.get("logging", {}).get("checkpoint_interval", 5))
+                if checkpoint_interval > 0 and (
+                        epoch % checkpoint_interval == 0 or epoch == n_epochs):
+                    current_path, archive_path, _ = self._save_periodic_checkpoint(
+                        phase_dir, phase_spec.name, epoch, optimizer, scheduler,
+                        best_val)
+                    print(f"    Checkpoint: current={current_path}, "
+                          f"archive={archive_path}")
 
                 # 形状评估（每 eval_interval epoch）
                 eval_interval = self.config.get("evaluation", {}).get("eval_interval", 0)

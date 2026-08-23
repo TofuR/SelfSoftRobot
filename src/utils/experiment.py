@@ -11,37 +11,53 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
 
-def create_experiment(base_dir, config=None):
-    """创建带自动编号的实验目录。
+def create_experiment(base_dir, config=None, *, prefix="exp", now=None,
+                      announce=True):
+    """创建带日期和当日递增序号的实验目录。
 
-    命名规则: exp_{YYYYMMDD}_{idx}，idx 从 0 开始，同一天自动递增。
+    命名规则: ``{prefix}_{YYYYMMDD}_{idx:03d}``。
+    同一 ``base_dir`` 和日期下的序号连续递增；目录创建使用原子 ``mkdir``，
+    并发启动时会自动选择下一个序号。
 
     Args:
         base_dir: 模型级日志目录，如 "train_log/train_mstnf"。
         config: 超参数字典，保存为 config.json。
+        prefix: 目录前缀。通用训练使用 ``exp``，真实流水线试次使用 ``trial``。
+        now: 可选 datetime，供可复现测试注入固定时间。
+        announce: 是否打印创建出的目录。
 
     Returns:
         exp_dir: 实验目录路径。
     """
-    date_str = datetime.now().strftime("%Y%m%d")
-    prefix = f"exp_{date_str}_"
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", prefix):
+        raise ValueError(f"非法实验目录前缀: {prefix!r}")
+    current = now or datetime.now()
+    date_str = current.strftime("%Y%m%d")
+    escaped = re.escape(prefix)
+    name_pattern = re.compile(rf"^{escaped}_{date_str}_(\d+)$")
 
-    # 扫描已有实验，找最大 idx
+    os.makedirs(base_dir, exist_ok=True)
     max_idx = -1
-    if os.path.exists(base_dir):
-        for d in os.listdir(base_dir):
-            m = re.match(r"exp_\d{8}_(\d+)", d)
-            if m:
-                max_idx = max(max_idx, int(m.group(1)))
+    for name in os.listdir(base_dir):
+        match = name_pattern.match(name)
+        if match:
+            max_idx = max(max_idx, int(match.group(1)))
 
-    exp_name = f"{prefix}{max_idx + 1}"
-    exp_dir = os.path.join(base_dir, exp_name)
-    os.makedirs(exp_dir, exist_ok=True)
+    idx = max_idx + 1
+    while True:
+        exp_name = f"{prefix}_{date_str}_{idx:03d}"
+        exp_dir = os.path.join(base_dir, exp_name)
+        try:
+            os.mkdir(exp_dir)
+            break
+        except FileExistsError:
+            idx += 1
 
     if config is not None:
         save_config(exp_dir, config)
 
-    print(f"Experiment: {exp_dir}")
+    if announce:
+        print(f"Experiment: {exp_dir}")
     return exp_dir
 
 

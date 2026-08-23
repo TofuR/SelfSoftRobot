@@ -43,7 +43,8 @@
 
     "logging": {
         "display_rate": 500,
-        "save_rate": 2000
+        "save_rate": 2000,
+        "checkpoint_interval": 5
     },
 
     "canonical": {
