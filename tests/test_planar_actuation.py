@@ -233,6 +233,35 @@ class CaptureEqualityTest(unittest.TestCase):
             window.close()
             _ensure_app().processEvents()
 
+    def test_gui_immediate_send_reaches_target_without_slew_delay(self):
+        main_capture = _capture_module("main_capture")
+        CaptureWindow = main_capture.CaptureWindow
+
+        class TestWindow(CaptureWindow):
+            def _load_config(self):
+                return None
+
+            def _save_config(self):
+                return None
+
+        window = TestWindow(mock_cam=True, mock_valve=True, mock_ndi=True,
+                            ndi_count=1)
+        window.show()
+        _ensure_app().processEvents()
+        try:
+            # configure_safety() 会重置限速计时；立即下发必须显式绕过限速，
+            # 否则同一调用栈内 dt≈0，命令看起来完全没有变化。
+            window._target_sb[0].setValue(80.0)
+            window._rise_sb[0].setValue(10.0)
+            window._on_send()
+            _ensure_app().processEvents()
+            self.assertEqual(window.controller.last_command,
+                             [80.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+            self.assertIn("目标已立即下发（不限速）", window.log_box.toPlainText())
+        finally:
+            window.close()
+            _ensure_app().processEvents()
+
 
 class PreprocessingEqualityTest(unittest.TestCase):
     def test_six_dimensional_equalities_are_validated_before_normalization(self):
