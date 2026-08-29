@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "description": "单序列真实图像前处理配置",
+  "seq": "real_capture/data/raw/seq_YYYYMMDD_HHMMSS",
+  "camera": "cam0",
+  "roi": [220, 68, 300, 300],
+  "gpus": [0],
+  "chunk_size": 200,
+  "n_points": 15,
+  "state_frame": "robot_planar_mm",
+  "segment_lengths": [1, 1],
+  "base_anchor": [370, 110],
+  "mask_close_k": 11,
+  "max_interpolated_fraction": 0.05,
+  "qc_frames": [],
+  "repair_frames": [],
+  "anchor": {
+    "n_bg": 500,
+    "background_image": null,
+    "base_side": "top",
+    "base_trim_width_ratio": 1.5,
+    "base_trim_stable_span": 5,
+    "sat": 100,
+    "val": 120,
+    "diff": 25,
+    "dil": 35,
+    "open_k": 5,
+    "close_k": 15,
+    "min_area_frac": 0.003,
+    "min_h_frac": 0.15
+  }
+}

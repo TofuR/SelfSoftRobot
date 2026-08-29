@@ -21,8 +21,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtWidgets import QApplication, QDoubleSpinBox, QSplitter, QTabWidget
 
-from real_validation.contracts.models import Scene, ScenePrimitive
-from real_validation.core.session import ExperimentSession
+from real_validation.contracts.models import ActionPlan, Anchor, Scene, ScenePrimitive
+from real_validation.core.session import ExperimentSession, SessionState
 from real_validation.widgets.camera_view import CameraViewWidget
 from real_validation.widgets.primitive_items import scene_primitive_item
 from real_validation.widgets.scene_editor import SceneEditorPanel
@@ -81,6 +81,22 @@ class PrimitivePenRegressionTest(unittest.TestCase):
         scene = Scene("s", (ScenePrimitive("target_skeleton", "model",
                                            {"nodes": [[0, 0], [1, 1]]}),))
         self.assertEqual(len(scene.primitives), 1)
+
+
+class CameraRoiInteractionTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        _ensure_app()
+
+    def test_roi_selection_uses_source_camera_pixels(self):
+        view = CameraViewWidget()
+        try:
+            view.set_frame(np.zeros((480, 640, 3), dtype=np.uint8))
+            view.begin_roi_selection((120, 40, 320, 320))
+            self.assertEqual(view.selected_roi(), (120, 40, 320, 320))
+            self.assertEqual(view.confirm_roi(), (120, 40, 320, 320))
+        finally:
+            view.close()
 
 
 class SceneSummaryRegressionTest(unittest.TestCase):
@@ -163,7 +179,8 @@ class SceneSummaryRegressionTest(unittest.TestCase):
             def click(px, py, double=False):
                 view._on_click(_FakeEv(vb.mapViewToScene(QPointF(px, py)), double))
 
-            window._set_tool("add_target_skeleton")
+            view.set_read_only(False)
+            view.set_tool("add_target_skeleton")
             click(100, 100)
             click(150, 120)
             click(180, 150)
@@ -209,7 +226,8 @@ class SceneSummaryRegressionTest(unittest.TestCase):
         window.session = ExperimentSession.create(
             tempfile.mkdtemp(prefix="gui_finish_skeleton_"))
         try:
-            window._set_tool("add_target_skeleton")
+            window.main_display.set_read_only(False)
+            window.main_display.set_tool("add_target_skeleton")
             window.main_display._skeleton_points = [(0.0, 0.0), (10.0, 10.0)]
             window._on_skeleton_draft_changed(2)
             self.assertTrue(window.finish_skeleton_btn.isEnabled())
@@ -217,6 +235,68 @@ class SceneSummaryRegressionTest(unittest.TestCase):
             self.assertEqual(len(window.session.scene.primitives), 1)
             self.assertEqual(window.session.scene.primitives[0].kind, "target_skeleton")
             self.assertEqual(window.scene_editor.list.count(), 1)
+        finally:
+            window.close()
+
+
+class PostExecutionObservationTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        _ensure_app()
+
+    def test_result_separates_control_residual_from_forward_error(self):
+        import json
+        import torch
+        from types import SimpleNamespace
+        from real_validation.gui.main_window import ValidationWindow
+
+        window = ValidationWindow()
+        window.session = ExperimentSession.create(
+            tempfile.mkdtemp(prefix="gui_post_observe_"))
+        try:
+            predicted = np.asarray([[[0.0, 0.0], [0.0, 1.0], [2.0, 2.0]]],
+                                   dtype=np.float32)
+            np.savez(window.session.run_dir / "predicted_states.npz",
+                     states_model=predicted)
+            scene = Scene("control", (ScenePrimitive(
+                "target_point", "model", {"xy": [1.0, 2.0], "node": 2}),))
+            plan = ActionPlan(
+                actions6=((0.0,) * 6,), step_interval_s=0.1,
+                model_action_dim=1, channel_map=(0,), model_hash="model",
+                scene_digest=scene.digest, anchor_id="start",
+                safety_digest="safety",
+                predicted_states_path="predicted_states.npz")
+            model = SimpleNamespace(
+                pc_center=torch.zeros(3), pc_scale=torch.ones(3))
+            window.runtime = SimpleNamespace(
+                model=model,
+                descriptor=SimpleNamespace(
+                    n_nodes=3,
+                    state_length_unit="mm",
+                    state_coordinate_frame="robot_planar_mm_v1"),
+                clear=lambda: None)
+            post_anchor = Anchor(
+                state=((0.0, 0.0), (0.0, 1.0), (1.0, 2.0)),
+                action_history=((0.0,),),
+                quality={"kind": "camera_live", "verdict": "ok"})
+            quality = SimpleNamespace(verdict="ok", reasons=(), flags={})
+            skeleton = np.asarray(post_anchor.state, dtype=np.float32)
+            window._build_camera_anchor = lambda: (post_anchor, quality, skeleton)
+            window._save_post_observation_overlay = lambda *args: None
+            window._save_online_observation_artifacts = lambda *args: None
+            window.session.state = SessionState.COMPLETED
+            window._post_evaluation_context = {"plan": plan, "scene": scene}
+
+            window._observe_after_execution()
+
+            with (window.session.run_dir / "post_control_metrics.json").open() as stream:
+                result = json.load(stream)
+            self.assertEqual(
+                result["observed_control_result"]["terminal_target_distance"], 0.0)
+            self.assertGreater(
+                result["forward_model_prediction_error"]["terminal_all_node_mean"], 0.0)
+            self.assertIn("观测→目标残差", window.results.toPlainText())
+            self.assertIn("前向模型预测→执行后观测", window.results.toPlainText())
         finally:
             window.close()
 
@@ -410,6 +490,15 @@ class CompactLayoutTest(unittest.TestCase):
         w = ValidationWindow()
         try:
             self.assertLessEqual(w.plan_summary.maximumHeight(), 90)
+        finally:
+            w.close()
+
+    def test_plan_page_exposes_distance_based_horizon(self):
+        from real_validation.gui.main_window import ValidationWindow
+        w = ValidationWindow()
+        try:
+            self.assertEqual(w.plan_k.value(), 40)
+            self.assertEqual(w.plan_auto_k.text(), "按目标距离自动K")
         finally:
             w.close()
 

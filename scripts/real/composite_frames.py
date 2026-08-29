@@ -83,7 +83,7 @@ def main(argv=None):
                     help='输出目录（缺省 derived/<seq>/overlay）')
     pa.add_argument('--n-points', type=int, default=31, help='骨架节点数')
     pa.add_argument('--tip-fix', action=argparse.BooleanOptionalAction, default=True,
-                    help='末端 node0 垂直切片修正(修弯管 cap 角落偏移, 与训练 npz 同源; --no-tip-fix 关闭)')
+                    help='末端 nodeN-1 垂直切片修正(与训练 npz 同源)')
     pa.add_argument('--mask-color', default='0,0,255', help='mask 覆盖色 BGR（默认红）')
     pa.add_argument('--mask-alpha', type=float, default=0.35, help='mask 透明度')
     pa.add_argument('--raw-color', default='255,255,0', help='原始骨架色 BGR（默认青）')

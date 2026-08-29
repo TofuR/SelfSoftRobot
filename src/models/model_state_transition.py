@@ -8,7 +8,7 @@
   v=s_{t-1}-s_{t-2} ┤                                                       │    │
                     └→ StateEncoder ──→ state_seed (warm start 的 GRU 种子)  │    │
                                                                               ↓    ↓
-            cond + z_pos_embed + z_proj 注入 → GRU(z₀→z_K) → 每节点 Δ_raw
+            cond + z_pos_embed + z_proj 注入 → GRU(base→tip) → 每节点 Δ_raw
                                                                               │
             s_t = s_{t-1} + delta_scale · tanh(Δ_raw)    （预测增量而非绝对坐标）
 
@@ -100,6 +100,12 @@ class StateTransitionSpatialModel(nn.Module, TemporalMixin):
         self.hidden_dim = hidden_dim
         self.encoder_type = encoder_type
         self.z_dim = z_dim
+        # 全管线唯一节点合同：固定端 node0 到运动末端 nodeN-1。
+        # 空间 GRU 直接按这一物理因果方向递归。
+        self.node_order = "base_to_tip"
+        self.spatial_propagation_direction = "base_to_tip"
+        self.gl_kernel_alignment = "current_at_window_end"
+        self.model_contract_version = 2
 
         # 点云归一化参数（由 set_normalization 设置）
         self.register_buffer('pc_center', torch.zeros(1, 1, 3))
@@ -154,7 +160,7 @@ class StateTransitionSpatialModel(nn.Module, TemporalMixin):
             nn.Linear(hidden_dim, hidden_dim),
         )
 
-        # 沿 Z 轴的空间状态传播（悬臂梁因果性）。
+        # 沿 base→tip 的空间状态传播（悬臂梁因果性）。
         # S1：用 nn.GRU 取代 GRUCell 逐节点循环——N 步递归融合为单次 cuDNN 核，
         # 行为等价（同样门控递归），大幅减少核启动开销。
         # 注意：state_dict 键由 GRUCell 的 weight_ih/weight_hh/bias_ih/bias_hh
@@ -192,7 +198,7 @@ class StateTransitionSpatialModel(nn.Module, TemporalMixin):
         self.action_norm_factor = torch.tensor(float(action_norm_factor))
 
     def _get_z_positions(self, device):
-        """获取归一化后的 z 位置序列 [-1, 1]（沿中心线，非潜变量 z）。"""
+        """获取 base→tip 的归一化轴向位置 [-1, 1]。"""
         return torch.linspace(-1, 1, self.n_nodes, device=device)
 
     def init_z_from_action(self, action_window):
@@ -261,11 +267,12 @@ class StateTransitionSpatialModel(nn.Module, TemporalMixin):
                 [prev_skeleton.reshape(B, -1), v.reshape(B, -1)], dim=-1)  # (B, 6N)
             h = self.state_encoder(state_input)  # (B, hidden_dim)
 
-        # ── 沿 Z 轴生成各节点增量 Δ（向量化：单次 nn.GRU + 单次 z_embed）──
+        # ── 沿 base→tip 生成各节点增量 Δ（单次 nn.GRU）──
         # S2：节点位置嵌入仅依赖 ζ（固定），把原 N 次逐节点调用合并为 1 次（z_embed 仍可训练）
         z_positions = self._get_z_positions(device)                      # (N,)
         z_emb_all = self.z_embed(z_positions.view(self.n_nodes, 1))      # (N, H)
-        # S1：GRU 输入序列 (B, N, H)，每个节点 = cond + 该节点位置嵌入 + z 投影
+        # 节点合同本身就是 base→tip，GRU 输入与输出无需翻转。
+        # 每个节点输入 = cond + 该节点位置嵌入 + z 投影。
         gru_seq = (cond + z_proj).unsqueeze(1) + z_emb_all.unsqueeze(0)  # (B, N, H)
         out, _ = self.gru(gru_seq, h.unsqueeze(0))                       # out (B, N, H)；h(种子)→h0(1,B,H)
         # clamp delta_scale 到 delta_scale_max(默认 inf 不影响 gt；open_loop 设 1.0 强制收缩)

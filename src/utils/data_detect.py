@@ -9,7 +9,7 @@ import os
 import numpy as np
 
 
-def detect_action_dim(data_dir):
+def detect_action_dim(data_dir, action_channels=None):
     """从数据目录的第一个 npz 文件探测 action 维度。
 
     Args:
@@ -22,13 +22,8 @@ def detect_action_dim(data_dir):
         FileNotFoundError: 目录中没有 npz 文件。
         ValueError: npz 中没有 'actions' 字段。
     """
-    npz_files = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
-    if not npz_files:
-        raise FileNotFoundError(f"No data in {data_dir}")
-    sample = np.load(npz_files[0])
-    if 'actions' in sample:
-        return sample['actions'].shape[-1]
-    raise ValueError(f"No 'actions' field in {npz_files[0]}")
+    from src.data.action_view import resolve_action_contract
+    return resolve_action_contract(data_dir, action_channels).model_action_dim
 
 
 def detect_n_nodes(data_dir):

@@ -67,6 +67,16 @@ class HardwareSessionTest(unittest.TestCase):
             session.require_valves_ready((2,))
         session.shutdown()
 
+    def test_last_applied_pressure_tracks_controller_ack_source(self):
+        session = HardwareSession()
+        session.apply_profile(HardwareProfile.all_mock())
+        controller = session.prepare_valves()
+        session.connect_prepared_valves((1, 2))
+        controller.set_pressures((1, 2, 3, 4, 5, 6), bypass_rate=True)
+        self.assertEqual(session.last_applied6, (1.0, 2.0, 3.0, 4.0, 5.0, 6.0))
+        self.assertEqual(session.snapshot()["last_applied6"], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        session.shutdown()
+
     def test_disabled_valve_never_falls_back_mock(self):
         session = HardwareSession()
         session.apply_profile(HardwareProfile(valve_backend="disabled"))

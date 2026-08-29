@@ -18,7 +18,13 @@ import torch
 
 from ..runtime import plan_rollout
 
-from ..contracts.models import Anchor, ModelDescriptor, SafetyPolicy, Scene
+from ..contracts.models import (
+    CHANNEL_EQUALITY_TOLERANCE,
+    Anchor,
+    ModelDescriptor,
+    SafetyPolicy,
+    Scene,
+)
 from .planner_service import build_plan
 from .units import kPa_to_model, model_to_kPa
 
@@ -100,7 +106,9 @@ def _target(scene: Scene, model, device, expected_nodes: int | None = None):
             target_space = "model_normalized"
         else:
             raise ValueError(f"目标坐标 {item.frame_id} 尚未转换到 model/model_normalized")
-        node = int(item.geometry.get("node", 0))
+        if expected_nodes is None:
+            raise ValueError("解析点目标需要模型节点数以确定默认末端节点")
+        node = int(item.geometry.get("node", int(expected_nodes) - 1))
         return {"kind": item.kind, "point": point, "radius": radius,
                 "node": node, "item": item, "space": target_space}
     if item.kind == "target_skeleton":
@@ -112,7 +120,8 @@ def _target(scene: Scene, model, device, expected_nodes: int | None = None):
         weights = item.geometry.get("weights")
         if weights is not None and len(weights) != len(nodes):
             raise ValueError("目标骨架 weights 长度必须与节点数一致")
-        tolerance = float(item.geometry.get("tolerance_px", 0.0))
+        tolerance = float(item.geometry.get(
+            "tolerance", item.geometry.get("tolerance_px", 0.0)))
         if item.frame_id != "model":
             raise ValueError("target_skeleton 必须已在 model 坐标")
         return {"kind": "target_skeleton", "nodes": torch.tensor(
@@ -190,11 +199,10 @@ def _skeleton_dists(predictions, target_nodes, scale, center):
 
 
 def _resolve_k(config, descriptor, model, target, state, center, scale):
-    """固定 K 或 auto_k(step_budget 从学到的 delta_scale 现算)→ (k_effective, gap_px)。"""
+    """固定K或基于实测形态位移表的auto_k。"""
     if config.auto_k:
         from .auto_k import (gap_px_point, gap_px_skeleton,
-                             select_k_by_gap, step_budget_px)
-        budget = step_budget_px(model)
+                             select_k_by_displacement)
         if target["kind"] == "target_skeleton":
             now_px = (state.squeeze(0).detach().cpu().numpy()
                       * scale.detach().cpu().numpy() + center.detach().cpu().numpy())
@@ -205,8 +213,14 @@ def _resolve_k(config, descriptor, model, target, state, center, scale):
                       * scale[:2].cpu().numpy() + center[:2].cpu().numpy())
             gap = gap_px_point(tip_px, target["point"].cpu().numpy(),
                                target["radius"])
-        k = select_k_by_gap(gap, budget, config.k_min, config.k_max)
-        return min(k, descriptor.k_safe or k), gap
+        displacement = (descriptor.planning_displacement_p95 or
+                        descriptor.planning_displacement_px_p95)
+        if not displacement:
+            raise ValueError("auto_k需要部署合同中的planning_displacement_p95")
+        k_max = min(config.k_max, descriptor.k_safe or config.k_max)
+        k = select_k_by_displacement(
+            gap, displacement, config.k_min, k_max)
+        return k, gap
     k = config.horizon
     if descriptor.k_safe is not None and k > descriptor.k_safe:
         raise ValueError(f"K={k} 超过 K_safe={descriptor.k_safe}")
@@ -234,6 +248,9 @@ class OpenLoopShootingPlanner:
                 f"部署主线要求 OpenLoopTransitionModel，当前为 {descriptor.model_class}")
         if len(channel_map) != descriptor.action_dim:
             raise ValueError("channel_map 长度必须等于模型 action_dim")
+        channel_map = tuple(int(channel) for channel in channel_map)
+        if descriptor.channel_map is not None and channel_map != descriptor.channel_map:
+            raise ValueError("planner channel_map 与 deploy manifest 不一致")
         if descriptor.action_scale_kpa is None:
             raise ValueError("checkpoint 缺少 action_scale_kpa(deploy_manifest 缺失);"
                              "单位链不可知,阻断规划(fail-closed)")
@@ -262,6 +279,7 @@ class OpenLoopShootingPlanner:
         if len(history) < descriptor.history_steps:
             raise ValueError("anchor action history 不足 H 步")
         history = history[-descriptor.history_steps:]
+        equalities = descriptor.channel_equalities
         if anchor.action_units == "kpa":
             # 兼容旧标注:真实 kPa → 训练域 [0,1] → /norm_factor
             history = kPa_to_model(history, action_scale_kpa=action_scale_kpa,
@@ -269,9 +287,18 @@ class OpenLoopShootingPlanner:
         # model_normalized(npz 来源,offline_anchor 新标注)直接用:已是模型单位
 
         # ---- 变长 K(B17):step_budget 从学到的 delta_scale 现算 ----
-        k_effective, auto_k_gap_px = _resolve_k(config, descriptor, model, target,
-                                                state, center, scale)
+        k_effective, auto_k_gap = _resolve_k(config, descriptor, model, target,
+                                             state, center, scale)
+        state_unit = descriptor.state_length_unit
+        residual_key = f"predicted_terminal_target_residual_{state_unit}"
 
+        for leader, follower in equalities:
+            for field_name in ("pressure_min6", "pressure_max6", "rise_rate6",
+                               "fall_rate6", "initial_action6"):
+                values = getattr(safety, field_name)
+                if abs(values[leader] - values[follower]) > CHANNEL_EQUALITY_TOLERANCE:
+                    raise ValueError(
+                        f"等值通道 ch{leader}/ch{follower} 的 {field_name} 必须相同")
         mapped = torch.tensor(channel_map, dtype=torch.long, device=device)
         lo = torch.tensor(safety.pressure_min6, device=device)[mapped]
         hi = torch.tensor(safety.pressure_max6, device=device)[mapped]
@@ -305,7 +332,8 @@ class OpenLoopShootingPlanner:
                     initial_raw = seed_last.repeat(k_effective, 1)
                     init_name = "repeat"
                 elif restart == 1:
-                    initial_raw = torch.zeros(k_effective, descriptor.action_dim, device=device)
+                    initial_raw = torch.zeros(
+                        k_effective, descriptor.action_dim, device=device)
                     init_name = "zero"
                 else:
                     initial_raw = lo + torch.rand(k_effective, descriptor.action_dim,
@@ -371,13 +399,15 @@ class OpenLoopShootingPlanner:
                         final_distance = float(torch.linalg.vector_norm(
                             final_tip - target["point"]).cpu())
                     candidate = {
-                        "actions": physical.detach().cpu().numpy(),
-                        "predictions": predictions.detach().cpu().numpy(),
+                        "actions": physical.detach().cpu().numpy().copy(),
+                        "predictions": predictions.detach().cpu().numpy().copy(),
                         "loss_curve": loss_curve,
-                        "final_distance_normalized": final_distance,
+                        "predicted_terminal_target_residual": final_distance,
                         "init": init_name,
                     }
-                if best is None or candidate["final_distance_normalized"] < best["final_distance_normalized"]:
+                if (best is None or
+                        candidate["predicted_terminal_target_residual"] <
+                        best["predicted_terminal_target_residual"]):
                     best = candidate
         finally:
             model.train(was_training)
@@ -391,6 +421,14 @@ class OpenLoopShootingPlanner:
         predictions_path = output / "predicted_states.npz"
         states_model = (best["predictions"] * scale.detach().cpu().numpy() +
                         center.detach().cpu().numpy())
+        if target["kind"] == "target_skeleton":
+            target_nodes = target["nodes"].detach().cpu().numpy()
+            predicted_terminal_target_residual = float(np.linalg.norm(
+                states_model[-1, :, :2] - target_nodes[:, :2], axis=1).mean())
+        else:
+            predicted_terminal_target_residual = float(np.linalg.norm(
+                states_model[-1, target["node"], :2] -
+                target["point"].detach().cpu().numpy()))
         minimum_clearance = None
         if obstacles:
             values = []
@@ -410,20 +448,30 @@ class OpenLoopShootingPlanner:
             minimum_clearance = min(values)
         np.savez_compressed(predictions_path,
                             states_normalized=best["predictions"],
-                            states_model=states_model)
+                            states_model=states_model,
+                            state_coordinate_frame=np.array(
+                                descriptor.state_coordinate_frame),
+                            state_length_unit=np.array(state_unit))
         return build_plan(
             model_actions=best["actions"], channel_map=channel_map,
             step_interval_s=step_interval_s, model=descriptor, anchor=anchor,
             scene=scene, safety=safety, random_seed=config.random_seed,
             predicted_states_path=predictions_path.name,
-            loss_terms={"final_target_distance": best["final_distance_normalized"]},
+            loss_terms={
+                residual_key: predicted_terminal_target_residual},
             metadata={
                 "planner": "openloop_shooting_v2", "target_id": target_item.primitive_id,
                 "target_kind": target["kind"],
                 "best_init": best["init"],
                 "loss_curve": best["loss_curve"], "n_iter": config.n_iter,
                 "n_restarts": config.n_restarts, "k_effective": k_effective,
-                "auto_k": config.auto_k, "auto_k_gap_px": auto_k_gap_px,
+                "auto_k": config.auto_k,
+                f"auto_k_gap_{state_unit}": auto_k_gap,
+                "state_coordinate_frame": descriptor.state_coordinate_frame,
+                "state_length_unit": state_unit,
                 "duration_s": duration_s,
                 "predicted_min_obstacle_clearance": minimum_clearance,
+                "optimizer_action_dim": descriptor.action_dim,
+                "channel_source6": list(descriptor.channel_source6),
+                "channel_equalities": [list(pair) for pair in equalities],
             })

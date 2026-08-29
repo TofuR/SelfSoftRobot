@@ -8,7 +8,7 @@ row 反转→与相机原图一致：固定端 base 在上、tip 在下），并
 实物数据格式（masks_to_transition_npz.py 产物，免标定）：
   positions: (T, 3, N) = [col, row, 0]   像素坐标，第 3 维恒 0（单相机平面弯曲）
   actions:   (T, A)                       已归一化到 [0,1]（按通道操作上限）
-  节点顺序:  node0 = tip（图底，大 row），node_{N-1} = base（图顶，row≈0）
+  节点顺序:  node0 = base（图顶，row小），node_{N-1} = tip（图底，row大）
 
 注意：原始拍摄帧/mask 不在磁盘上（derived/ 已清），故此处展示"提取出的骨架"本身。
 
@@ -53,10 +53,10 @@ def print_stats(pos, actions):
     mid_t = T // 2
     n0_row, nN_row = pos[mid_t, 1, 0], pos[mid_t, 1, N - 1]
     print(f"  节点顺序 (frame {mid_t}): node0 row={n0_row:.1f}  node{N-1} row={nN_row:.1f}")
-    if nN_row < n0_row:
-        print(f"    → node{N-1}=base(row小,图顶)  node0=tip(row大,图底)  [底→顶排列, 与 extract_skeleton_2d 一致]")
-    else:
+    if n0_row < nN_row:
         print(f"    → node0=base  node{N-1}=tip  [顶→底排列]")
+    else:
+        print("    → 节点方向与 base_to_tip 合同不一致")
     if actions.size:
         for a in range(actions.shape[1]):
             print(f"  action[{a}]: min={actions[:,a].min():.4f}  max={actions[:,a].max():.4f}  "
@@ -97,9 +97,9 @@ def render_2d_frames(pos, actions, frame_ids, output_png, output_html):
             line=dict(color='royalblue', width=2),
             showlegend=False, hovertext=[f'node{k}' for k in range(N)],
         ), row=r + 1, col=c + 1)
-        # base 端高亮（红圈）：node_{N-1}（row 小=base）
+        # base 端高亮（红圈）：node0
         fig.add_trace(go.Scatter(
-            x=[pts[N - 1, 0]], y=[-pts[N - 1, 1]], mode='markers',
+            x=[pts[0, 0]], y=[-pts[0, 1]], mode='markers',
             marker=dict(size=12, color='red', symbol='circle-open'),
             showlegend=False,
         ), row=r + 1, col=c + 1)

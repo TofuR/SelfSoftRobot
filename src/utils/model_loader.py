@@ -214,6 +214,12 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
 
     # 读取 config.json（如有），获取保存的参数
     saved_cfg = _load_config_json(checkpoint_path)
+    if any('raw_alphas' in key for key in state_dict) and (
+            (saved_cfg or {}).get('gl_kernel_alignment') !=
+            'current_at_window_end'):
+        raise ValueError(
+            "fractional checkpoint 缺少当前 GL 时间对齐合同，"
+            "需使用修正后的 w0↔当前动作实现重新训练。")
 
     train_cfg = load_config('training')
     # action_dim 优先取 checkpoint 自身 config.json（实物 ad=1 / 仿真 ad=2 都能正确还原），
@@ -379,6 +385,20 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
 
     elif model_type == 'state_transition':
         # StateTransitionSpatialModel — 闭环状态转移 + 可学习潜变量 z
+        required_contract = {
+            'model_contract_version': 2,
+            'node_order': 'base_to_tip',
+            'spatial_propagation_direction': 'base_to_tip',
+            'gl_kernel_alignment': 'current_at_window_end',
+        }
+        actual_contract = {
+            key: (saved_cfg or {}).get(key) for key in required_contract
+        }
+        if actual_contract != required_contract:
+            raise ValueError(
+                "checkpoint 使用旧的时间/节点方向合同，需按新管线重新"
+                "前处理并训练。"
+                f" required={required_contract}, actual={actual_contract}")
         n_nodes = saved_cfg.get('n_nodes', 31) if saved_cfg else 31
         z_dim = saved_cfg.get('z_dim', 16) if saved_cfg else 16
         if saved_cfg and 'n_scales' in saved_cfg:

@@ -35,7 +35,7 @@ def kPa_to_model(actions_kpa, *, action_scale_kpa, action_norm_factor):
 
     支持 numpy 与 torch(张量时返回同 device 的张量,保梯度)。
     """
-    scale = np.asarray(action_scale_kpa, dtype=np.float64)
+    scale = np.asarray(_as_numpy(action_scale_kpa), dtype=np.float64)
     norm = float(action_norm_factor)
     if norm <= 0 or not math.isfinite(norm):
         raise ValueError(f"action_norm_factor 必须为正有限值,收到 {norm}")
@@ -49,8 +49,8 @@ def kPa_to_model(actions_kpa, *, action_scale_kpa, action_norm_factor):
 
 
 def model_to_kPa(actions_model, *, action_scale_kpa, action_norm_factor):
-    """模型输出 → kPa(逆变换,仅报告/展示用;优化边界不调用)。"""
-    scale = np.asarray(action_scale_kpa, dtype=np.float64)
+    """模型动作域 → kPa，用于恢复硬件压力状态与生成优化初值。"""
+    scale = np.asarray(_as_numpy(action_scale_kpa), dtype=np.float64)
     norm = float(action_norm_factor)
     if torch is not None and isinstance(actions_model, torch.Tensor):
         scale_t = torch.as_tensor(scale, dtype=actions_model.dtype, device=actions_model.device)

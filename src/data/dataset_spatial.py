@@ -17,6 +17,15 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from .action_view import project_actions, resolve_action_contract
+
+
+def _npz_text(data, key, default):
+    if key not in data:
+        return str(default)
+    value = data[key]
+    return str(value.item() if hasattr(value, "item") else value)
+
 
 class SpatialSequenceDataset(Dataset):
     """空间序列数据集。
@@ -30,7 +39,7 @@ class SpatialSequenceDataset(Dataset):
         pairs: 是否返回相邻帧（smooth loss）。
     """
 
-    def __init__(self, data_dir, seq_len=20, pairs=True):
+    def __init__(self, data_dir, seq_len=20, pairs=True, action_channels=None):
         self.seq_len = seq_len
         self.pairs = pairs
         self.samples = []
@@ -40,27 +49,43 @@ class SpatialSequenceDataset(Dataset):
         if not file_list:
             raise FileNotFoundError(f"No .npz files in {data_dir}")
 
+        self.action_contract = resolve_action_contract(data_dir, action_channels)
+        self.action_channels = self.action_contract.model_action_channels
+        self.action_dim = self.action_contract.model_action_dim
+
+        state_contracts = []
+        for path in file_list:
+            with np.load(path, allow_pickle=False) as data:
+                state_contracts.append((
+                    _npz_text(data, "state_coordinate_frame", "camera_pixel_v1"),
+                    _npz_text(data, "state_length_unit", "px"),
+                    _npz_text(data, "node_order", "unspecified"),
+                ))
+        unique_state_contracts = tuple(dict.fromkeys(state_contracts))
+        if len(unique_state_contracts) != 1:
+            raise ValueError(
+                f"数据目录混用了多个状态坐标合同: {unique_state_contracts}")
+        (self.state_coordinate_frame, self.state_length_unit,
+         self.node_order) = unique_state_contracts[0]
+
         # 动作归一化因子
         all_acts = []
         for f in file_list:
             d = np.load(f)
             if 'actions' in d:
-                all_acts.append(d['actions'])
+                all_acts.append(project_actions(d['actions'], self.action_channels))
         self.norm_factor = (
             float(np.max(np.abs(np.concatenate(all_acts)))) if all_acts else 1.0
         )
 
         # 缓存数据
-        self.action_dim = None
         for f_path in file_list:
             raw = np.load(f_path)
             if 'positions' not in raw:
                 continue
-            actions = raw['actions'] / self.norm_factor
+            actions = project_actions(raw['actions'], self.action_channels) / self.norm_factor
             positions = raw['positions'].astype(np.float32)  # (T, 3, N)
             radii = raw['radii'].astype(np.float32) if 'radii' in raw else None
-            if self.action_dim is None:
-                self.action_dim = actions.shape[1]
             self.data_cache.append({
                 'actions': actions,
                 'positions': positions,
@@ -76,7 +101,11 @@ class SpatialSequenceDataset(Dataset):
                 self.samples.append((seq_id, t))
 
         print(f"SpatialSequenceDataset: {len(self.samples)} samples, "
-              f"action_dim={self.action_dim}, n_seqs={len(self.data_cache)}")
+              f"raw_action_dim={self.action_contract.raw_action_dim}, "
+              f"action_dim={self.action_dim}, channels={self.action_channels}, "
+              f"n_seqs={len(self.data_cache)}, "
+              f"state_frame={self.state_coordinate_frame}, "
+              f"unit={self.state_length_unit}, node_order={self.node_order}")
 
         # 计算归一化参数（基于中心线坐标范围）
         self._compute_normalization()
@@ -148,6 +177,13 @@ class SpatialSequenceDataset(Dataset):
         """返回归一化参数。"""
         return self.pc_center, self.pc_scale
 
+    def get_state_contract(self):
+        return {
+            "state_coordinate_frame": self.state_coordinate_frame,
+            "state_length_unit": self.state_length_unit,
+            "node_order": self.node_order,
+        }
+
     def _get_action_window(self, data, t):
         """获取以 t 结尾的时序动作窗口，不足时 zero-pad。"""
         start = t - self.seq_len + 1
@@ -204,11 +240,16 @@ class StateTransitionDataset(SpatialSequenceDataset):
     """
 
     def __init__(self, data_dir, seq_len=20, pairs=True, episode_mode=False,
-                 episode_len=20):
+                 episode_len=20, action_channels=None):
         self.episode_mode = episode_mode
         self.episode_len = episode_len
         # 父类先按单帧模式构建 self.samples（episode 模式随后重建）
-        super().__init__(data_dir, seq_len=seq_len, pairs=pairs)
+        super().__init__(data_dir, seq_len=seq_len, pairs=pairs,
+                         action_channels=action_channels)
+        if self.node_order != "base_to_tip":
+            raise ValueError(
+                "StateTransitionDataset 要求 node_order=base_to_tip；"
+                f"当前数据为 {self.node_order!r}。请用新前处理流程重建 NPZ。")
         if self.episode_mode:
             self._build_episode_samples()
             print(f"StateTransitionDataset (episode mode): {len(self.samples)} "

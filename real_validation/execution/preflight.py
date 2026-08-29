@@ -5,7 +5,17 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from ..contracts.models import ActionPlan, Anchor, ModelDescriptor, SafetyPolicy, Scene
+from ..contracts.models import (
+    CHANNEL_EQUALITY_TOLERANCE,
+    ActionPlan,
+    Anchor,
+    ModelDescriptor,
+    SafetyPolicy,
+    Scene,
+    channel_source_residuals,
+)
+
+SLEW_NUMERICAL_TOLERANCE_KPA = 1e-4
 
 
 @dataclass(frozen=True)
@@ -50,6 +60,13 @@ def validate_plan(plan: ActionPlan, model: ModelDescriptor, anchor: Anchor,
         add("action_dim", f"计划动作维度 {plan.model_action_dim} 与模型 {model.action_dim} 不同")
     if len(anchor.state) != model.n_nodes:
         add("anchor_nodes", f"anchor 节点数 {len(anchor.state)} 与模型 {model.n_nodes} 不同")
+    anchor_frame = anchor.quality.get("state_coordinate_frame")
+    if anchor_frame is not None and anchor_frame != model.state_coordinate_frame:
+        add("state_coordinate_frame",
+            f"anchor 坐标 {anchor_frame} 与模型 {model.state_coordinate_frame} 不同")
+    if model.state_coordinate_frame == "robot_planar_mm_v1" and \
+            not anchor.quality.get("skeleton_frame_transform"):
+        add("frame_transform_missing", "机器人平面坐标 anchor 缺少相机正反变换")
     if len(anchor.action_history) < model.history_steps:
         add("history_short", f"动作历史仅 {len(anchor.action_history)} 步，模型需要 {model.history_steps} 步")
     if any(len(action) != model.action_dim for action in anchor.action_history):
@@ -60,6 +77,12 @@ def validate_plan(plan: ActionPlan, model: ModelDescriptor, anchor: Anchor,
         add("channel_map", "channel_map 不能包含重复硬件通道")
     if any(channel < 0 or channel >= 6 for channel in plan.channel_map):
         add("channel_map", "channel_map 必须位于 0..5")
+    if model.channel_map is not None and plan.channel_map != model.channel_map:
+        add("channel_map_contract", "计划 channel_map 与模型部署合同不一致")
+    if plan.channel_source6 != model.channel_source6:
+        add("channel_source_contract", "计划 channel_source6 与模型部署合同不一致")
+    if plan.channel_equalities != model.channel_equalities:
+        add("channel_equality_contract", "计划 channel_equalities 与模型部署合同不一致")
     if model.k_safe is not None and plan.horizon > model.k_safe:
         add("k_safe", f"计划 K={plan.horizon} 超过 checkpoint 的 K_safe={model.k_safe}")
     predicted_clearance = plan.metadata.get("predicted_min_obstacle_clearance")
@@ -68,8 +91,22 @@ def validate_plan(plan: ActionPlan, model: ModelDescriptor, anchor: Anchor,
             f"预测轨迹侵入障碍 {abs(float(predicted_clearance)):.3g} 个模型坐标单位")
 
     mapped = set(plan.channel_map)
+    mapped.update(follower for leader, follower in model.channel_equalities
+                  if leader in mapped)
+    for leader, follower in model.channel_equalities:
+        for field_name in ("pressure_min6", "pressure_max6", "rise_rate6",
+                           "fall_rate6", "initial_action6"):
+            values = getattr(safety, field_name)
+            if abs(values[leader] - values[follower]) > CHANNEL_EQUALITY_TOLERANCE:
+                add("safety_equality",
+                    f"等值通道 ch{leader}/ch{follower} 的 {field_name} 必须相同",
+                    channel=follower)
     previous = safety.initial_action6
     for step, action in enumerate(plan.actions6):
+        residuals = (channel_source_residuals(action, model.channel_source6)
+                     if model.channel_source6 else ())
+        if any(value > CHANNEL_EQUALITY_TOLERANCE for value in residuals):
+            add("plan_equality", f"第 {step} 步违反 channel_equalities: {residuals}", step)
         for channel, value in enumerate(action):
             if not math.isfinite(value):
                 add("non_finite", f"第 {step} 步 ch{channel} 含 NaN/Inf", step, channel)
@@ -80,7 +117,9 @@ def validate_plan(plan: ActionPlan, model: ModelDescriptor, anchor: Anchor,
                 add("inactive_channel", f"第 {step} 步未映射 ch{channel} 必须锁零", step, channel)
             delta = value - previous[channel]
             rate = safety.rise_rate6[channel] if delta >= 0 else safety.fall_rate6[channel]
-            if rate > 0 and abs(delta) > rate * plan.step_interval_s + 1e-9:
+            if (rate > 0 and
+                    abs(delta) > rate * plan.step_interval_s +
+                    SLEW_NUMERICAL_TOLERANCE_KPA):
                 add("slew_rate", f"第 {step} 步 ch{channel} 压力变化超过 {rate:g} kPa/s",
                     step, channel)
         previous = action
@@ -89,8 +128,8 @@ def validate_plan(plan: ActionPlan, model: ModelDescriptor, anchor: Anchor,
     if model.action_scale_kpa is None:
         add("action_scale_missing", "checkpoint 缺少 action_scale_kpa(deploy_manifest 缺失);"
             "单位链不可知,阻断规划")
-    if model.k_safe is None and not (model.k_safe_table_px or {}):
-        add("k_safe_uncertified", "模型没有 K_safe 且无 k_safe_table_px 认证表;"
+    if model.k_safe is None and not (model.k_safe_table or model.k_safe_table_px or {}):
+        add("k_safe_uncertified", "模型没有 K_safe 且无视野认证表;"
             "无法门控视野,阻断任意 horizon")
     ref_dt = train_dt_s or model.train_dt_measured_s or model.train_dt_nominal_s
     if ref_dt is not None and ref_dt > 0:

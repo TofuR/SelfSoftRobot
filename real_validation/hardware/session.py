@@ -30,6 +30,7 @@ class HardwareSession(QObject):
         self.cameras = []
         self.ndi_thread = None
         self.valve_controller = None
+        self.last_applied6 = (0.0,) * 6
         self.states = {
             "camera": DeviceState.OFF,
             "valve": DeviceState.OFF,
@@ -135,12 +136,20 @@ class HardwareSession(QObject):
                 ports[2] = self.profile.group2_port.strip()
             controller = ValveController(ports, self.profile.baudrate,
                                          self.profile.slave_addr)
-        controller.action_logged.connect(self.valve_command)
+        controller.action_logged.connect(self._on_valve_command)
         controller.log.connect(self.log)
         self.valve_controller = controller
         self._set_state("valve", DeviceState.CONNECTING,
                         f"{backend.value.upper()} · 等待连接阀组")
         return controller
+
+    def _on_valve_command(self, applied6, timestamp: float) -> None:
+        values = tuple(float(value) for value in applied6)
+        if len(values) != 6:
+            self.log.emit(f"阀动作维度异常: {len(values)}")
+            return
+        self.last_applied6 = values
+        self.valve_command.emit(list(values), float(timestamp))
 
     def connect_prepared_valves(self, groups: tuple[int, ...]) -> dict:
         controller = self.prepare_valves()
@@ -236,6 +245,7 @@ class HardwareSession(QObject):
             "profile": self.profile.to_dict(),
             "states": {key: value.value for key, value in self.states.items()},
             "messages": dict(self.messages),
+            "last_applied6": list(self.last_applied6),
             "timestamp": time.time(),
         }
 

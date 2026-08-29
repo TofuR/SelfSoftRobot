@@ -86,13 +86,20 @@ class HardwareProfile:
         return cls(**data)
 
 
-def required_groups_for_channels(channel_map) -> tuple[int, ...]:
+def required_groups_for_channels(channel_map, channel_equalities=(),
+                                 channel_sources=None) -> tuple[int, ...]:
     channels = tuple(int(value) for value in channel_map)
     if len(set(channels)) != len(channels) or any(value < 0 or value >= 6 for value in channels):
         raise ValueError("channel_map 必须是 0..5 内不重复通道")
+    active = set(channels)
+    if channel_sources or channel_equalities:
+        from ..contracts.models import normalize_channel_sources
+        sources = normalize_channel_sources(channel_sources or None, pairs=channel_equalities)
+        active.update(channel for channel, source in enumerate(sources)
+                      if source in active)
     groups = set()
-    if any(value <= 2 for value in channels):
+    if any(value <= 2 for value in active):
         groups.add(1)
-    if any(value >= 3 for value in channels):
+    if any(value >= 3 for value in active):
         groups.add(2)
     return tuple(sorted(groups))

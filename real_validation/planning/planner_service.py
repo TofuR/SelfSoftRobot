@@ -5,12 +5,25 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from ..contracts.models import ActionPlan, Anchor, ModelDescriptor, SafetyPolicy, Scene
+from ..contracts.models import (
+    ActionPlan,
+    Anchor,
+    ModelDescriptor,
+    SafetyPolicy,
+    Scene,
+    apply_channel_sources,
+    normalize_channel_sources,
+)
 
 
 def expand_model_actions(actions: Sequence[Sequence[float]],
-                         channel_map: Sequence[int]) -> tuple[tuple[float, ...], ...]:
+                         channel_map: Sequence[int], channel_equalities=(),
+                         channel_sources=None
+                         ) -> tuple[tuple[float, ...], ...]:
     mapping = tuple(int(channel) for channel in channel_map)
+    constrained = bool(channel_sources) or bool(channel_equalities)
+    sources = normalize_channel_sources(
+        channel_sources or None, pairs=channel_equalities) if constrained else ()
     if len(set(mapping)) != len(mapping) or any(channel not in range(6) for channel in mapping):
         raise ValueError("channel_map 必须是 0..5 内不重复的通道")
     expanded = []
@@ -21,7 +34,7 @@ def expand_model_actions(actions: Sequence[Sequence[float]],
         row = [0.0] * 6
         for value, channel in zip(values, mapping):
             row[channel] = value
-        expanded.append(tuple(row))
+        expanded.append(apply_channel_sources(row, sources) if constrained else tuple(row))
     return tuple(expanded)
 
 
@@ -32,7 +45,9 @@ def build_plan(*, model_actions: Sequence[Sequence[float]], channel_map: Sequenc
                loss_terms: dict[str, float] | None = None,
                metadata: dict[str, Any] | None = None) -> ActionPlan:
     return ActionPlan(
-        actions6=expand_model_actions(model_actions, channel_map),
+        actions6=expand_model_actions(
+            model_actions, channel_map, model.channel_equalities,
+            model.channel_source6),
         step_interval_s=step_interval_s,
         model_action_dim=model.action_dim,
         channel_map=tuple(channel_map),
@@ -40,6 +55,8 @@ def build_plan(*, model_actions: Sequence[Sequence[float]], channel_map: Sequenc
         scene_digest=scene.digest,
         anchor_id=anchor.anchor_id,
         safety_digest=safety.digest,
+        channel_source6=model.channel_source6,
+        channel_equalities=model.channel_equalities,
         random_seed=random_seed,
         predicted_states_path=predicted_states_path,
         loss_terms=dict(loss_terms or {}),

@@ -1,7 +1,7 @@
 """验证工作台的稳定数据契约。
 
 计划始终保存为六通道命令，模型自身的动作维度通过 ``channel_map`` 显式映射；
-因此 1/3/6 通道模型可以共用执行器，同时不会静默补零掩盖维度错误。
+因此 1..6 通道模型可以共用执行器，同时不会静默补零掩盖维度错误。
 """
 
 from __future__ import annotations
@@ -14,8 +14,9 @@ from typing import Any, Iterable
 
 from .io import stable_digest
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 N_HARDWARE_CHANNELS = 6
+CHANNEL_EQUALITY_TOLERANCE = 0.5
 
 
 def _finite_vector(values: Iterable[float], size: int, name: str) -> tuple[float, ...]:
@@ -29,6 +30,118 @@ def _finite_vector(values: Iterable[float], size: int, name: str) -> tuple[float
 
 def _vec6(values: Iterable[float], name: str) -> tuple[float, ...]:
     return _finite_vector(values, N_HARDWARE_CHANNELS, name)
+
+
+def normalize_channel_sources(sources=None, *, pairs=(),
+                              size: int = N_HARDWARE_CHANNELS) -> tuple[int, ...]:
+    """规范化硬件来源图；链式关系压平到根，循环 fail-closed。"""
+    if sources is None:
+        values = list(range(size))
+        for item in pairs or ():
+            values_pair = tuple(item)
+            if len(values_pair) != 2:
+                raise ValueError("每个 channel equality 必须是 [leader, follower]")
+            leader, follower = int(values_pair[0]), int(values_pair[1])
+            if leader == follower or leader not in range(size) or follower not in range(size):
+                raise ValueError(f"channel equality 必须引用两个不同的 0..{size - 1} 通道")
+            values[follower] = leader
+    else:
+        values = tuple(int(value) for value in sources)
+        if len(values) != size or any(value not in range(size) for value in values):
+            raise ValueError(f"channel_source6 必须是 {size} 个 0..{size - 1} 通道下标")
+
+    def root(start):
+        seen = set()
+        current = start
+        while values[current] != current:
+            if current in seen:
+                raise ValueError("channel_source6 不能包含循环")
+            seen.add(current)
+            current = values[current]
+        return current
+
+    return tuple(root(channel) for channel in range(size))
+
+
+def channel_equalities_from_sources(sources, *,
+                                    size: int = N_HARDWARE_CHANNELS
+                                    ) -> tuple[tuple[int, int], ...]:
+    normalized = normalize_channel_sources(sources, size=size)
+    return tuple((source, channel) for channel, source in enumerate(normalized)
+                 if channel != source)
+
+
+def normalize_channel_equalities(pairs: Iterable[Iterable[int]] | None,
+                                 *, size: int = N_HARDWARE_CHANNELS
+                                 ) -> tuple[tuple[int, int], ...]:
+    """旧 pair 合同兼容入口；内部统一为来源图。"""
+    return channel_equalities_from_sources(
+        normalize_channel_sources(pairs=pairs, size=size), size=size)
+
+
+def apply_channel_sources(values: Iterable[float], sources,
+                          *, size: int = N_HARDWARE_CHANNELS
+                          ) -> tuple[float, ...]:
+    vector = _finite_vector(values, size, "action")
+    normalized = normalize_channel_sources(sources, size=size)
+    return tuple(vector[source] for source in normalized)
+
+
+def apply_channel_equalities(values: Iterable[float], pairs,
+                             *, size: int = N_HARDWARE_CHANNELS
+                             ) -> tuple[float, ...]:
+    return apply_channel_sources(
+        values, normalize_channel_sources(pairs=pairs, size=size), size=size)
+
+
+def channel_source_residuals(values: Iterable[float], sources,
+                             *, size: int = N_HARDWARE_CHANNELS
+                             ) -> tuple[float, ...]:
+    vector = _finite_vector(values, size, "action")
+    return tuple(abs(vector[source] - vector[channel])
+                 for source, channel in channel_equalities_from_sources(
+                     sources, size=size))
+
+
+def channel_equality_residuals(values: Iterable[float], pairs,
+                               *, size: int = N_HARDWARE_CHANNELS
+                               ) -> tuple[float, ...]:
+    return channel_source_residuals(
+        values, normalize_channel_sources(pairs=pairs, size=size), size=size)
+
+
+def hardware_action_expansion(channel_map, pairs=(), channel_sources=None) -> tuple[int, ...]:
+    """返回六个硬件通道各自读取的模型动作列；未驱动通道为 -1。"""
+    mapping = tuple(int(value) for value in channel_map)
+    lookup = {channel: index for index, channel in enumerate(mapping)}
+    sources = normalize_channel_sources(channel_sources or None, pairs=pairs)
+    return tuple(lookup.get(source, -1) for source in sources)
+
+
+def validate_hardware_action_contract(action_dim, channel_map, pairs=(),
+                                      action_expansion6=(), channel_sources=None
+                                      ) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """校验模型独立通道到六通道硬件的来源与展开关系。"""
+    if channel_map is None:
+        if pairs or channel_sources:
+            raise ValueError("通道来源合同要求显式 channel_map")
+        return (), ()
+    mapping = tuple(int(value) for value in channel_map)
+    if len(mapping) != int(action_dim) or len(set(mapping)) != len(mapping) or any(
+            value not in range(N_HARDWARE_CHANNELS) for value in mapping):
+        raise ValueError("channel_map 必须是不重复的 0..5 通道,长度等于 action_dim")
+    sources = normalize_channel_sources(channel_sources or None, pairs=pairs)
+    roots = tuple(channel for channel, source in enumerate(sources) if channel == source)
+    constrained = bool(channel_sources) or bool(pairs)
+    if constrained and mapping != roots:
+        raise ValueError(
+            f"channel_map={mapping} 必须等于 channel_source6 根通道 {roots}")
+    expected = hardware_action_expansion(mapping, channel_sources=sources)
+    expansion = tuple(int(value) for value in action_expansion6 or ())
+    if expansion and expansion != expected:
+        raise ValueError(
+            f"action_expansion6={expansion} 与 channel_source6 推导值 {expected} 不同")
+    return (sources if constrained else ()), expected
 
 
 @dataclass(frozen=True)
@@ -47,6 +160,9 @@ class ModelDescriptor:
     # ---- P1b 新增(全部带默认值;缺 manifest 时为 None,由 preflight/planner 阻断) ----
     action_scale_kpa: tuple[float, ...] | None = None
     channel_map: tuple[int, ...] | None = None
+    channel_source6: tuple[int, ...] = ()
+    channel_equalities: tuple[tuple[int, int], ...] = ()
+    action_expansion6: tuple[int, ...] = ()
     train_dt_nominal_s: float | None = None
     train_dt_measured_s: float | None = None
     train_dt_std_s: float | None = None
@@ -56,12 +172,22 @@ class ModelDescriptor:
     camera_fingerprint: dict[str, Any] | None = None
     reference_frame_hash: str | None = None
     k_safe_table_px: dict[str, int] | None = None
+    k_safe_table: dict[str, int] | None = None
+    k_safe_unit: str | None = None
+    planning_displacement_px_p95: dict[str, float] | None = None
+    planning_displacement_p95: dict[str, float] | None = None
+    robot_diameter_mm: float | None = None
+    robot_diameter_px: float | None = None
+    mm_per_px: float | None = None
+    state_coordinate_frame: str = "camera_pixel_v1"
+    state_length_unit: str = "px"
+    node_order: str = "base_to_tip"
     registration_residual_max_px: float = 2.0
     provenance: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.action_dim not in (1, 3, 6):
-            raise ValueError("实机工作台当前只接受 action_dim=1/3/6")
+        if self.action_dim not in range(1, N_HARDWARE_CHANNELS + 1):
+            raise ValueError("实机工作台只接受 action_dim=1..6")
         if self.n_nodes <= 0 or self.history_steps <= 0:
             raise ValueError("n_nodes 与 history_steps 必须为正数")
         if self.k_safe is not None and self.k_safe <= 0:
@@ -73,12 +199,48 @@ class ModelDescriptor:
             if any(v <= 0 or not math.isfinite(v) for v in values):
                 raise ValueError("action_scale_kpa 必须全为正有限值")
             object.__setattr__(self, "action_scale_kpa", values)
+        sources, expansion = validate_hardware_action_contract(
+            self.action_dim, self.channel_map, self.channel_equalities,
+            self.action_expansion6, self.channel_source6)
+        equalities = channel_equalities_from_sources(sources) if sources else ()
+        if equalities and self.action_scale_kpa is None:
+            raise ValueError("通道来源合同要求 action_scale_kpa")
         if self.channel_map is not None:
-            mapping = tuple(int(v) for v in self.channel_map)
-            if len(mapping) != self.action_dim or len(set(mapping)) != len(mapping) \
-                    or any(v < 0 or v >= 6 for v in mapping):
-                raise ValueError("channel_map 必须是不重复的 0..5 通道,长度等于 action_dim")
-            object.__setattr__(self, "channel_map", mapping)
+            object.__setattr__(self, "channel_map", tuple(int(v) for v in self.channel_map))
+        object.__setattr__(self, "channel_source6", sources)
+        object.__setattr__(self, "channel_equalities", equalities)
+        object.__setattr__(self, "action_expansion6", expansion)
+        if self.planning_displacement_px_p95 is not None:
+            table = {str(int(k)): float(v)
+                     for k, v in self.planning_displacement_px_p95.items()}
+            if any(int(k) <= 0 or value <= 0 or not math.isfinite(value)
+                   for k, value in table.items()):
+                raise ValueError("planning_displacement_px_p95需要正步数和正有限距离")
+            object.__setattr__(self, "planning_displacement_px_p95", table)
+        if self.planning_displacement_p95 is not None:
+            table = {str(int(k)): float(v)
+                     for k, v in self.planning_displacement_p95.items()}
+            if any(int(k) <= 0 or value <= 0 or not math.isfinite(value)
+                   for k, value in table.items()):
+                raise ValueError("planning_displacement_p95需要正步数和正有限距离")
+            object.__setattr__(self, "planning_displacement_p95", table)
+        allowed_frames = {
+            "camera_pixel_v1": "px",
+            "robot_planar_mm_v1": "mm",
+        }
+        if self.state_coordinate_frame not in allowed_frames:
+            raise ValueError(f"未知 state_coordinate_frame: {self.state_coordinate_frame}")
+        if self.state_length_unit != allowed_frames[self.state_coordinate_frame]:
+            raise ValueError("state_length_unit 与 state_coordinate_frame 不一致")
+        if self.node_order != "base_to_tip":
+            raise ValueError("node_order 必须为 base_to_tip")
+        if self.k_safe_table is not None:
+            table = {str(key): int(value) for key, value in self.k_safe_table.items()}
+            if any(value <= 0 for value in table.values()):
+                raise ValueError("k_safe_table 的 K 必须为正整数")
+            if self.k_safe_unit != self.state_length_unit:
+                raise ValueError("k_safe_unit 与 state_length_unit 不一致")
+            object.__setattr__(self, "k_safe_table", table)
 
     def to_dict(self) -> dict[str, Any]:
         return {"schema_version": SCHEMA_VERSION, **asdict(self)}
@@ -86,7 +248,9 @@ class ModelDescriptor:
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "ModelDescriptor":
         data = dict(value)
-        data.pop("schema_version", None)
+        if int(data.pop("schema_version", 0)) != SCHEMA_VERSION:
+            raise ValueError(
+                f"ModelDescriptor schema_version 必须为 {SCHEMA_VERSION}")
         return cls(**data)
 
 
@@ -103,6 +267,7 @@ class Anchor:
     quality: dict[str, Any] = field(default_factory=dict)     # ★P1b:float → 标志集
     state_space: str = "model_normalized"
     action_units: str = "kpa"
+    node_order: str = "base_to_tip"
 
     def __post_init__(self) -> None:
         state = tuple(tuple(float(v) for v in node) for node in self.state)
@@ -126,6 +291,8 @@ class Anchor:
             raise ValueError("anchor state_space 必须是 model 或 model_normalized")
         if self.action_units not in {"kpa", "model_normalized"}:
             raise ValueError("anchor action_units 必须是 kpa 或 model_normalized")
+        if self.node_order != "base_to_tip":
+            raise ValueError("anchor node_order 必须为 base_to_tip")
         if not isinstance(self.quality, dict):
             raise ValueError("anchor quality 必须是 dict(标志集)")
         object.__setattr__(self, "state", state)
@@ -137,7 +304,10 @@ class Anchor:
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "Anchor":
         data = dict(value)
-        data.pop("schema_version", None)
+        if int(data.pop("schema_version", 0)) != SCHEMA_VERSION:
+            raise ValueError(f"Anchor schema_version 必须为 {SCHEMA_VERSION}")
+        if "node_order" not in data:
+            raise ValueError("Anchor 缺少 node_order")
         data["state"] = tuple(tuple(row) for row in data["state"])
         data["action_history"] = tuple(tuple(row) for row in data["action_history"])
         if data.get("prev_state") is not None:
@@ -174,10 +344,13 @@ class Scene:
     primitives: tuple[ScenePrimitive, ...] = ()
     dimension: int = 2
     revision: str = field(default_factory=lambda: uuid.uuid4().hex)
+    node_order: str = "base_to_tip"
 
     def __post_init__(self) -> None:
         if self.dimension not in (2, 3):
             raise ValueError("scene dimension 只能是 2 或 3")
+        if self.node_order != "base_to_tip":
+            raise ValueError("scene node_order 必须为 base_to_tip")
         object.__setattr__(self, "primitives", tuple(self.primitives))
 
     @property
@@ -186,14 +359,15 @@ class Scene:
 
     def with_primitive(self, primitive: ScenePrimitive) -> "Scene":
         return Scene(name=self.name, primitives=self.primitives + (primitive,),
-                     dimension=self.dimension)
+                     dimension=self.dimension, node_order=self.node_order)
 
     def without_primitive(self, primitive_id: str) -> "Scene":
         """按 primitive_id 移除一个原语(B7:原来只能追加,交互式编辑无法删除)。"""
         kept = tuple(item for item in self.primitives if item.primitive_id != primitive_id)
         if len(kept) == len(self.primitives):
             raise KeyError(f"primitive_id 不存在: {primitive_id}")
-        return Scene(name=self.name, primitives=kept, dimension=self.dimension)
+        return Scene(name=self.name, primitives=kept, dimension=self.dimension,
+                     node_order=self.node_order)
 
     def replace_primitive(self, primitive_id: str, new_primitive: "ScenePrimitive") -> "Scene":
         """按 primitive_id 替换一个原语。"""
@@ -201,7 +375,8 @@ class Scene:
                          for item in self.primitives)
         if replaced == self.primitives:
             raise KeyError(f"primitive_id 不存在: {primitive_id}")
-        return Scene(name=self.name, primitives=replaced, dimension=self.dimension)
+        return Scene(name=self.name, primitives=replaced, dimension=self.dimension,
+                     node_order=self.node_order)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -209,15 +384,21 @@ class Scene:
             "name": self.name,
             "dimension": self.dimension,
             "revision": self.revision,
+            "node_order": self.node_order,
             "primitives": [asdict(item) for item in self.primitives],
         }
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "Scene":
+        if int(value.get("schema_version", 0)) != SCHEMA_VERSION:
+            raise ValueError(f"Scene schema_version 必须为 {SCHEMA_VERSION}")
+        if "node_order" not in value:
+            raise ValueError("Scene 缺少 node_order")
         return cls(
             name=value.get("name", "untitled"),
             dimension=int(value.get("dimension", 2)),
             revision=value.get("revision", uuid.uuid4().hex),
+            node_order=value["node_order"],
             primitives=tuple(ScenePrimitive(**item) for item in value.get("primitives", [])),
         )
 
@@ -282,6 +463,8 @@ class ActionPlan:
     scene_digest: str
     anchor_id: str
     safety_digest: str
+    channel_source6: tuple[int, ...] = ()
+    channel_equalities: tuple[tuple[int, int], ...] = ()
     plan_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     random_seed: int | None = None
     predicted_states_path: str | None = None
@@ -293,7 +476,18 @@ class ActionPlan:
         if not actions:
             raise ValueError("计划至少需要一个动作")
         object.__setattr__(self, "actions6", actions)
-        object.__setattr__(self, "channel_map", tuple(int(i) for i in self.channel_map))
+        mapping = tuple(int(i) for i in self.channel_map)
+        sources, _expansion = validate_hardware_action_contract(
+            self.model_action_dim, mapping, self.channel_equalities,
+            channel_sources=self.channel_source6)
+        equalities = channel_equalities_from_sources(sources) if sources else ()
+        object.__setattr__(self, "channel_map", mapping)
+        object.__setattr__(self, "channel_source6", sources)
+        object.__setattr__(self, "channel_equalities", equalities)
+        for step, action in enumerate(actions):
+            residuals = channel_source_residuals(action, sources) if sources else ()
+            if any(value > CHANNEL_EQUALITY_TOLERANCE for value in residuals):
+                raise ValueError(f"计划第 {step} 步违反 channel_equalities: {residuals}")
         if self.step_interval_s <= 0:
             raise ValueError("step_interval_s 必须为正数")
 
@@ -310,4 +504,7 @@ class ActionPlan:
         data.pop("schema_version", None)
         data["actions6"] = tuple(tuple(row) for row in data["actions6"])
         data["channel_map"] = tuple(data["channel_map"])
+        data["channel_source6"] = tuple(data.get("channel_source6", ()))
+        data["channel_equalities"] = tuple(
+            tuple(pair) for pair in data.get("channel_equalities", ()))
         return cls(**data)

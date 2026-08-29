@@ -2,3 +2,6 @@
 
 全部 stdlib-only,反向依赖本包的 src/ 与离线数据准备脚本不会拉入部署侧依赖。
 """
+from .validation_setup import ValidationSetup
+
+__all__ = ["ValidationSetup"]

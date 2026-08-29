@@ -76,10 +76,10 @@ def build_median_background(cam_dir, n_bg=500):
     return build_median_background_from_frames(frames, n_bg=len(idx)), fs
 
 
-def segment_white_on_blue(bgr, bg_gray, sat=100, val=120, diff=25, dil=35,
-                          open_k=5, close_k=15,
-                          min_area_frac=0.003, min_h_frac=0.15):
-    """白半透明硅胶臂（+ 蓝静态背景 + 白气管）专用分割。
+def segment_white_on_blue_stages(bgr, bg_gray, sat=100, val=120, diff=25, dil=35,
+                                 open_k=5, close_k=15,
+                                 min_area_frac=0.003, min_h_frac=0.15):
+    """白半透明硅胶臂候选分割，并返回可审计的全部中间阶段。
 
     管线（diag 校准）:
       HSV白(S<sat,V>val) ∩ dilate(背景差, dil)
@@ -89,7 +89,10 @@ def segment_white_on_blue(bgr, bg_gray, sat=100, val=120, diff=25, dil=35,
     半透明臂内部与蓝底对比低 → 背景差只抓边；HSV白 抓臂主体 + 杂白(座/眩光)。
     两者交集 = 动且白 = 臂；OPEN 按宽度去细管；取最大连通区。
 
-    Returns: (H,W) uint8 {0,1}。
+    该函数只利用图像，不读取动作通道，因此适用于任意 ``action_dim``。返回字典：
+    ``white``、``moved``、``gated``、``morph``、``final``，每项均为
+    ``(H,W) uint8 {0,1}``。``final`` 适合用作 SAM2 自动锚点候选；中间结果供
+    离线 QC 定位阈值、背景差或形态学在哪一步失败。
     """
     if cv2 is None:
         raise RuntimeError(f"需要 opencv：{_CV2_ERR}")
@@ -100,12 +103,14 @@ def segment_white_on_blue(bgr, bg_gray, sat=100, val=120, diff=25, dil=35,
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     moved = (cv2.absdiff(gray, bg_gray) > diff).astype(np.uint8)
     moved = cv2.dilate(moved, np.ones((dil, dil), np.uint8)) if dil > 1 else moved
-    m = (white & moved).astype(np.uint8)
+    gated = (white & moved).astype(np.uint8)
+    m = gated.copy()
     if open_k > 1:
         m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((open_k, open_k), np.uint8))
     if close_k > 1:
         m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((close_k, close_k), np.uint8))
-    m = binary_fill_holes(m > 0).astype(np.uint8)
+    morph = binary_fill_holes(m > 0).astype(np.uint8)
+    m = morph
     n, lbl, stats, _ = cv2.connectedComponentsWithStats(m, 8)
     out = np.zeros((H, W), np.uint8)
     if n > 1:
@@ -115,7 +120,64 @@ def segment_white_on_blue(bgr, bg_gray, sat=100, val=120, diff=25, dil=35,
         if cands:
             cands.sort(reverse=True)
             out[lbl == cands[0][1]] = 1
-    return out
+    return {
+        "white": white,
+        "moved": moved,
+        "gated": gated,
+        "morph": morph,
+        "final": out,
+    }
+
+
+def segment_white_on_blue(bgr, bg_gray, sat=100, val=120, diff=25, dil=35,
+                          open_k=5, close_k=15,
+                          min_area_frac=0.003, min_h_frac=0.15):
+    """白半透明硅胶臂候选分割；兼容原公开接口，仅返回最终 mask。"""
+    return segment_white_on_blue_stages(
+        bgr, bg_gray, sat=sat, val=val, diff=diff, dil=dil,
+        open_k=open_k, close_k=close_k,
+        min_area_frac=min_area_frac, min_h_frac=min_h_frac,
+    )["final"]
+
+
+def trim_wide_base_attachment(mask, base_side="top", width_ratio=1.5,
+                              stable_span=5):
+    """从基座侧移除宽支架形成的短横向分支。"""
+    result = np.asarray(mask, dtype=np.uint8).copy()
+    if base_side == "none" or width_ratio <= 0 or stable_span <= 0 or \
+            not np.any(result):
+        return result
+    if base_side in ("top", "bottom"):
+        widths = result.sum(axis=1)
+    elif base_side in ("left", "right"):
+        widths = result.sum(axis=0)
+    else:
+        raise ValueError(f"未知 base_side: {base_side}")
+    occupied = widths[widths > 0].astype(float)
+    if not len(occupied):
+        return result
+    body_width = float(np.median(occupied))
+    threshold = max(float(width_ratio) * body_width, body_width + 2.0)
+    indices = (range(len(widths)) if base_side in ("top", "left") else
+               range(len(widths) - 1, -1, -1))
+    ordered = list(indices)
+    cut = None
+    for offset in range(0, len(ordered) - int(stable_span) + 1):
+        values = widths[ordered[offset:offset + int(stable_span)]]
+        if np.all((values > 0) & (values <= threshold)):
+            cut = ordered[offset]
+            break
+    if cut is None:
+        return result
+    if base_side == "top":
+        result[:cut] = 0
+    elif base_side == "bottom":
+        result[cut + 1:] = 0
+    elif base_side == "left":
+        result[:, :cut] = 0
+    else:
+        result[:, cut + 1:] = 0
+    return result
 
 
 def segment_views(images_bgr, method="backlight", bg=None,
@@ -160,7 +222,7 @@ def masks_to_skeletons_2d(masks, n_points=31, tip_fix=True):
     """(V,N,H,W) 二值 → (V,N,n_points,2) 2D 骨架，复用 skeleton 模块。
 
     返回 [col,row]；无前景帧为全 0（与 extract_skeleton_2d 约定一致，三角化时跳过）。
-    tip_fix=True(默认): 末端 node0 垂直切片修正(修弯管 cap 角落偏移), 实物默认开。
+    tip_fix=True(默认): 末端 nodeN-1 垂直切片修正, 实物默认开。
     """
     from .skeleton import batch_extract_skeleton_2d
 

@@ -1,27 +1,27 @@
-"""compare_skeleton_methods.py — 比较 2D 骨架提取方法，聚焦"末端 node0 落到 mask 尖角"问题。
+"""compare_skeleton_methods.py — 比较 2D 骨架提取方法，聚焦末端节点落到 mask 尖角的问题。
 
 背景（实测确认, 见 2026-07-09 诊断）:
-  当前 extract_skeleton_2d 是**逐行质心**: 每行白色像素列均值, 从底到顶, 弧长重采样。
-  - 直管(03959/04079/04080): cap 在每行对称 → 最底行质心 = 中点 → node0 正确(误差 0-1px)。
+  当前 extract_skeleton_2d 是**逐行质心**: 每行白色像素列均值, 从顶到底, 弧长重采样。
+  - 直管(03959/04079/04080): cap 在每行对称 → 最底行质心 = 中点 → nodeN-1 正确(误差 0-1px)。
   - 弯管(04085): 管体宽 [310,341](中点 325.5), 但最底几行因管倾斜而**变窄且偏移**
     (row282=[314,323], row283=[314,321], 质心 317.5) → 最底行抓到的是倾斜 cap 的**角落**,
-    不是中点 → node0 落角落(317.5 vs 真 325.5, 偏 6px), 且 node0-1-2 都在非对称区 → 尖折角。
+    不是中点 → nodeN-1 落角落(317.5 vs 真 325.5, 偏 6px), 且末端相邻节点都在非对称区 → 尖折角。
   根因 = 对倾斜形状做水平切片, 不是细化算法伪影。故形态学/细化类"更好骨架化"治不了本。
 
 本脚本实现多种方法, 在帧样本上比较:
   指标:
-    - tipColErr_pk: |node0.col - 真值tip.col| (主; 真值=尖端区 distance-transform 峰值点=
+    - tipColErr_pk: |nodeN-1.col - 真值tip.col| (主; 真值=尖端区 distance-transform 峰值点=
       离所有边界最远的 cap 中心=真中心线端点; 次 tipColErr_cap=cap 质心)
-    - kink_deg: node0-1-2 处方向突变(°), 越小越平滑(软体臂应平滑曲线)
+    - kink_deg: 末端三个节点处方向突变(°), 越小越平滑(软体臂应平滑曲线)
     - body_dev: 与当前法在中段(node5-25)的平均偏差(px), 防止方法把直管段搞坏(回归检查)
   合成: 选定帧上把各方法骨架叠在原图+mask 上(各色), 存 montage 直观对比。
 
 方法:
   M0_cur     当前逐行质心(基线)
   M1_dwrow   逐行 distance-transform 加权质心(向 ridge 拉, 廉价去偏)
-  M2_pca     PCA 主轴 + 垂直切片质心(对倾斜管切片对称 → 修 node0 + 折角)
+  M2_pca     PCA 主轴 + 垂直切片质心(对倾斜管切片对称 → 修末端 + 折角)
   M3_medial  skimage medial_axis(真中轴) + 最长路径 + 弧长重采样
-  M4_snap    M0 + cap-aware 末端修正(node0 重算为 cap 中心, 末端几点沿中心线方向重平滑)
+  M4_snap    M0 + cap-aware 末端修正(nodeN-1 重算为 cap 中心, 末端几点沿中心线方向重平滑)
   M5_morph   形态学闭运算圆角 + M0(对照: 治标)
 
 用法:
@@ -63,15 +63,15 @@ def resample_arc(pts, n_points):
     return out
 
 
-def order_tip_first(pts):
-    """重排使 tip(最大 row=图底) 在前, 与 extract_skeleton_2d 约定一致。"""
+def order_base_first(pts):
+    """重排使 base(最小 row=图顶) 在前，与公开 base→tip 合同一致。"""
     pts = np.asarray(pts, np.float64)
     if len(pts) < 2:
         return pts
-    tip = int(np.argmax(pts[:, 1]))
-    if tip == 0:
+    base = int(np.argmin(pts[:, 1]))
+    if base == 0:
         return pts
-    if tip == len(pts) - 1:
+    if base == len(pts) - 1:
         return pts[::-1]
     return pts[np.argsort(-pts[:, 1])]
 
@@ -87,7 +87,7 @@ def m1_dwrow(mask, n):
     H, W = mask.shape
     edt = distance_transform_edt(mask)
     coords = []
-    for row in range(H - 1, -1, -1):
+    for row in range(H):
         cs = np.where(mask[row] > 0.5)[0]
         if len(cs):
             w = edt[row, cs] + 1e-6
@@ -98,7 +98,7 @@ def m1_dwrow(mask, n):
 
 
 def m2_pca(mask, n):
-    """PCA 主轴 + 垂直切片质心。对倾斜管, 垂直切片对称 → cap 中点, 修 node0+折角。"""
+    """PCA 主轴 + 垂直切片质心。对倾斜管切片对称，修正末端与折角。"""
     ys, xs = np.where(mask > 0.5)
     if len(xs) < 5:
         return np.zeros((n, 2), np.float32)
@@ -121,7 +121,7 @@ def m2_pca(mask, n):
         if sel.sum() > 0:
             centerline.append(pts[sel].mean(0))
     centerline = np.array(centerline, np.float64)
-    centerline = order_tip_first(centerline)
+    centerline = order_base_first(centerline)
     return resample_arc(centerline, n)
 
 
@@ -177,12 +177,12 @@ def m3_medial(mask, n):
     path = _longest_path(skel)
     if path is None:
         return np.zeros((n, 2), np.float32)
-    path = order_tip_first(path)
+    path = order_base_first(path)
     return resample_arc(path, n)
 
 
 def m4_snap(mask, n):
-    """M0 + cap-aware 末端修正。node0 重算为 cap 中心(dist 峰值), 末端3点沿中心线方向重平滑。"""
+    """M0 + cap-aware 末端修正。nodeN-1 重算为 cap 中心并重排末端相邻点。"""
     from scipy.ndimage import distance_transform_edt
     sk = _m0_current(mask, n).astype(np.float64)
     if np.abs(sk).max() == 0:
@@ -196,15 +196,15 @@ def m4_snap(mask, n):
         ly, lx = np.unravel_index(sub.argmax(), sub.shape)
         tip_col, tip_row = float(lx), float(ly + lo)
     else:
-        tip_col, tip_row = sk[0, 0], sk[0, 1]
-    sk[0] = [tip_col, tip_row]
+        tip_col, tip_row = sk[-1, 0], sk[-1, 1]
+    sk[-1] = [tip_col, tip_row]
     if n >= 5:
-        anchor = sk[3]
-        d = sk[0] - anchor
+        anchor = sk[-4]
+        d = sk[-1] - anchor
         L = np.hypot(*d)
         if L > 1e-6:
-            sk[1] = sk[0] - d * (1 / 3.0)
-            sk[2] = sk[0] - d * (2 / 3.0)
+            sk[-3] = anchor + d * (1 / 3.0)
+            sk[-2] = anchor + d * (2 / 3.0)
     return sk.astype(np.float32)
 
 
@@ -230,8 +230,8 @@ def m6_perptip(mask, n):
     if len(xs) < 10:
         return sk.astype(np.float32)
     pts = np.column_stack([xs.astype(float), ys.astype(float)])  # (col,row)
-    far = sk[min(7, n - 1)]    # body 节点(偏 base)
-    near = sk[min(3, n - 1)]   # body 节点(偏 tip)
+    far = sk[-min(8, n)]        # body 节点(偏 base)
+    near = sk[-min(4, n)]       # body 节点(偏 tip)
     seg = near - far           # 指向 tip 的局部轴方向
     L = float(np.hypot(*seg))
     if L < 1e-6:
@@ -242,11 +242,11 @@ def m6_perptip(mask, n):
     slab = proj >= proj.max() - 0.4 * w     # 尖端垂直切片
     if int(slab.sum()) < 3:
         return sk.astype(np.float32)
-    node0 = pts[slab].mean(0)               # 垂直切片质心 = 中心线中点
-    sk[0] = node0
-    a = sk[min(3, n - 1)]                    # 沿 body→node0 重布 node1,2 消折角
-    sk[1] = node0 + (a - node0) / 3.0
-    sk[2] = node0 + (a - node0) * 2.0 / 3.0
+    tip_point = pts[slab].mean(0)            # 垂直切片质心 = 中心线中点
+    anchor = sk[-min(4, n)]
+    sk[-1] = tip_point
+    sk[-3] = anchor + (tip_point - anchor) / 3.0
+    sk[-2] = anchor + (tip_point - anchor) * 2.0 / 3.0
     return sk.astype(np.float32)
 
 
@@ -302,11 +302,11 @@ def tip_truth(mask):
 
 
 def tip_kink_deg(sk):
-    """node0-1-2 处方向突变(°): node0→node1 与 node1→node2 的转角。平滑≈0。"""
+    """末端三个节点处方向突变(°)，平滑中心线接近 0。"""
     if len(sk) < 3 or np.abs(sk).max() == 0:
         return np.nan
-    a = sk[0] - sk[1]
-    b = sk[1] - sk[2]
+    a = sk[-1] - sk[-2]
+    b = sk[-2] - sk[-3]
     la, lb = np.hypot(*a), np.hypot(*b)
     if la < 1e-6 or lb < 1e-6:
         return np.nan
@@ -431,7 +431,7 @@ def main(argv=None):
                 agg[name]["fail"] += 1
                 skels.append((name, sk, color))
                 continue
-            e = abs(sk[0, 0] - truth_col)
+            e = abs(sk[-1, 0] - truth_col)
             agg[name]["err"].append((e, bend))
             agg[name]["kink"].append(tip_kink_deg(sk))
             agg[name]["body_dev"].append(body_dev(sk0, sk))

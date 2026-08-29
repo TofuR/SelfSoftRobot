@@ -55,6 +55,17 @@ def load_openloop_model(checkpoint_path: str, device: str = "cpu") -> dict:
     missing = [name for name in required if name not in config]
     if missing:
         raise ValueError(f"config.json 缺少部署字段: {missing}")
+    contract = {
+        "model_contract_version": 2,
+        "node_order": "base_to_tip",
+        "spatial_propagation_direction": "base_to_tip",
+        "gl_kernel_alignment": "current_at_window_end",
+    }
+    actual = {key: config.get(key) for key in contract}
+    if actual != contract:
+        raise ValueError(
+            "checkpoint 与当前 GL/节点方向合同不一致，请重新前处理并训练；"
+            f" required={contract}, actual={actual}")
     state_dict = _migrate_gru_keys(torch.load(
         checkpoint, map_location=device, weights_only=True))
     model = OpenLoopTransitionModel(

@@ -10,6 +10,7 @@ from typing import Any
 
 from ..contracts.io import atomic_write_json, read_json
 from ..contracts.models import ActionPlan, Anchor, ModelDescriptor, SafetyPolicy, Scene
+from ..contracts.validation_setup import ValidationSetup
 from ..execution.preflight import PreflightResult, validate_plan
 
 
@@ -54,6 +55,7 @@ class ExperimentSession:
     anchor: Anchor | None = None
     scene: Scene = field(default_factory=Scene)
     safety: SafetyPolicy = field(default_factory=SafetyPolicy)
+    validation_setup: ValidationSetup | None = None
     plan: ActionPlan | None = None
     state: SessionState = SessionState.IDLE
     events: list[dict[str, Any]] = field(default_factory=list)
@@ -89,6 +91,8 @@ class ExperimentSession:
             anchor=Anchor.from_dict(value["anchor"]) if value.get("anchor") else None,
             scene=Scene.from_dict(value.get("scene", {})),
             safety=SafetyPolicy.from_dict(value.get("safety", {})),
+            validation_setup=(ValidationSetup.from_dict(value["validation_setup"])
+                              if value.get("validation_setup") else None),
             plan=ActionPlan.from_dict(value["plan"]) if value.get("plan") else None,
             state=SessionState.IDLE,
             events=list(value.get("events", [])),
@@ -126,6 +130,35 @@ class ExperimentSession:
         self.plan = None
         self._record("anchor_changed", anchor_id=anchor.anchor_id)
         self._return_to_idle_if_ready("anchor changed")
+        self.save_snapshot()
+
+    def set_validation_setup(self, setup: ValidationSetup) -> None:
+        """保存在线感知合同；配置身份变化会使相机 Anchor 与计划失效。"""
+        self._guard_editable("validation_setup")
+        changed = self.validation_setup is None or \
+            self.validation_setup.digest != setup.digest
+        self.validation_setup = setup
+        if changed:
+            self.anchor = None
+            self.plan = None
+            self._record("validation_setup_changed", setup_id=setup.setup_id,
+                         setup_digest=setup.digest)
+            self._return_to_idle_if_ready("validation setup changed")
+        self.save_snapshot()
+
+    def invalidate_validation_setup(self, reason: str) -> None:
+        """相机来源改变时清除其坐标与在线观测状态。"""
+        if self.replay_only:
+            return
+        self._guard_editable("validation_setup")
+        if self.validation_setup is None:
+            return
+        self.validation_setup = None
+        if self.anchor is not None and self.anchor.quality.get("kind") == "camera_live":
+            self.anchor = None
+        self.plan = None
+        self._record("validation_setup_invalidated", reason=reason)
+        self._return_to_idle_if_ready(reason)
         self.save_snapshot()
 
     def set_scene(self, scene: Scene) -> None:
@@ -166,6 +199,12 @@ class ExperimentSession:
             raise RuntimeError("replay session 只读；请新建实验后重新规划")
         if self.model is None or self.anchor is None:
             raise RuntimeError("规划前必须加载模型并建立 anchor")
+        if self.anchor.quality.get("kind") == "camera_live":
+            if self.validation_setup is None:
+                raise RuntimeError("相机 Anchor 缺少验证实验配置")
+            if self.anchor.quality.get("validation_setup_id") != \
+                    self.validation_setup.setup_id:
+                raise RuntimeError("相机 Anchor 对应的 ROI/感知配置已变化")
         self.plan = None
         self.transition(SessionState.PLANNING, "planning started")
 
@@ -208,6 +247,8 @@ class ExperimentSession:
             "anchor": self.anchor.to_dict() if self.anchor else None,
             "scene": self.scene.to_dict(),
             "safety": self.safety.to_dict(),
+            "validation_setup": (self.validation_setup.to_dict()
+                                 if self.validation_setup else None),
             "plan": self.plan.to_dict() if self.plan else None,
             "events": self.events,
             "replay_only": self.replay_only,

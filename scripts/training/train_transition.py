@@ -23,6 +23,7 @@ gt 与 open_loop 是**同一个网络**（都派生自 StateTransitionSpatialMod
 import argparse
 import glob
 import os
+import random
 import sys
 
 # 默认 cuda1（按用户要求：测试实验用 cuda1）；须在 import torch 前设
@@ -31,10 +32,12 @@ if "CUDA_VISIBLE_DEVICES" not in os.environ:
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import torch  # noqa: E402
+import numpy as np  # noqa: E402
 
 from src.config.args import (  # noqa: E402
     add_common_args, resolve_training_config, build_common_overrides)
-from src.utils.data_detect import detect_action_dim, detect_n_nodes  # noqa: E402
+from src.utils.data_detect import detect_n_nodes  # noqa: E402
+from src.data.action_view import resolve_action_contract  # noqa: E402
 from src.training.trainer_unified import UnifiedTrainer  # noqa: E402
 
 
@@ -55,6 +58,13 @@ def build_parser():
     parser.add_argument("--dense_step_weight", type=str, default="uniform",
                         choices=["uniform", "linear"],
                         help="dense 监督权重: uniform(等权) | linear(递增,末步权重大)")
+    parser.add_argument(
+        "--action-channels", default="auto",
+        help="Dataset 模型动作视图；auto 读取 NPZ 的 model_action_channels，"
+             "也可显式写 0,1,3,4")
+    parser.add_argument(
+        "--experiment-dir", default=None,
+        help="本阶段的实验根目录；流水线传入 stages/gt 或 stages/open_loop")
     # ── open_loop 专属（gt 模式忽略）──
     parser.add_argument("--init_from", type=str, default=None,
                         help="[open_loop] 热启动 checkpoint（默认自动找最新 "
@@ -74,9 +84,20 @@ def build_parser():
 def main(argv=None):
     args = build_parser().parse_args(argv)
     config = resolve_training_config(build_common_overrides(args))
+    seed = config.get("optimization", {}).get("seed")
+    if seed is not None:
+        seed = int(seed)
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        print(f"Reproducibility seed: {seed}")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    action_dim = detect_action_dim(args.data_dir)
+    action_contract = resolve_action_contract(args.data_dir, args.action_channels)
+    action_dim = action_contract.model_action_dim
+    config["action_view"] = action_contract.to_dict()
     n_nodes = args.n_nodes or detect_n_nodes(args.data_dir)
     temp_cfg = config["temporal"]
     hidden_dim = temp_cfg["hidden_dim"]
@@ -116,6 +137,8 @@ def main(argv=None):
     print(f"\nModel: {model_tag}（mode={args.mode}）")
     print(f"  Action dim: {action_dim}, N nodes: {n_nodes}, Encoder: {args.encoder}, "
           f"z_dim: {args.z_dim}, episode_len(K): {args.episode_len}")
+    print(f"  Action view: raw={action_contract.raw_action_dim}D -> "
+          f"channels={action_contract.model_action_channels} -> model={action_dim}D")
     print(f"  {tf_info}, dense_step_weight: {args.dense_step_weight}")
     print(f"  Parameters: {n_params:,}")
     print(f"  Active losses: {spec.phases[0].active_losses}")
@@ -124,14 +147,16 @@ def main(argv=None):
     from src.data.dataset_spatial import StateTransitionDataset
     norm_dataset = StateTransitionDataset(
         args.data_dir, seq_len=temp_cfg["window_size"],
-        episode_mode=True, episode_len=args.episode_len)
+        episode_mode=True, episode_len=args.episode_len,
+        action_channels=action_contract.model_action_channels)
     pc_center, pc_scale = norm_dataset.get_normalization_params()
     model.set_normalization(pc_center, pc_scale, norm_dataset.norm_factor)
+    config["state_view"] = norm_dataset.get_state_contract()
 
     data_dirs = {"sequence": args.data_dir}
     trainer = UnifiedTrainer(model, view_strategy=None, config=config,
                              model_tag=model_tag)
-    trainer.train(data_dirs)
+    trainer.train(data_dirs, exp_dir=args.experiment_dir)
 
 
 def _ckpt_action_dim(ckpt_path):
@@ -168,20 +193,34 @@ def _warm_start_open_loop(model, init_from, device, action_dim=None):
        上 → state_mlp size mismatch 崩溃。传 action_dim 后只挑匹配的 checkpoint。
     """
     if init_from is None:
-        cands = sorted(glob.glob(os.path.join(
+        cands = glob.glob(os.path.join(
             "train_log", "gt_transition", "*", "phase_gt_transition", "model",
-            "best_model.pt")))
+            "best_model.pt"))
         if action_dim is not None and cands:
             cands = [c for c in cands if _ckpt_action_dim(c) == action_dim]
         if cands:
-            init_from = cands[-1]
+            # exp_* 的数字后缀不能按字符串排序（exp_9 会排在 exp_13 后面）。
+            # mtime 也能保证顺序训练时选到刚完成的 GT checkpoint。
+            init_from = max(cands, key=os.path.getmtime)
             print(f"[warm-start] 自动检测 gt_transition checkpoint (action_dim={action_dim}): {init_from}")
     if init_from is None:
         print(f"[warm-start] 未找到 action_dim={action_dim} 的 gt_transition checkpoint — 从头冷启动。")
         return
     if not os.path.exists(init_from):
         raise FileNotFoundError(f"--init_from 不存在: {init_from}")
-    from src.utils.model_loader import _migrate_gru_keys
+    from src.utils.model_loader import _load_config_json, _migrate_gru_keys
+    saved_cfg = _load_config_json(init_from) or {}
+    required_contract = {
+        "model_contract_version": model.model_contract_version,
+        "node_order": model.node_order,
+        "spatial_propagation_direction": model.spatial_propagation_direction,
+        "gl_kernel_alignment": model.gl_kernel_alignment,
+    }
+    actual_contract = {key: saved_cfg.get(key) for key in required_contract}
+    if actual_contract != required_contract:
+        raise ValueError(
+            "GT 热启动 checkpoint 与当前时间/节点方向合同不一致；"
+            f" required={required_contract}, actual={actual_contract}")
     sd = torch.load(init_from, map_location=device, weights_only=True)
     sd = _migrate_gru_keys(sd)
     incompatible = model.load_state_dict(sd, strict=False)

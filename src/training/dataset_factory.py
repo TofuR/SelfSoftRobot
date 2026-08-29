@@ -105,6 +105,8 @@ def create_dataset(dataset_type: str, data_dir: str, config: dict,
             data_dir,
             seq_len=seq_len,
             pairs="smooth" in phase_spec.active_losses,
+            action_channels=config.get("action_view", {}).get(
+                "model_action_channels"),
         )
 
     elif dataset_type == "state_transition":
@@ -117,6 +119,8 @@ def create_dataset(dataset_type: str, data_dir: str, config: dict,
             pairs="smooth" in phase_spec.active_losses,
             episode_mode=getattr(phase_spec, "use_episode_mode", False),
             episode_len=getattr(phase_spec, "episode_len", 20),
+            action_channels=config.get("action_view", {}).get(
+                "model_action_channels"),
         )
 
     else:
