@@ -235,8 +235,8 @@ python scripts/evaluation/eval_real_quant.py \
 >
 > **过渡期说明**:现有 `exp_20260714_7/8` 与本文件其余部分描述的 2D 免标定路线**仍然有效**(它是 3D 之前的基线),只是不再是终点。完整决策记录见 [`docs/archived/2026-07-28_archive_manifest.md`](archived/2026-07-28_archive_manifest.md) §3。
 | 8 | **action 归一到 [0,1] 不是 [-1,1]**(气动单向,ch0 只充气 0→150kPa;映射到 [-1,1] 会把"静止"和"全反向"塌成同一点)。上界优先用 `meta.json hi6[ch]`(操作极限)而非数据 max。 | 用 [-1,1] → OOD 负值预测。 |
-| 9 | **节点误差只用 `[:2]`(col,row 平面)**;反归一 `px = norm*pc_scale + pc_center`。整体形态误差只能算 px;末端误差 px + mm(mm 经 NDI↔GT node0 px 最小二乘 2D 仿射)。 | 混用 px/mm → 量纲错。 |
-| 10 | **tip_fix 默认开且必须开**:修末端 node0 落 mask 尖角(根因是逐行质心对倾斜 cap 做**水平**切片→落在角不是中点;修法是沿局部轴**垂直**切片)。 | 关掉 → 末端偏 ~6px,34% 帧受影响。别换通用骨架化(medial_axis 7.50px vs tip_fix 0.80px)。 |
+| 9 | **节点合同为 `node0=base -> nodeN-1=tip`**；节点误差只用状态平面前两维，NDI 末端与 GT `nodeN-1` 配对。 | 节点方向与量纲合同需随 NPZ 一起验证。 |
+| 10 | **tip_fix 默认开**:修正末端 `nodeN-1` 的端帽中心。 | 用骨架 QC 确认末端落在宽边中心。 |
 | 11 | **关节节点 id 漂移**(实测 19-27,中位 20,仅 64% 帧在 node20)——arc-length 重采样到 N 点时关节落点会变。 | 用固定 node id 做静态段共识 → 失败;`clean_transition_npz` 用关节**绝对位置**锚定。 |
 | 12 | **n_points 默认 15 不是 31**(老 docstring 仍写 31)。`--n_nodes` 默认 None=从 npz 自检。 | 假设 31 → 维度错。 |
 
@@ -339,7 +339,7 @@ planner 优化出的动作**可能是真机不可达的**。三层分解:
 | **z (latent)** | 可学习迟滞潜变量(GRUCell 跨帧演化,无 GT,从 skeleton loss 学) |
 | **delta_scale / delta_scale_max** | 增量预测缩放系数(可学习,init 0.1)/ 其上界(gt=inf,open_loop=1.0) |
 | **teacher_forcing (TF)** | 训练时喂真实 s(tf=1)还是模型预测(tf=0)作 s_{t-1} |
-| **tip_fix** | 末端 node0 垂直尖端切片修正(修弯管 cap 角落偏移) |
+| **tip_fix** | 末端 nodeN-1 垂直尖端切片修正 |
 | **K / K_max** | 规划步数 / 模型可信视野上限(=滚动重观测频率) |
 | **step_budget_px** | 变长 K 的单步位移预算(默认 4px ≈ delta_scale_max×pc_scale) |
 | **drift_by_k** | rollout 误差随步数的累积比(rollout/onestep) |

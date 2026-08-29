@@ -110,7 +110,7 @@ ETH Zurich (RA-L 2024) 的方法：
 
 ### 0. 这一节在做什么 + 为什么先做这个
 
-> 🔁 **2026-07 更新（当前首条落地路线）**：实物已落地的**首条**路线是**免标定单相机 2D 骨架**——不做多视角相机标定/三角化，直接用 2D 图像骨架 `[col,row,0]` 作 state、电机位置归一化 `[0,1]` 作 action 训练状态转移，**整体形态误差只能 px；末端 px 误差经 NDI 仿射自标定（GT node0 px ↔ NDI x,y mm 最小二乘）换算成 mm**。NDI 6DOF tracker 作**独立度量验证**（非训练输入）。完整工作流（mask 分割 → `masks_to_transition_npz` → `clean_transition_npz` → `train_transition --mode gt|open_loop` → `eval_real_quant` → `visualize_real_overlay`）见
+> 🔁 **2026-08 更新**：实物 2D 骨架使用 `node0=base -> nodeN-1=tip`；NDI 末端与 GT `nodeN-1` 配对。完整工作流（mask 分割 → `masks_to_transition_npz` → `train_transition --mode gt|open_loop` → `eval_real_quant` → `visualize_real_overlay`）见
 > [`docs/research/2026-07-10-real-data-2d-workflow.md`](../research/2026-07-10-real-data-2d-workflow.md)。
 > 本节下面的 `--planar-lift` 2D→3D 升维与《实物数据采集平台》的多视角标定三角化**仍是另一条可行路线**（离面弯曲 2-DOF / 部署期在线感知修正需要），不删。
 

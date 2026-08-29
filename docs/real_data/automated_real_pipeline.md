@@ -1,5 +1,10 @@
 # 真实序列自动前处理、训练与前向模型验证流程
 
+模型导出后的相机 ROI、在线 Anchor、毫米场景、规划、执行和再观测流程见
+[`real_validation_online_workflow.md`](real_validation_online_workflow.md)。
+单帧在线分割、SAM2因果前向和离线双向标签的实测比较见
+[`online_segmentation_benchmark_20260824.md`](online_segmentation_benchmark_20260824.md)。
+
 ## 1. 流水线边界
 
 本流程把一次 `real_capture` 序列转换为可训练的状态转移数据，并完成 GTObserved 与
@@ -12,6 +17,16 @@ SAM2 mask 与由其提取的中心线定义为二维视觉监督标签。独立�
 
 自动流水线保存抽样 QC 图。训练准入由可确定的文件、时序、形状、数值和坐标合同检查
 决定；QC 图用于定位异常阶段。
+
+每次完整前处理还会从同一个真实 frame 生成逐阶段示例。程序优先选择质量最高的已选
+SAM2 锚帧，并在 `real_capture/data/derived/<seq>/qc_pipeline_example/` 保存：
+
+```text
+00_pipeline_overview.png     # 同一帧的全流程总览
+01_...png ～ 17_...png       # 每个阶段的独立图片
+stage_manifest.json          # frame、chunk、锚帧、传播方向和参数
+README.md                    # 阶段中文索引
+```
 
 运行阶段的决策源是 JSON 配置、固定图像算法和确定性检查。LLM 的角色集中在算法开发、
 异常根因分析和论文表述；后续批次由同一程序与数据合同重复处理。
@@ -98,7 +113,7 @@ bash scripts/real/start_training_tmux.sh \
 | `gpus` | SAM2 shard 使用的物理 GPU 编号 |
 | `chunk_size` | SAM2 独立传播块长度，默认 200 帧 |
 | `n_points` | 中心线节点数，当前实验为 15 |
-| `segment_lengths` | tip 到 base 各物理段的相对长度，当前为 `[1,1]` |
+| `segment_lengths` | base 到 tip 各物理段的相对长度，当前为 `[1,1]` |
 | `base_anchor` | 可选源相机基座坐标 `[x,y]` |
 | `mask_close_k` | 中心线提取前闭运算椭圆核，默认 11 |
 | `max_interpolated_fraction` | 自动插值骨架帧比例上限，默认 0.05 |
@@ -242,6 +257,16 @@ chunk 之间的 state 相互隔离，各 chunk 独立承担传播误差。多 GP
 `chunk_index % shard_count` 分配 chunk，各 shard 写入互不重叠的帧号。完整 chunk 已存在
 时直接跳过，因此相同空间合同下支持断点续算。
 
+分块同时约束 video state 的显存/内存规模和单个锚点的传播距离，并为长序列提供并行与
+断点恢复边界。`chunk_size=200` 表示每 200 帧重新选择一次高质量提示，它是离线标签生成
+参数，不是控制器的规划窗口。
+
+双向传播中，锚帧之后使用正向传播，锚帧之前使用反向传播。反向部分读取未来帧，因此
+属于离线、非因果处理。严格实时控制只能在每张新图到达后执行单帧分割，或维护 SAM2
+前向流式状态；带固定回看窗口的反向修正会引入相应视频时长的控制延迟。当前
+`real_validation` 使用已确认 ROI 内的 `white_on_blue`/背光单帧分割和同一套15节点骨架
+提取，满足因果在线执行；SAM2 双向结果用于训练监督标签和离线质量检查。
+
 SAM2 阶段结束后，入口程序自动检查裁剪图与 mask 的帧号集合完全相同、mask 全部可读、
 每个 `failures_shardK.txt` 为空，并汇总 mask 面积的 min、p05、p50、p95 和 max。
 
@@ -254,7 +279,7 @@ SAM2 阶段结束后，入口程序自动检查裁剪图与 mask 的帧号集合
 2. 把中轴像素构造成 8 邻接无向图；
 3. 自动定向模式在各连通分量中取图直径最长的路径；
 4. 显式基座模式取离锚点最近的中轴像素为 base，并取图中最远点为 tip；
-5. 按 `node0=tip → nodeN-1=base` 定向路径。
+5. 按 `node0=base → nodeN-1=tip` 定向路径。
 
 细化中心线通常停在长条 mask 内部，也可能在倾斜端帽处分向角点。默认双端端帽修正使用
 距离变换估计局部主体宽度，在端部内侧约 0.65–1.65 个管径的区间估计局部切向，然后在
@@ -374,8 +399,10 @@ trial_YYYYMMDD_NNN/
 └── artifacts.json
 ```
 
-默认每 5 epoch 保存 checkpoint，每 10 epoch 对当前 best checkpoint 做定量评价与照片叠图。
-阶段结束后再次评价该阶段 best checkpoint。默认 epoch 为 GT 60、OpenLoop 240。
+默认每 5 epoch 保存 checkpoint，每 10 epoch 对该 epoch 快照做定量评价与照片叠图。
+周期评价以验证集全节点均误选出 `best_eval_model.pt`，阶段结束后的定量评价、
+叠图和部署清单均使用该权重。`best_model.pt` 保留为训练 loss 最低点记录。
+默认 epoch 为 GT 60、OpenLoop 240。
 
 ### 5.2 GTObserved 阶段
 
@@ -453,6 +480,8 @@ NDI 与帧时间存在时，GTObserved best 评价拟合当前序列状态末端
 ```
 
 OpenLoop 叠图还可显示同一模型的 one-step 预测，便于观察漂移从窗口的哪一步开始增长。
+窗口第 0 帧是真实观测 Anchor，叠图标记为 `observed anchor`；误差曲线和汇总从
+第 1 帧模型预测开始统计。
 
 上述结果属于前向模型验证。Planner 预测终态到目标的距离属于离线规划残差。机器人执行
 规划动作后，由新相机观测骨架与目标形态计算的差值才属于真实控制误差。
@@ -466,6 +495,7 @@ OpenLoop 叠图还可显示同一模型的 one-step 预测，便于观察漂移�
 | 候选分割 | `masks_candidate/`、`anchor_manifest.csv`、逐阶段 QC |
 | SAM2 | `sam2/masks/<seq>_full/*.png`、面积曲线、传播对比图 |
 | 中心线 | `qc_skeleton/skeleton_metrics.csv`、中心线叠图 |
+| 单帧全流程 | `qc_pipeline_example/00_pipeline_overview.png`、各阶段独立图与清单 |
 | Dataset | train/val NPZ、`dataset_manifest.json` |
 | GTObserved | best/final/checkpoint、loss log、周期和最终评价 |
 | OpenLoop | best/final/checkpoint、loss log、drift 与照片叠图 |
@@ -496,3 +526,18 @@ real_capture/data/derived/<seq>/PREPROCESS_REPORT.md
 ```
 
 每次训练的实际命令保存到 trial 根目录的 `commands.sh`。
+
+完成试次的可视化可直接复现：
+
+```bash
+# 前向定量评价与照片叠图
+bash <trial>/commands.sh
+
+# 已保存离线规划工件的形态、动作、残差动图
+python scripts/evaluation/export_offline_control_demo.py \
+  --plan-dir <trial>/evaluations/open_loop/<plan_name> \
+  --out output/real_control_demo/<demo_name> --target-frame <val_index>
+```
+
+`commands.sh` 会重新执行训练。只复现已有权重的评价时，从文件中复制
+`eval_real_quant.py`和`visualize_real_overlay.py`两条命令执行。

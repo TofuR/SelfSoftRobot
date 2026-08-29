@@ -127,15 +127,15 @@ python scripts/real/repair_masks.py --seq seq_20260627_163921 --limit 50
 
 ### 4.1 算法(三步)
 
-1. **逐行质心**:每行白像素列均值,底→顶排列成有序点列。
+1. **逐行质心**:每行白像素列均值,顶→底排列成 base→tip 有序点列。
 2. **弧长重采样**:沿点列弧长均匀重采样到 N 个节点(默认 N=15)。
-3. **末端 corner 修复**(`_perpendicular_tip_fix`):弯管 cap 倾斜时,逐行质心会把末端 node0 落到 cap 尖角根(约 34% 帧);改为"垂直于局部轴的尖端切片质心"=cap 中点。
+3. **末端 corner 修复**(`_perpendicular_tip_fix`):用垂直于局部轴的尖端切片质心定位末端 `nodeN-1`。
 
 ### 4.2 为什么末端要单独修
 
-弯管的半透明 cap 在水平切片(逐行)里是倾斜的,水平质心落在 cap 角落而非中心。`tip_fix` 改用垂直于局部骨架轴的切片取质心,把 node0 拉回 cap 中点。
+弯管的半透明 cap 在水平切片里是倾斜的。`tip_fix` 改用垂直于局部骨架轴的切片取质心,把 nodeN-1 拉回 cap 中点。
 
-**7 法对比**(独立真值 + bend 分层,`scripts/real/compare_skeleton_methods.py`)证明 tip_fix 最优:corner 帧 node0 偏移 −71%。
+**7 法对比**(独立真值 + bend 分层,`scripts/real/compare_skeleton_methods.py`)证明 tip_fix 使 corner 帧末端 nodeN-1 偏移降低 71%。
 
 ### 4.3 关键参数(模块化,一处改全链路)
 
@@ -280,7 +280,7 @@ CUDA_VISIBLE_DEVICES=1 python scripts/evaluation/eval_real_quant.py \
 
 这是"免标定但能量出 mm"的核心。模型 forward 在归一化空间运算,反归一化 `world = norm·pc_scale + pc_center` 回到像素 [col, row];z 通道 `pc_scale≈eps` 使其恒≈0。
 
-NDI 末端 (x,y,z mm) 与图像骨架 node0 (col,row px) 是同一物理点、逐帧配对。末端在平面内做 ~1-DOF 弯曲(NDI 实测 x 扫 ~24 mm、y 扫 ~9 mm)。用全部帧 **(GT node0 px ↔ NDI x,y mm)** 最小二乘拟合 2D 仿射 `A: (col,row,1)→(x,y)`:
+NDI 末端 (x,y,z mm) 与图像骨架 nodeN-1 逐帧配对。
 
 - **拟合残差 RMS = 标定噪声底**(mask 骨架化 + NDI 噪声 + 非平面)。
 - 模型末端像素经同一 `A` → mm,与 NDI 比 → **末端毫米误差**。

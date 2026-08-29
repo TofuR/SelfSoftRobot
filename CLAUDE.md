@@ -93,7 +93,7 @@ python scripts/evaluation/visualize_real_overlay.py # model prediction overlaid 
 python scripts/evaluation/inspect_real_data.py      # skeleton grid diagnostics
 ```
 
-Note: in the real-data pipeline `state` is in image pixels `[col,row,0]`; no camera matrix / intrinsic projection is used (no metric 3D or intrinsics in this calibration-free route). Whole-shape error is reported in px; end-effector error in both px and mm (mm via NDI affine self-calibration against GT `node0` px). Backing utilities: `src/utils/skeleton_2d.py` (2D skeleton + `_perpendicular_tip_fix`), `src/evaluation/transition_metrics.py` (rollout + `drift_by_k`), `src/evaluation/shape_metrics.py` (chamfer/hausdorff).
+Note: the real-data skeleton contract is `node0=base -> nodeN-1=tip`. Whole-shape error is reported in the model state unit; NDI endpoint evaluation is paired with GT `nodeN-1`. Backing utilities: `src/utils/skeleton_2d.py`, `src/evaluation/transition_metrics.py`, and `src/evaluation/shape_metrics.py`.
 
 ## Architecture
 

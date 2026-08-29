@@ -167,11 +167,11 @@ python scripts/real/masks_to_transition_npz.py \
 `--no-endpoint-fix` 保留原始细化端点。旧 `row_centroid` 的 `--tip-fix` 仍单独保留，
 只修 node0，不参与现代双端修正。
 
-节点顺序固定为 `node0=tip -> nodeN-1=base`。两段等长、15节点时：
+节点顺序固定为 `node0=base -> nodeN-1=tip`。两段等长、15节点时：
 
 ```text
-distal:   node0..node7   （7个区间）
-proximal: node7..node14  （7个区间）
+proximal: node0..node7   （7个区间）
+distal:   node7..node14  （7个区间）
 joint:    node7          （两段共享）
 ```
 
@@ -181,7 +181,7 @@ joint:    node7          （两段共享）
 NPZ除 `positions` 和原始六维 `actions` 外，还保存：
 
 ```text
-node_order=tip_to_base
+node_order=base_to_tip
 skeleton_method
 endpoint_fix
 segment_lengths
@@ -232,7 +232,7 @@ estimated_error_mm = image_error_px * mm_per_px
 当前 `segment_lengths/segment_intervals/joint_node_indices` 不是只为着色：它们把物理段边界
 固定到稳定的节点编号，并用于NPZ数据合同、QC和分段/关节误差统计。但是训练数据集只向模型
 提供整条 `(N,3)` 骨架和投影后的D维动作；状态转移模型只使用均匀节点位置嵌入，并沿整条
-tip→base序列用同一个GRU传播。当前没有 segment embedding、关节标志、每段动作编码器、
+base→tip序列用同一个GRU传播。当前没有 segment embedding、关节标志、每段动作编码器、
 每段刚度参数或关节连续性专用loss。因此模型会从数据中隐式学习两段耦合，但尚未显式使用
 “这是两段机器人”的结构先验。
 
@@ -347,7 +347,7 @@ python scripts/evaluation/eval_horizon.py \
 
 ## 7. 目标形态逆规划与执行
 
-完整形态目标使用与模型一致的15个节点，顺序固定为`tip -> base`。工作台将当前相机骨架和
+完整形态目标使用与模型一致的15个节点，顺序固定为`base -> tip`。工作台将当前相机骨架和
 最近`H`步`applied6`冻结为anchor，shooting planner直接优化`K × action_dim`个独立kPa动作，
 再按`channel_source6`展开为六路压力。本阶段的两对联动关系为：
 
@@ -368,7 +368,7 @@ python scripts/control/run_avoidance.py \
   --checkpoint <OPEN_LOOP_BEST_MODEL_PT> \
   --data-dir data/real_seq/<seq>/val \
   --t-init 120 --target-frame 160 \
-  --target-tolerance-px 2 --auto-k --k-min 4 --k-max 40 \
+  --target-tolerance 2 --auto-k --k-min 4 --k-max 40 \
   --n-iter 400 --n-restarts 4 \
   --rise 50,50,50,50,50,50 \
   --fall 50,50,50,50,50,50 \

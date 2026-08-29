@@ -31,7 +31,7 @@ ROI 属于分割层，可以随相机和序列调整。SAM2 mask 和骨架先恢
 
 ## 坐标定义
 
-节点仍按 `node0=tip → node14=base` 排列。对源相机像素点 `p`：
+节点按 `node0=base → node14=tip` 排列。对源相机像素点 `p`：
 
 ```text
 origin = 序列中所有 base 节点的中位位置

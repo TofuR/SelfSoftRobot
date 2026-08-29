@@ -264,7 +264,7 @@ python real_validation/perception_probe.py --source dir --frames-dir <帧目录>
 |---|---|
 | **gt / open_loop** | teacher_forcing=1.0(精度上界)/ =0(开环 rollout,部署目标)。同网络不同 TF |
 | **state / skeleton** | 形态表示。实物 = 图像像素 `[col,row,0]` |
-| **tip_fix** | 末端 node0 垂直尖端切片修正(修弯管 cap 角落偏移) |
+| **tip_fix** | 末端 nodeN-1 垂直尖端切片修正 |
 | **deploy_manifest** | 部署契约文件(action_scale_kpa / train_dt / mask_source / k_safe_table_px 等) |
 | **K / K_safe** | 规划步数 / 模型可信视野上限(=滚动重观测频率) |
 | **pc_center / pc_scale** | 骨架归一化的平移/缩放(3 向量 buffer,随 checkpoint) |

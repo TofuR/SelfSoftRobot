@@ -1,5 +1,8 @@
 # 2026-08-19 约 10 Hz 真实数据处理与训练手册
 
+> 2026-08-26 节点合同升级：本文记录的旧派生 NPZ 与 checkpoint 已归档。
+> 从原始序列重跑自动前处理后，节点统一为 `node0=base -> node14=tip`。
+
 ## 1. 数据范围与时间合同
 
 本轮使用两个同步采集序列：
@@ -55,7 +58,7 @@ x=220, y=68, w=300, h=300
 
 该 ROI 覆盖 base 连接处、完整两段机器人和末端，同时保持机器人位于画面中央。两段数据均
 使用 SAM2 mask、最长中轴主路径、双端端帽中心修正和 15 节点弧长重采样。节点顺序为
-`node0=tip → node14=base`，两段等长时 `node7` 为共享节点。
+`node0=base → node14=tip`，两段等长时 `node7` 为共享节点。
 
 一键复现命令：
 
@@ -224,3 +227,23 @@ evaluations/open_loop/best/overlay/
 
 根目录中的 `config.json` 记录两个训练 NPZ、主验证 NPZ、数据 manifest、GPU 和全部训练参数；
 `commands.sh` 记录实际执行命令；`artifacts.json` 在完整结束时生成。
+
+## 方向合同重建后的训练结果（2026-08-29）
+
+当前完整试次为：
+
+```text
+train_log/real_pipeline/seq_20260819_10hz_n15_sam2_robot_mm/trial_20260828_000/
+```
+
+OpenLoop 验证集全节点均误从 epoch 20 的 `1.825 mm` 降到 epoch 40 的 `1.481 mm`，
+epoch 80–240 稳定在约 `1.474 mm`；epoch 240 全量验证为全节点 `1.476 mm`、tip
+`3.161 mm`。因此该试次的 `best_eval_model.pt` 选择 epoch 240。这个结论来自模型预测骨架与
+记录骨架GT的前向误差，不表示真机控制精度。
+
+最终叠图位于：
+
+```text
+train_log/real_pipeline/seq_20260819_10hz_n15_sam2_robot_mm/trial_20260828_000/
+  evaluations/open_loop/best/overlay/
+```

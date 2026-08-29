@@ -144,7 +144,7 @@ python scripts/evaluation/visualize_real_overlay.py ...  # 模型预测叠真实
 python scripts/evaluation/inspect_real_data.py ...       # 骨架网格诊断
 ```
 
-**坐标空间**（关键）：骨架 GT / 模型预测 / mask 都在**像素 `[col,row]`, z≈0**；NDI 末端在**毫米**。免标定 → 不用相机矩阵投影。整体形态误差只能算 px；末端误差 px + mm 都能算（mm 通过 NDI↔GT node0 px 最小二乘拟合 2D 仿射 `A: (col,row,1)→(x,y)`）。
+**坐标空间**（关键）：骨架合同为 `node0=base -> nodeN-1=tip`。NDI 末端与 GT `nodeN-1` 配对；误差使用模型状态合同记录的 px 或 mm 单位。
 
 当前默认训练数据：`data/real_seq/seq_20260627_163921_n15_rep_clean`（15 节点，repaired mask + clean）。
 
