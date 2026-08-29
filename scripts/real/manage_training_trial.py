@@ -30,6 +30,13 @@ LAYOUT = {
     "diagnostics": "diagnostics",
 }
 
+FINAL_OUTPUT_DIRS = (
+    "evaluations/gt/best/quantitative",
+    "evaluations/gt/best/overlay",
+    "evaluations/open_loop/best/quantitative",
+    "evaluations/open_loop/best/overlay",
+)
+
 
 def _timestamp():
     return datetime.now().astimezone().isoformat(timespec="seconds")
@@ -52,6 +59,14 @@ def _prepare_requested_dir(path):
     else:
         os.makedirs(path)
     return path
+
+
+def prepare_trial_layout(trial_dir):
+    """Create every directory consumed directly by a stage process or logger."""
+    trial_dir = os.path.normpath(trial_dir)
+    for relative in (*LAYOUT.values(), *FINAL_OUTPUT_DIRS):
+        os.makedirs(os.path.join(trial_dir, relative), exist_ok=True)
+    return trial_dir
 
 
 def build_trial_config(args, trial_dir):
@@ -120,10 +135,72 @@ def create_trial(args):
     else:
         trial_dir = create_experiment(
             args.base_dir, prefix="trial", announce=False)
-    for relative in LAYOUT.values():
-        os.makedirs(os.path.join(trial_dir, relative), exist_ok=True)
+    prepare_trial_layout(trial_dir)
     save_config(trial_dir, build_trial_config(args, trial_dir))
     return trial_dir
+
+
+def validate_open_loop_start(trial_dir, train_dir, val_dir,
+                             training_settings=None):
+    """Validate a GT-complete trial before starting its OpenLoop stage."""
+    trial_dir = os.path.normpath(trial_dir)
+    config_path = os.path.join(trial_dir, "config.json")
+    gt_checkpoint = os.path.join(
+        trial_dir, "stages/gt/phase_gt_transition/model/best_model.pt")
+    if not os.path.isfile(config_path):
+        raise FileNotFoundError(f"试次缺少config.json: {trial_dir}")
+    if not os.path.isfile(gt_checkpoint):
+        raise FileNotFoundError(f"试次缺少GT best权重: {gt_checkpoint}")
+    with open(config_path, encoding="utf-8") as stream:
+        config = json.load(stream)
+    expected_train = os.path.normpath(config["data"]["train_dir"])
+    expected_val = os.path.normpath(config["data"]["val_dir"])
+    actual_train = os.path.normpath(train_dir)
+    actual_val = os.path.normpath(val_dir)
+    if (actual_train, actual_val) != (expected_train, expected_val):
+        raise ValueError(
+            "OpenLoop数据目录与试次配置不一致: "
+            f"expected=({expected_train}, {expected_val}) "
+            f"actual=({actual_train}, {actual_val})")
+    if training_settings is not None:
+        expected_training = config["training"]
+        expected = {
+            "open_loop_epochs": expected_training["stages"]["open_loop"]["epochs"],
+            "batch_size": expected_training["batch_size"],
+            "num_workers": config["resources"]["num_workers"],
+            "save_interval": expected_training["save_interval"],
+            "periodic_eval_interval": expected_training["periodic_eval_interval"],
+            "periodic_max_steps": expected_training["periodic_max_steps"],
+            "seed": expected_training["seed"],
+            "window_size": expected_training["window_size"],
+            "episode_len": expected_training["episode_len"],
+            "tf_anneal_epochs": expected_training["stages"]["open_loop"][
+                "tf_anneal_epochs"],
+        }
+        mismatches = {
+            name: (expected[name], training_settings[name])
+            for name in expected
+            if expected[name] != training_settings[name]
+        }
+        if mismatches:
+            raise ValueError(f"OpenLoop训练参数与试次配置不一致: {mismatches}")
+    open_loop_outputs = (
+        "stages/open_loop/config.json",
+        "stages/open_loop/phase_open_loop_transition/loss_log.csv",
+        "stages/open_loop/phase_open_loop_transition/model/best_model.pt",
+    )
+    existing = [relative for relative in open_loop_outputs
+                if os.path.exists(os.path.join(trial_dir, relative))]
+    if existing:
+        raise FileExistsError(
+            "OpenLoop阶段已有训练产物: " + ", ".join(existing))
+    prepare_trial_layout(trial_dir)
+    return {
+        "trial_dir": trial_dir,
+        "gt_checkpoint": gt_checkpoint,
+        "train_dir": expected_train,
+        "val_dir": expected_val,
+    }
 
 
 def _require_files(trial_dir, paths):
@@ -155,6 +232,16 @@ def finalize_trial(trial_dir):
     _require_files(trial_dir, required)
     with open(os.path.join(trial_dir, "config.json"), encoding="utf-8") as stream:
         config = json.load(stream)
+    def selected_checkpoint(stage):
+        evaluated = (
+            f"stages/{stage}/phase_{'gt' if stage == 'gt' else 'open_loop'}_transition/"
+            "model/best_eval_model.pt")
+        if os.path.isfile(os.path.join(trial_dir, evaluated)):
+            return evaluated
+        return (
+            f"stages/{stage}/phase_{'gt' if stage == 'gt' else 'open_loop'}_transition/"
+            "model/best_model.pt")
+
     artifacts = {
         "schema_version": 1,
         "trial_id": config["trial"]["id"],
@@ -163,8 +250,7 @@ def finalize_trial(trial_dir):
             "gt": {
                 "experiment_dir": LAYOUT["gt_stage"],
                 "config": "stages/gt/config.json",
-                "best_checkpoint":
-                    "stages/gt/phase_gt_transition/model/best_model.pt",
+                "best_checkpoint": selected_checkpoint("gt"),
                 "loss_log":
                     "stages/gt/phase_gt_transition/loss_log.csv",
                 "training_log": "stages/gt/train.log",
@@ -176,8 +262,7 @@ def finalize_trial(trial_dir):
             "open_loop": {
                 "experiment_dir": LAYOUT["open_loop_stage"],
                 "config": "stages/open_loop/config.json",
-                "best_checkpoint":
-                    "stages/open_loop/phase_open_loop_transition/model/best_model.pt",
+                "best_checkpoint": selected_checkpoint("open_loop"),
                 "loss_log":
                     "stages/open_loop/phase_open_loop_transition/loss_log.csv",
                 "training_log": "stages/open_loop/train.log",
@@ -252,6 +337,21 @@ def build_parser():
     validate = subparsers.add_parser(
         "validate-dataset", help="校验自动前处理数据清单")
     validate.add_argument("--dataset-manifest", required=True)
+    open_loop = subparsers.add_parser(
+        "validate-open-loop-start", help="校验GT试次并准备OpenLoop阶段")
+    open_loop.add_argument("--trial-dir", required=True)
+    open_loop.add_argument("--train-dir", required=True)
+    open_loop.add_argument("--val-dir", required=True)
+    open_loop.add_argument("--open-loop-epochs", type=int, required=True)
+    open_loop.add_argument("--batch-size", type=int, required=True)
+    open_loop.add_argument("--num-workers", type=int, required=True)
+    open_loop.add_argument("--save-interval", type=int, required=True)
+    open_loop.add_argument("--periodic-eval-interval", type=int, required=True)
+    open_loop.add_argument("--periodic-max-steps", type=int, required=True)
+    open_loop.add_argument("--seed", type=int, required=True)
+    open_loop.add_argument("--window-size", type=int, required=True)
+    open_loop.add_argument("--episode-len", type=int, required=True)
+    open_loop.add_argument("--tf-anneal-epochs", type=int, required=True)
     return parser
 
 
@@ -261,9 +361,24 @@ def main(argv=None):
         print(create_trial(args))
     elif args.command == "finalize":
         print(finalize_trial(args.trial_dir))
-    else:
+    elif args.command == "validate-dataset":
         print(json.dumps(validate_dataset_manifest(
             args.dataset_manifest), ensure_ascii=False))
+    else:
+        print(json.dumps(validate_open_loop_start(
+            args.trial_dir, args.train_dir, args.val_dir,
+            training_settings={
+                "open_loop_epochs": args.open_loop_epochs,
+                "batch_size": args.batch_size,
+                "num_workers": args.num_workers,
+                "save_interval": args.save_interval,
+                "periodic_eval_interval": args.periodic_eval_interval,
+                "periodic_max_steps": args.periodic_max_steps,
+                "seed": args.seed,
+                "window_size": args.window_size,
+                "episode_len": args.episode_len,
+                "tf_anneal_epochs": args.tf_anneal_epochs,
+            }), ensure_ascii=False))
     return 0
 
 

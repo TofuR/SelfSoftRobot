@@ -97,6 +97,33 @@ def test_finalize_writes_artifact_index(tmp_path):
         "evaluations/open_loop/best/overlay")
 
 
+def test_finalize_prefers_validation_selected_checkpoint(tmp_path):
+    trial_dir = Path(create_trial(_trial_args(tmp_path)))
+    required = [
+        "commands.sh",
+        "stages/gt/config.json",
+        "stages/gt/phase_gt_transition/model/best_model.pt",
+        "stages/open_loop/config.json",
+        "stages/open_loop/phase_open_loop_transition/model/best_model.pt",
+        "stages/open_loop/phase_open_loop_transition/model/best_eval_model.pt",
+        "evaluations/gt/best/quantitative/summary.txt",
+        "evaluations/gt/best/overlay/summary.txt",
+        "evaluations/gt/best/overlay/montage.png",
+        "evaluations/open_loop/best/quantitative/summary.txt",
+        "evaluations/open_loop/best/overlay/summary.txt",
+        "evaluations/open_loop/best/overlay/montage.png",
+    ]
+    for relative in required:
+        path = trial_dir / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"artifact")
+
+    artifacts = json.loads(Path(finalize_trial(str(trial_dir))).read_text())
+
+    assert artifacts["stages"]["open_loop"]["best_checkpoint"].endswith(
+        "model/best_eval_model.pt")
+
+
 def test_finalize_reports_missing_final_artifacts(tmp_path):
     trial_dir = Path(create_trial(_trial_args(tmp_path)))
     (trial_dir / "commands.sh").write_text("#!/usr/bin/env bash\n")

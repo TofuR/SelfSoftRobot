@@ -1,14 +1,16 @@
-"""在训练期间按epoch里程碑评价best_model，并保存定量结果和图片。
+"""在训练期间按epoch里程碑评价当前快照，并保存定量结果和图片。
 
-训练器先写best_model，再写周期归档model_epoch_XXXX；本脚本以归档文件作为epoch完成信号，
-从而避免读到仍在写入的best checkpoint。评价作为独立进程并行运行；训练和评价可以使用
-同一张或不同的 GPU，流水线不会暂停训练进程。
+训练器原子写入周期归档 ``model_epoch_XXXX.pt``，本脚本直接评价该
+epoch 快照，以验证集全节点均误选出 ``best_eval_model.pt``。评价作为独立
+进程并行运行；训练和评价可以使用同一张或不同的 GPU。
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -50,6 +52,22 @@ def phase_name(mode):
     return "gt_transition" if mode == "gt" else "open_loop_transition"
 
 
+def validation_node_mean(per_frame_csv):
+    """读取评价器的机器可读输出，返回实际预测帧的全节点均误。"""
+    with open(per_frame_csv, newline="", encoding="utf-8") as stream:
+        reader = csv.DictReader(stream)
+        metric = next((name for name in (reader.fieldnames or ())
+                       if name.startswith("node_mean_") and
+                       not name.endswith("_est_mm")), None)
+        if metric is None:
+            raise ValueError(f"per_frame.csv 缺少 node_mean_<unit>: {per_frame_csv}")
+        values = [float(row[metric]) for row in reader
+                  if row.get("is_prediction") == "1" and row.get(metric)]
+    if not values:
+        raise ValueError(f"per_frame.csv 没有可统计的预测帧: {per_frame_csv}")
+    return sum(values) / len(values), metric.removeprefix("node_mean_")
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
     if args.interval <= 0 or args.max_steps <= 0 or args.poll_seconds <= 0:
@@ -58,11 +76,12 @@ def main(argv=None):
         os.path.abspath(__file__))))
     phase_dir = os.path.join(
         os.path.abspath(args.experiment_dir), f"phase_{phase_name(args.mode)}")
-    checkpoint = os.path.join(phase_dir, "model", "best_model.pt")
     final_model = os.path.join(phase_dir, "model", "final_model.pt")
+    best_eval_model = os.path.join(phase_dir, "model", "best_eval_model.pt")
     archive_dir = os.path.join(phase_dir, "checkpoints")
     os.makedirs(args.out_root, exist_ok=True)
     evaluated = set()
+    best = None
 
     while True:
         archives = []
@@ -78,6 +97,8 @@ def main(argv=None):
                     archives.append(epoch)
 
         for epoch in sorted(set(archives) - evaluated):
+            checkpoint = os.path.join(
+                archive_dir, f"model_epoch_{epoch:04d}.pt")
             if not os.path.isfile(checkpoint):
                 continue
             out_dir = os.path.join(args.out_root, f"epoch_{epoch:04d}")
@@ -95,7 +116,7 @@ def main(argv=None):
                 command.extend(("--calibration-file", args.calibration_file))
             if args.no_ndi:
                 command.append("--no-ndi")
-            print(f">>> periodic best eval epoch={epoch}: {' '.join(command)}",
+            print(f">>> periodic snapshot eval epoch={epoch}: {' '.join(command)}",
                   flush=True)
             started = time.time()
             subprocess.run(command, cwd=project_root, check=True)
@@ -119,6 +140,22 @@ def main(argv=None):
                 print(f">>> periodic overlay epoch={epoch}: "
                       f"{' '.join(overlay_command)}", flush=True)
                 subprocess.run(overlay_command, cwd=project_root, check=True)
+            score, unit = validation_node_mean(
+                os.path.join(out_dir, "per_frame.csv"))
+            if best is None or score < best["node_mean"]:
+                shutil.copy2(checkpoint, best_eval_model)
+                best = {
+                    "mode": args.mode,
+                    "epoch": epoch,
+                    "checkpoint": os.path.abspath(checkpoint),
+                    "selected_checkpoint": os.path.abspath(best_eval_model),
+                    "selection_metric": f"validation_node_mean_{unit}",
+                    "node_mean": score,
+                    "output": os.path.abspath(out_dir),
+                }
+                with open(os.path.join(args.out_root, "best.json"), "w",
+                          encoding="utf-8") as stream:
+                    json.dump(best, stream, indent=2, ensure_ascii=False)
             evaluated.add(epoch)
             latest = {
                 "mode": args.mode,
@@ -127,6 +164,7 @@ def main(argv=None):
                 "output": os.path.abspath(out_dir),
                 "elapsed_sec": time.time() - started,
                 "evaluated_epochs": sorted(evaluated),
+                "best": best,
             }
             with open(os.path.join(args.out_root, "latest.json"), "w",
                       encoding="utf-8") as stream:
