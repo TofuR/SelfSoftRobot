@@ -9,6 +9,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
 from datetime import datetime
 
@@ -37,6 +38,11 @@ FINAL_OUTPUT_DIRS = (
     "evaluations/open_loop/best/overlay",
 )
 
+SEQUENCE_TAG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+CAPTURE_SEQUENCE_PATTERN = re.compile(r"^(seq_\d{8}_\d{6})(?:_|$)")
+PROCESSING_SUFFIX_PATTERN = re.compile(
+    r"(?:_n\d+)?(?:_sam2)?(?:_robot)?(?:_mm)?$")
+
 
 def _timestamp():
     return datetime.now().astimezone().isoformat(timespec="seconds")
@@ -59,6 +65,46 @@ def _prepare_requested_dir(path):
     else:
         os.makedirs(path)
     return path
+
+
+def validate_sequence_tag(value):
+    """Validate the stable grouping label used immediately below real_pipeline."""
+    if not value or not SEQUENCE_TAG_PATTERN.fullmatch(value):
+        raise ValueError(
+            "sequence_tag仅支持字母、数字、点、下划线和连字符，且必须以字母或数字开头: "
+            f"{value!r}")
+    return value
+
+
+def infer_sequence_tag(train_dir, dataset_manifest=None):
+    """Infer a concise acquisition label while retaining preprocessing in config.
+
+    A single-sequence manifest maps directly to its capture sequence.  A combined
+    dataset uses its dataset id with the standard processing contract suffix
+    removed.  NPZ names provide a final fallback for older datasets.
+    """
+    manifest = None
+    if dataset_manifest and os.path.isfile(dataset_manifest):
+        with open(dataset_manifest, encoding="utf-8") as stream:
+            manifest = json.load(stream)
+    if manifest:
+        source = manifest.get("source", {})
+        sequence = source.get("sequence")
+        if isinstance(sequence, str) and sequence:
+            return validate_sequence_tag(sequence)
+        dataset_id = manifest.get("dataset_id")
+        if isinstance(dataset_id, str) and dataset_id:
+            concise = PROCESSING_SUFFIX_PATTERN.sub("", dataset_id)
+            return validate_sequence_tag(concise)
+
+    for npz_path in sorted(glob.glob(os.path.join(train_dir, "*.npz"))):
+        match = CAPTURE_SEQUENCE_PATTERN.match(os.path.basename(npz_path))
+        if match:
+            return validate_sequence_tag(match.group(1))
+
+    dataset_dir = os.path.basename(os.path.dirname(os.path.normpath(train_dir)))
+    concise = PROCESSING_SUFFIX_PATTERN.sub("", dataset_dir)
+    return validate_sequence_tag(concise)
 
 
 def prepare_trial_layout(trial_dir):
@@ -113,15 +159,21 @@ def build_trial_config(args, trial_dir):
                 "gt": {
                     "epochs": args.gt_epochs,
                     "mode": "gt",
+                    "learning_rate": args.gt_lr,
+                    "dense_step_weight": args.dense_step_weight,
+                    "scheduler_patience": args.gt_scheduler_patience,
                 },
                 "open_loop": {
                     "epochs": args.open_loop_epochs,
                     "mode": "open_loop",
                     "initialization": "gt_best",
-                    "tf_ratio": 1.0,
+                    "learning_rate": args.open_loop_lr,
+                    "tf_ratio": args.tf_ratio,
                     "tf_anneal_epochs": args.tf_anneal_epochs,
-                    "tf_min": 0.0,
-                    "tf_schedule": "staircase",
+                    "tf_min": args.tf_min,
+                    "tf_schedule": args.tf_schedule,
+                    "dense_step_weight": args.dense_step_weight,
+                    "scheduler_patience": args.open_loop_scheduler_patience,
                 },
             },
         },
@@ -130,6 +182,7 @@ def build_trial_config(args, trial_dir):
 
 
 def create_trial(args):
+    validate_sequence_tag(args.sequence_tag)
     if args.trial_dir:
         trial_dir = _prepare_requested_dir(args.trial_dir)
     else:
@@ -176,6 +229,16 @@ def validate_open_loop_start(trial_dir, train_dir, val_dir,
             "episode_len": expected_training["episode_len"],
             "tf_anneal_epochs": expected_training["stages"]["open_loop"][
                 "tf_anneal_epochs"],
+            "tf_ratio": expected_training["stages"]["open_loop"]["tf_ratio"],
+            "tf_min": expected_training["stages"]["open_loop"]["tf_min"],
+            "tf_schedule": expected_training["stages"]["open_loop"][
+                "tf_schedule"],
+            "dense_step_weight": expected_training["stages"]["open_loop"][
+                "dense_step_weight"],
+            "open_loop_lr": expected_training["stages"]["open_loop"][
+                "learning_rate"],
+            "open_loop_scheduler_patience": expected_training["stages"][
+                "open_loop"]["scheduler_patience"],
         }
         mismatches = {
             name: (expected[name], training_settings[name])
@@ -330,6 +393,17 @@ def build_parser():
     create.add_argument("--window-size", type=int, required=True)
     create.add_argument("--episode-len", type=int, required=True)
     create.add_argument("--tf-anneal-epochs", type=int, required=True)
+    create.add_argument("--tf-ratio", type=float, required=True)
+    create.add_argument("--tf-min", type=float, required=True)
+    create.add_argument(
+        "--tf-schedule", choices=("linear", "staircase"), required=True)
+    create.add_argument(
+        "--dense-step-weight", choices=("uniform", "linear"), required=True)
+    create.add_argument("--gt-lr", type=float, default=None)
+    create.add_argument("--open-loop-lr", type=float, default=None)
+    create.add_argument("--gt-scheduler-patience", type=int, default=None)
+    create.add_argument(
+        "--open-loop-scheduler-patience", type=int, default=None)
 
     finalize = subparsers.add_parser(
         "finalize", help="校验标准产物并写artifacts.json")
@@ -352,6 +426,19 @@ def build_parser():
     open_loop.add_argument("--window-size", type=int, required=True)
     open_loop.add_argument("--episode-len", type=int, required=True)
     open_loop.add_argument("--tf-anneal-epochs", type=int, required=True)
+    open_loop.add_argument("--tf-ratio", type=float, required=True)
+    open_loop.add_argument("--tf-min", type=float, required=True)
+    open_loop.add_argument(
+        "--tf-schedule", choices=("linear", "staircase"), required=True)
+    open_loop.add_argument(
+        "--dense-step-weight", choices=("uniform", "linear"), required=True)
+    open_loop.add_argument("--open-loop-lr", type=float, default=None)
+    open_loop.add_argument(
+        "--open-loop-scheduler-patience", type=int, default=None)
+    infer = subparsers.add_parser(
+        "infer-sequence-tag", help="从数据清单推导简洁采集序列标签")
+    infer.add_argument("--train-dir", required=True)
+    infer.add_argument("--dataset-manifest", default=None)
     return parser
 
 
@@ -364,7 +451,7 @@ def main(argv=None):
     elif args.command == "validate-dataset":
         print(json.dumps(validate_dataset_manifest(
             args.dataset_manifest), ensure_ascii=False))
-    else:
+    elif args.command == "validate-open-loop-start":
         print(json.dumps(validate_open_loop_start(
             args.trial_dir, args.train_dir, args.val_dir,
             training_settings={
@@ -378,7 +465,16 @@ def main(argv=None):
                 "window_size": args.window_size,
                 "episode_len": args.episode_len,
                 "tf_anneal_epochs": args.tf_anneal_epochs,
+                "tf_ratio": args.tf_ratio,
+                "tf_min": args.tf_min,
+                "tf_schedule": args.tf_schedule,
+                "dense_step_weight": args.dense_step_weight,
+                "open_loop_lr": args.open_loop_lr,
+                "open_loop_scheduler_patience":
+                    args.open_loop_scheduler_patience,
             }), ensure_ascii=False))
+    else:
+        print(infer_sequence_tag(args.train_dir, args.dataset_manifest))
     return 0
 
 

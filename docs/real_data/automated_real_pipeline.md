@@ -86,8 +86,13 @@ tmux capture-pane -pt real_<seq>:pipeline.0 -S -100
 tmux 设置了 `remain-on-exit`，流水线完成后会话和终端输出仍然保留。每个试次保存在：
 
 ```text
-train_log/real_pipeline/<dataset_tag>/trial_YYYYMMDD_NNN/
+train_log/real_pipeline/<sequence_tag>/trial_YYYYMMDD_NNN/
 ```
+
+单序列数据会从 `dataset_manifest.json` 自动得到 `seq_YYYYMMDD_HHMMSS`；组合数据会采用
+清晰的数据组标签。节点数、分割器和坐标单位等处理合同保存在试次 `config.json` 引用的
+`dataset_manifest.json` 中。也可以通过 `SEQUENCE_TAG=...` 显式指定分组标签。历史试次
+目录保持原路径，新启动的试次使用本规则。
 
 常用训练覆盖参数：
 
@@ -95,11 +100,20 @@ train_log/real_pipeline/<dataset_tag>/trial_YYYYMMDD_NNN/
 GPU_ID=2 EVAL_GPU_ID=2 \
 GT_EPOCHS=60 OPEN_LOOP_EPOCHS=240 BATCH_SIZE=128 NUM_WORKERS=4 \
 SAVE_INTERVAL=5 PERIODIC_EVAL_INTERVAL=10 \
+TF_RATIO=1.0 TF_ANNEAL_EPOCHS=120 TF_MIN=0 TF_SCHEDULE=linear \
+OPEN_LOOP_LR=3e-4 OPEN_LOOP_SCHEDULER_PATIENCE=240 \
+DENSE_STEP_WEIGHT=uniform \
 bash scripts/real/start_training_tmux.sh \
   real_<seq> \
   data/real_seq/<seq>_n15_sam2_robot_mm/train \
   data/real_seq/<seq>_n15_sam2_robot_mm/val
 ```
+
+`GT_LR`和`OPEN_LOOP_LR`分别覆盖两个阶段的学习率；留空时读取
+`config/training.json`。OpenLoop 的 `TF_RATIO`、`TF_MIN`、`TF_ANNEAL_EPOCHS`、
+`TF_SCHEDULE` 与 `DENSE_STEP_WEIGHT` 会同时写入根配置和阶段配置。每次启动通过原子目录
+创建获得新的当日序号，显式 `RUN_DIR` 也只接受空目录，因此历史日志不会被覆盖。
+课程训练可以用 `OPEN_LOOP_SCHEDULER_PATIENCE` 延长学习率平台调度的观察区间。
 
 ## 3. 前处理配置
 

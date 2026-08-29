@@ -25,11 +25,19 @@ SEED="${SEED:-20260821}"
 WINDOW_SIZE="${WINDOW_SIZE:-40}"
 EPISODE_LEN="${EPISODE_LEN:-40}"
 TF_ANNEAL_EPOCHS="${TF_ANNEAL_EPOCHS:-40}"
+TF_RATIO="${TF_RATIO:-1.0}"
+TF_MIN="${TF_MIN:-0.0}"
+TF_SCHEDULE="${TF_SCHEDULE:-linear}"
+DENSE_STEP_WEIGHT="${DENSE_STEP_WEIGHT:-uniform}"
+GT_LR="${GT_LR:-}"
+OPEN_LOOP_LR="${OPEN_LOOP_LR:-}"
+GT_SCHEDULER_PATIENCE="${GT_SCHEDULER_PATIENCE:-}"
+OPEN_LOOP_SCHEDULER_PATIENCE="${OPEN_LOOP_SCHEDULER_PATIENCE:-}"
 START_STAGE="${START_STAGE:-gt}"
 REQUESTED_RUN_DIR="${RUN_DIR:-}"
-SEQ_TAG="$(basename "$(dirname "$DATA_TRAIN_DIR")")"
 TRAIN_NPZ="$(find "$DATA_TRAIN_DIR" -maxdepth 1 -type f -name '*.npz' | sort | head -1)"
 VAL_NPZ="$(find "$DATA_VAL_DIR" -maxdepth 1 -type f -name '*.npz' | sort | head -1)"
+DATASET_MANIFEST="${DATASET_MANIFEST:-$(dirname "$DATA_TRAIN_DIR")/dataset_manifest.json}"
 
 if [[ -z "$TRAIN_NPZ" ]]; then
   echo "训练目录中没有NPZ: $DATA_TRAIN_DIR" >&2
@@ -42,10 +50,19 @@ else
   DEFAULT_CAPTURE_SEQ="$(basename "$TRAIN_NPZ" _train.npz)"
 fi
 CAPTURE_SEQ="${CAPTURE_SEQ:-$DEFAULT_CAPTURE_SEQ}"
+if [[ -n "${SEQUENCE_TAG:-}" ]]; then
+  SEQ_TAG="$SEQUENCE_TAG"
+else
+  INFER_TAG_CMD=(python scripts/real/manage_training_trial.py infer-sequence-tag
+    --train-dir "$DATA_TRAIN_DIR")
+  if [[ -f "$DATASET_MANIFEST" ]]; then
+    INFER_TAG_CMD+=(--dataset-manifest "$DATASET_MANIFEST")
+  fi
+  SEQ_TAG="$("${INFER_TAG_CMD[@]}")"
+fi
 CAM0_DIR="${CAM0_DIR:-real_capture/data/raw/${CAPTURE_SEQ}/cam0}"
 MASKS_DIR="${MASKS_DIR:-sam2/masks/${CAPTURE_SEQ}_full}"
 TRIAL_BASE="train_log/real_pipeline/${SEQ_TAG}"
-DATASET_MANIFEST="${DATASET_MANIFEST:-$(dirname "$DATA_TRAIN_DIR")/dataset_manifest.json}"
 NDI_CSV="real_capture/data/raw/${CAPTURE_SEQ}/ndi.csv"
 FRAME_TIMES_FILE="real_capture/data/raw/${CAPTURE_SEQ}/frame_times.txt"
 HAS_NDI=0
@@ -94,7 +111,24 @@ CREATE_TRIAL_CMD=(python scripts/real/manage_training_trial.py create
   --seed "$SEED"
   --window-size "$WINDOW_SIZE"
   --episode-len "$EPISODE_LEN"
-  --tf-anneal-epochs "$TF_ANNEAL_EPOCHS")
+  --tf-anneal-epochs "$TF_ANNEAL_EPOCHS"
+  --tf-ratio "$TF_RATIO"
+  --tf-min "$TF_MIN"
+  --tf-schedule "$TF_SCHEDULE"
+  --dense-step-weight "$DENSE_STEP_WEIGHT")
+if [[ -n "$GT_LR" ]]; then
+  CREATE_TRIAL_CMD+=(--gt-lr "$GT_LR")
+fi
+if [[ -n "$OPEN_LOOP_LR" ]]; then
+  CREATE_TRIAL_CMD+=(--open-loop-lr "$OPEN_LOOP_LR")
+fi
+if [[ -n "$GT_SCHEDULER_PATIENCE" ]]; then
+  CREATE_TRIAL_CMD+=(--gt-scheduler-patience "$GT_SCHEDULER_PATIENCE")
+fi
+if [[ -n "$OPEN_LOOP_SCHEDULER_PATIENCE" ]]; then
+  CREATE_TRIAL_CMD+=(--open-loop-scheduler-patience
+    "$OPEN_LOOP_SCHEDULER_PATIENCE")
+fi
 if [[ -f "$DATASET_MANIFEST" ]]; then
   CREATE_TRIAL_CMD+=(--dataset-manifest "$DATASET_MANIFEST")
 fi
@@ -109,14 +143,25 @@ else
     exit 2
   fi
   RUN_DIR="$REQUESTED_RUN_DIR"
-  python scripts/real/manage_training_trial.py validate-open-loop-start \
-    --trial-dir "$RUN_DIR" --train-dir "$DATA_TRAIN_DIR" --val-dir "$DATA_VAL_DIR" \
-    --open-loop-epochs "$OPEN_LOOP_EPOCHS" --batch-size "$BATCH_SIZE" \
-    --num-workers "$NUM_WORKERS" --save-interval "$SAVE_INTERVAL" \
-    --periodic-eval-interval "$PERIODIC_EVAL_INTERVAL" \
-    --periodic-max-steps "$PERIODIC_MAX_STEPS" --seed "$SEED" \
-    --window-size "$WINDOW_SIZE" --episode-len "$EPISODE_LEN" \
-    --tf-anneal-epochs "$TF_ANNEAL_EPOCHS"
+  VALIDATE_OPEN_LOOP_CMD=(python scripts/real/manage_training_trial.py
+    validate-open-loop-start --trial-dir "$RUN_DIR"
+    --train-dir "$DATA_TRAIN_DIR" --val-dir "$DATA_VAL_DIR"
+    --open-loop-epochs "$OPEN_LOOP_EPOCHS" --batch-size "$BATCH_SIZE"
+    --num-workers "$NUM_WORKERS" --save-interval "$SAVE_INTERVAL"
+    --periodic-eval-interval "$PERIODIC_EVAL_INTERVAL"
+    --periodic-max-steps "$PERIODIC_MAX_STEPS" --seed "$SEED"
+    --window-size "$WINDOW_SIZE" --episode-len "$EPISODE_LEN"
+    --tf-anneal-epochs "$TF_ANNEAL_EPOCHS" --tf-ratio "$TF_RATIO"
+    --tf-min "$TF_MIN" --tf-schedule "$TF_SCHEDULE"
+    --dense-step-weight "$DENSE_STEP_WEIGHT")
+  if [[ -n "$OPEN_LOOP_LR" ]]; then
+    VALIDATE_OPEN_LOOP_CMD+=(--open-loop-lr "$OPEN_LOOP_LR")
+  fi
+  if [[ -n "$OPEN_LOOP_SCHEDULER_PATIENCE" ]]; then
+    VALIDATE_OPEN_LOOP_CMD+=(--open-loop-scheduler-patience
+      "$OPEN_LOOP_SCHEDULER_PATIENCE")
+  fi
+  "${VALIDATE_OPEN_LOOP_CMD[@]}"
 fi
 
 GT_EXP_DIR="$RUN_DIR/stages/gt"
@@ -186,7 +231,12 @@ if [[ -f "$GT_EVAL_CKPT" ]]; then
 fi
 if [[ "$START_STAGE" == "gt" ]]; then
   GT_CMD=(python scripts/training/train_transition.py --mode gt
-    --n_epochs "$GT_EPOCHS" --experiment-dir "$GT_EXP_DIR" "${COMMON_ARGS[@]}")
+    --n_epochs "$GT_EPOCHS" --experiment-dir "$GT_EXP_DIR"
+    --dense_step_weight "$DENSE_STEP_WEIGHT" "${COMMON_ARGS[@]}")
+  if [[ -n "$GT_LR" ]]; then GT_CMD+=(--lr "$GT_LR"); fi
+  if [[ -n "$GT_SCHEDULER_PATIENCE" ]]; then
+    GT_CMD+=(--scheduler_patience "$GT_SCHEDULER_PATIENCE")
+  fi
   record_command "$GPU_ID" "${GT_CMD[@]}"
 
   printf 'RUNNING gt started=%s train_gpu=%s eval_gpu=%s\n' \
@@ -237,9 +287,14 @@ fi
 
 OPEN_LOOP_CMD=(python scripts/training/train_transition.py --mode open_loop
   --n_epochs "$OPEN_LOOP_EPOCHS" --experiment-dir "$OPEN_LOOP_EXP_DIR"
-  --init_from "$GT_CKPT" --tf_ratio 1.0
-  --tf_anneal_epochs "$TF_ANNEAL_EPOCHS" --tf_min 0.0
-  --tf_schedule staircase "${COMMON_ARGS[@]}")
+  --init_from "$GT_CKPT" --tf_ratio "$TF_RATIO"
+  --tf_anneal_epochs "$TF_ANNEAL_EPOCHS" --tf_min "$TF_MIN"
+  --tf_schedule "$TF_SCHEDULE" --dense_step_weight "$DENSE_STEP_WEIGHT"
+  "${COMMON_ARGS[@]}")
+if [[ -n "$OPEN_LOOP_LR" ]]; then OPEN_LOOP_CMD+=(--lr "$OPEN_LOOP_LR"); fi
+if [[ -n "$OPEN_LOOP_SCHEDULER_PATIENCE" ]]; then
+  OPEN_LOOP_CMD+=(--scheduler_patience "$OPEN_LOOP_SCHEDULER_PATIENCE")
+fi
 record_command "$GPU_ID" "${OPEN_LOOP_CMD[@]}"
 
 printf 'RUNNING open_loop started=%s initialization=%s\n' \

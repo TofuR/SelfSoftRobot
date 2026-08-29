@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from scripts.real.manage_training_trial import create_trial, finalize_trial
+from scripts.real.manage_training_trial import (
+    create_trial, finalize_trial, infer_sequence_tag)
 from src.utils.experiment import create_experiment
 
 
@@ -13,7 +14,7 @@ def _trial_args(base_dir, trial_dir=None):
     return Namespace(
         base_dir=str(base_dir),
         trial_dir=None if trial_dir is None else str(trial_dir),
-        sequence_tag="seq_demo_n15",
+        sequence_tag="seq_demo",
         capture_sequence="seq_demo",
         train_dir="data/real_seq/seq_demo_n15/train",
         val_dir="data/real_seq/seq_demo_n15/val",
@@ -33,6 +34,14 @@ def _trial_args(base_dir, trial_dir=None):
         window_size=40,
         episode_len=40,
         tf_anneal_epochs=40,
+        tf_ratio=1.0,
+        tf_min=0.0,
+        tf_schedule="linear",
+        dense_step_weight="uniform",
+        gt_lr=None,
+        open_loop_lr=3e-4,
+        gt_scheduler_patience=None,
+        open_loop_scheduler_patience=240,
     )
 
 
@@ -55,6 +64,10 @@ def test_create_trial_writes_root_config_and_layout(tmp_path):
     assert config["trial"]["id"] == trial_dir.name
     assert config["training"]["batch_size"] == 128
     assert config["training"]["stages"]["open_loop"]["epochs"] == 240
+    assert config["training"]["stages"]["open_loop"]["tf_schedule"] == "linear"
+    assert config["training"]["stages"]["open_loop"]["learning_rate"] == 3e-4
+    assert config["training"]["stages"]["open_loop"][
+        "scheduler_patience"] == 240
     assert (trial_dir / "stages/gt").is_dir()
     assert (trial_dir / "evaluations/open_loop/best").is_dir()
 
@@ -66,6 +79,32 @@ def test_requested_trial_dir_must_be_empty(tmp_path):
 
     with pytest.raises(FileExistsError):
         create_trial(_trial_args(tmp_path, trial_dir))
+
+
+def test_infer_sequence_tag_from_single_sequence_manifest(tmp_path):
+    train_dir = tmp_path / "seq_demo_n15_sam2_robot_mm" / "train"
+    train_dir.mkdir(parents=True)
+    manifest = train_dir.parent / "dataset_manifest.json"
+    manifest.write_text(json.dumps({
+        "dataset_id": "seq_20260819_172644_n15_sam2_robot_mm",
+        "source": {"sequence": "seq_20260819_172644"},
+    }))
+
+    assert infer_sequence_tag(str(train_dir), str(manifest)) == (
+        "seq_20260819_172644")
+
+
+def test_infer_sequence_tag_from_combined_dataset_manifest(tmp_path):
+    train_dir = tmp_path / "seq_20260819_10hz_n15_sam2_robot_mm" / "train"
+    train_dir.mkdir(parents=True)
+    manifest = train_dir.parent / "dataset_manifest.json"
+    manifest.write_text(json.dumps({
+        "dataset_id": "seq_20260819_10hz_n15_sam2_robot_mm",
+        "source": {"datasets": [{"sequence": "seq_20260819_182253"}]},
+    }))
+
+    assert infer_sequence_tag(str(train_dir), str(manifest)) == (
+        "seq_20260819_10hz")
 
 
 def test_finalize_writes_artifact_index(tmp_path):

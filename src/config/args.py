@@ -54,6 +54,7 @@ def add_common_args(parser, data_dir_default="data/sequence_data"):
         --hidden_dim    (int)  : 时序编码器隐层维度，覆盖 temporal.hidden_dim
         --eval_interval (int)  : 训练中评估间隔（epoch 数，0=关闭）
         --seed          (int)  : 随机种子（可复现性）
+        --scheduler_patience (int): ReduceLROnPlateau等待轮数
     """
     parser.add_argument("--data_dir", type=str, default=data_dir_default)
     parser.add_argument("--lr", type=float, default=None)
@@ -69,6 +70,8 @@ def add_common_args(parser, data_dir_default="data/sequence_data"):
                         help="每N个epoch保存current、归档模型和可恢复训练状态；0关闭")
     parser.add_argument("--seed", type=int, default=None,
                         help="Random seed for reproducibility")
+    parser.add_argument("--scheduler_patience", type=int, default=None,
+                        help="ReduceLROnPlateau等待多少epoch后降低学习率")
 
 
 def add_two_phase_args(parser):
@@ -148,6 +151,8 @@ def build_common_overrides(args):
         "evaluation.eval_interval": getattr(args, "eval_interval", None),
         "logging.checkpoint_interval": getattr(args, "save_interval", None),
         "optimization.seed": getattr(args, "seed", None),
+        "optimization.scheduler_patience": getattr(
+            args, "scheduler_patience", None),
     }
 
 
