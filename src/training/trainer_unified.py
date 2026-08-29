@@ -312,6 +312,12 @@ class UnifiedTrainer:
         if sdf_cfg:
             config["sdf"] = sdf_cfg
 
+        # 模型特有合同字段透传（如 hereditary 的 dt/n_play/n_maxwell——
+        # dt 必须进合同才能从 checkpoint 复现算子网格；无则跳过）
+        for key in ("dt", "n_play", "n_maxwell", "tau_max"):
+            if self.config.get(key) is not None:
+                config[key] = self.config[key]
+
         return config
 
     def _save_phase_modules(self, phase_dir, phase_spec):

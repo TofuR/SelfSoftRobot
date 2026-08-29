@@ -150,6 +150,14 @@ def evaluate_transition_rollout(model, data_dir, config, device,
     pc_center = model.pc_center.view(3).detach().cpu().numpy()
     pc_scale = model.pc_scale.view(3).detach().cpu().numpy()
 
+    # 动作视图投影: npz 存原始 6 通道，模型只吃 model_action_channels 选出的
+    # 通道（与训练侧 StateTransitionDataset/resolve_action_contract 一致）。
+    # 无 action_view 时保持旧行为（px 数据 actions 即模型维度）。
+    action_view = config.get('action_view')
+    view_channels = None
+    if action_view:
+        view_channels = tuple(action_view.get('model_action_channels', ()))
+
     roll_mse_k = np.zeros(K)
     one_mse_k = np.zeros(K)
     copy_mse_k = np.zeros(K)
@@ -164,6 +172,13 @@ def evaluate_transition_rollout(model, data_dir, config, device,
         if 'positions' not in d:
             continue
         actions = d['actions'].astype(np.float32)
+        # 投影条件用"非恒等视图"而非"宽度不等"——宽度相等但非恒等
+        # （置换视图，如 --action-channels 1,0）时训练侧仍会投影，
+        # eval 侧跳过会导致通道错位。
+        if view_channels is not None and \
+                tuple(view_channels) != tuple(range(actions.shape[1])):
+            from src.data.action_view import project_actions
+            actions = project_actions(actions, view_channels).astype(np.float32)
         positions = d['positions'].astype(np.float32)  # (T,3,N)
         T = positions.shape[0]
         if T - 1 < K:

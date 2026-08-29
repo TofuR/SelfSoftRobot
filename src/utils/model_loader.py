@@ -128,6 +128,14 @@ def _detect_model_type(state_dict):
     if has_z_cell and (has_state_encoder or has_delta_head):
         return 'state_transition', 0
 
+    # HereditaryOperatorModel: 显式迟滞算子组（play/maxwell 算子库）。
+    # 算子网格（thresholds/taus/decays）是 registered buffer，随 state_dict
+    # 精确恢复，无需从 config 重建网格。
+    has_play_bank = any(k.startswith('play.') for k in keys)
+    has_maxwell_bank = any(k.startswith('maxwell.') for k in keys)
+    if has_play_bank and has_maxwell_bank:
+        return 'hereditary', 0
+
     # SpatialSequence: gru + slice_head（无 correction）
     has_gru = any('gru' in k for k in keys)
     has_slice = any('slice_head' in k for k in keys)
@@ -466,6 +474,25 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
         # 故迁移只在 state_transition 分支调用，避免误改其它模型。
         state_dict = _migrate_gru_keys(state_dict)
         model.load_state_dict(state_dict, strict=False)
+        if 'action_norm_factor' in state_dict:
+            norm_factor = state_dict['action_norm_factor'].item()
+
+    elif model_type == 'hereditary':
+        # HereditaryOperatorModel — 显式迟滞算子模型（PI play + Maxwell）。
+        # 算子网格 buffer（thresholds/taus/decays）随 state_dict 恢复，
+        # dt/n_play/n_maxwell 从 config.json 透传字段读（缺失时用构造默认）。
+        from src.models.model_hereditary_operator import HereditaryOperatorModel
+        model = HereditaryOperatorModel(
+            action_dim=action_dim,
+            n_nodes=(saved_cfg or {}).get('n_nodes', 31),
+            window_size=window_size,
+            n_play=(saved_cfg or {}).get('n_play', 8),
+            n_maxwell=(saved_cfg or {}).get('n_maxwell', 6),
+            dt=(saved_cfg or {}).get('dt', 0.1),
+            episode_len=(saved_cfg or {}).get('episode_len', 40),
+        ).to(device)
+        # strict 加载：算子网格 buffer 必须精确恢复，静默丢键 = 错误网格
+        model.load_state_dict(state_dict)
         if 'action_norm_factor' in state_dict:
             norm_factor = state_dict['action_norm_factor'].item()
 

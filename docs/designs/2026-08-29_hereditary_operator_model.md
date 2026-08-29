@@ -1,6 +1,7 @@
 # 设计:HereditaryOperatorModel — 迟滞的显式算子状态表示(修正版 v2)
 
-> 状态:**设计定稿,未实现**(2026-08-29)。经 3 路对抗审稿(物理/可辨识性/创新性)+ 独立事实核查(~45 条声明:属实 36、存疑 5、错误 0)后修正。
+> 状态:**Version B 已实现**(2026-08-29,分支 `feat/hereditary-operator-model`)。经 3 路对抗审稿(物理/可辨识性/创新性)+ 独立事实核查(~45 条声明:属实 36、存疑 5、错误 0)后修正。
+> 实现落点:算子层 [`src/operators/`](../../src/operators/)(`static_drive` / `play_bank` / `maxwell_bank` / `local_modes`,各自独立可测)、模型层 [`src/models/model_hereditary_operator.py`](../../src/models/model_hereditary_operator.py)、训练入口 `train_transition.py --mode hereditary`、测试 `tests/test_hereditary_{operators,model}.py`(29 项,含 v1 修正回归)。已实物 mm 数据冒烟(2 epoch,loss 0.027→0.004,model/copy=0.30×)。Version A(弯矩空间 Cosserat 内变量)未实现。
 > 关联:[创新点定位](../papers/2026-08-19_innovation_positioning.md)、[缺陷交叉地图](../papers/2026-08-20_discussion_summary_gap_map.md)、[论文蓝图](../papers/2026-08-20_paper_blueprint.md)、[方向 17 路径依赖 IK](../directions/17_path_dependent_ik.md)、[方向 16 约束导向控制](../directions/16_constraint_oriented_control.md)
 > 前序讨论:2026-08-29 会话(用户问题:"现有实验只能定性证明迟滞存在/可拟合,我们的方法如何**定量表示**迟滞?需要强先验")
 > 一句话:**把迟滞从编码器特征(隐式、不可读)变成显式算子状态+经典算子动力学+线性模态读出(可辨识、有语义、可与模型无关测量互裁决)。**

@@ -1,9 +1,12 @@
-"""train_transition.py — 统一状态转移训练入口（--mode gt | open_loop）。
+"""train_transition.py — 统一状态转移训练入口（--mode gt | open_loop | hereditary）。
 
 gt 与 open_loop 是**同一个网络**（都派生自 StateTransitionSpatialModel，state_dict 完全
 相同），差别仅在 teacher_forcing_ratio：
   - gt         每步喂真实 s_{t-1}（tf=1.0）→ s 不漂移，部署=每步观测。主线（方向 14）。
   - open_loop  窗口内喂自身预测（tf 退火到 0）→ 开环 rollout，部署=观测一次预测 K 步（方向 15）。
+  - hereditary 显式迟滞算子模型（HereditaryOperatorModel，设计文档 Version B）：
+               PI play（率无关）+ 广义 Maxwell（率相关）电平读出，无骨架反馈，
+               gt/open_loop 对它等价。迟滞谱经 hysteresis_report() 定量读出。
 本脚本用 --mode 区分，合并 train_gt_transition / train_open_loop_transition（二者现为薄封装）。
 
 用法:
@@ -18,6 +21,10 @@ gt 与 open_loop 是**同一个网络**（都派生自 StateTransitionSpatialMod
   # open_loop + tf 退火（drift>50× 才升级；staircase 优先）
   CUDA_VISIBLE_DEVICES=1 python scripts/training/train_transition.py \\
       --mode open_loop --tf_ratio 1.0 --tf_anneal_epochs 15 --tf_schedule staircase
+
+  # hereditary（显式算子;--encoder/--z_dim 被忽略）
+  CUDA_VISIBLE_DEVICES=1 python scripts/training/train_transition.py \\
+      --mode hereditary --data_dir data/real_seq/<seq>_clean --dt 0.1
 """
 
 import argparse
@@ -44,8 +51,10 @@ from src.training.trainer_unified import UnifiedTrainer  # noqa: E402
 def build_parser():
     parser = argparse.ArgumentParser(description="统一状态转移训练（gt | open_loop）")
     add_common_args(parser, data_dir_default="data/seq_rz_c2_sk")
-    parser.add_argument("--mode", choices=["gt", "open_loop"], default="gt",
-                        help="gt=每步真实s(tf=1.0,零漂移); open_loop=窗口开环(tf退火到0,喂自身预测)")
+    parser.add_argument("--mode", choices=["gt", "open_loop", "hereditary"],
+                        default="gt",
+                        help="gt=每步真实s(tf=1.0,零漂移); open_loop=窗口开环(tf退火到0,喂自身预测); "
+                             "hereditary=显式迟滞算子模型(PI play + Maxwell, 电平读出)")
     parser.add_argument("--encoder", type=str, default="fractional",
                         choices=["ema", "fractional", "gamma", "gru", "transformer", "tcn"],
                         help="Temporal encoder type")
@@ -78,6 +87,15 @@ def build_parser():
     parser.add_argument("--tf_schedule", type=str, default="staircase",
                         choices=["linear", "staircase"],
                         help="[open_loop] 退火形状: staircase(前半 nominal/后半 tf_min) | linear")
+    # ── hereditary 专属（其它模式忽略）──
+    parser.add_argument("--n_play", type=int, default=8,
+                        help="[hereditary] PI play 算子数 J（率无关迟滞容量）")
+    parser.add_argument("--n_maxwell", type=int, default=6,
+                        help="[hereditary] Maxwell 元件数 M（率相关迟滞容量）")
+    parser.add_argument("--dt", type=float, default=0.1,
+                        help="[hereditary] 采样间隔秒（必须与数据合同一致; 实物 10Hz → 0.1）")
+    parser.add_argument("--tau_max", type=float, default=10.0,
+                        help="[hereditary] Maxwell 时间常数网格上界秒（下界固定 3·dt）")
     return parser
 
 
@@ -114,6 +132,21 @@ def main(argv=None):
         spec.phases[0].dense_step_weight = args.dense_step_weight
         model_tag = "gt_transition"
         tf_info = f"tf={spec.phases[0].teacher_forcing_ratio}"
+    elif args.mode == "hereditary":
+        # 显式迟滞算子模型: 算子状态经 latent_z 槽 BPTT，无骨架反馈
+        # （--encoder/--z_dim 属于隐式潜变量家族，本模型无此构件，忽略）
+        from src.models.model_hereditary_operator import HereditaryOperatorModel
+        model = HereditaryOperatorModel(
+            action_dim=action_dim, n_nodes=n_nodes,
+            window_size=temp_cfg["window_size"],
+            n_play=args.n_play, n_maxwell=args.n_maxwell, dt=args.dt,
+            tau_range=(3.0 * args.dt, args.tau_max),
+            episode_len=args.episode_len).to(device)
+        spec = model.training_spec
+        spec.phases[0].dense_step_weight = args.dense_step_weight
+        model_tag = "hereditary"
+        tf_info = (f"operators: J={args.n_play} plays, M={args.n_maxwell} maxwell, "
+                   f"dt={args.dt}s (tf n/a — 无骨架反馈)")
     else:  # open_loop
         from src.models.model_open_loop_transition import OpenLoopTransitionModel
         model = OpenLoopTransitionModel(
@@ -135,13 +168,26 @@ def main(argv=None):
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"\nModel: {model_tag}（mode={args.mode}）")
-    print(f"  Action dim: {action_dim}, N nodes: {n_nodes}, Encoder: {args.encoder}, "
-          f"z_dim: {args.z_dim}, episode_len(K): {args.episode_len}")
+    if args.mode == "hereditary":
+        print(f"  Action dim: {action_dim}, N nodes: {n_nodes}, "
+              f"episode_len(K): {args.episode_len}, dt: {model.dt.item():g}s")
+        print(f"  Play r-grid: {[f'{r:.3f}' for r in model.play.thresholds.tolist()]}")
+        print(f"  Maxwell tau-grid: {[f'{t:.2f}' for t in model.maxwell.taus.tolist()]}s")
+    else:
+        print(f"  Action dim: {action_dim}, N nodes: {n_nodes}, Encoder: {args.encoder}, "
+              f"z_dim: {args.z_dim}, episode_len(K): {args.episode_len}")
     print(f"  Action view: raw={action_contract.raw_action_dim}D -> "
           f"channels={action_contract.model_action_channels} -> model={action_dim}D")
     print(f"  {tf_info}, dense_step_weight: {args.dense_step_weight}")
     print(f"  Parameters: {n_params:,}")
     print(f"  Active losses: {spec.phases[0].active_losses}")
+
+    if args.mode == "hereditary":
+        # 合同字段进 config.json（dt 必须可追溯——设计文档 §六）
+        config["dt"] = args.dt
+        config["n_play"] = args.n_play
+        config["n_maxwell"] = args.n_maxwell
+        config["tau_max"] = args.tau_max
 
     # ── 归一化（episode 模式数据集，与训练一致）──
     from src.data.dataset_spatial import StateTransitionDataset
