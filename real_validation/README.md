@@ -2,7 +2,7 @@
 
 > **GUI 使用指南见 [`GUI_GUIDE.md`](GUI_GUIDE.md)** —— 五页功能、使用顺序、标准操作流程、当前能力边界。
 
-第一版提供独立于采集 GUI 的验证工作台基础：
+该目录提供独立于采集 GUI 的模型部署与真实控制工作台：
 
 - 不可变 model/anchor/scene/safety/plan 数据契约；
 - `IDLE → READY → ARMED → EXECUTING` 安全状态机；
@@ -11,6 +11,9 @@
 - Mock ACK、错误注入、Abort 后归零与 `execution.csv`；
 - 从 transition NPZ 建立带完整 H 历史的离线 anchor；
 - 受压力/速率约束的 OpenLoop shooting 与逐步轨迹/动作预览；
+- 当前相机的实验级 ROI、参考背景、在线分割和 15 节点整臂中心线；
+- 相机像素、ROI 局部像素与机器人毫米坐标的可追溯正反变换；
+- 执行后真实形态目标残差、前向预测误差和下一窗口 Anchor；
 - Qt 真阀线程桥接、只读 run replay 和基础离线评价；
 - 五阶段 GUI 骨架。
 
@@ -36,9 +39,9 @@ python -m pip install -r requirements-hardware.txt
 python -m pip install -r requirements-perception.txt
 ```
 
-把 checkpoint 和它所属实验的 `config.json` 放到 `checkpoints/current/`。当前
-`config.json` 占位已经对应服务器 `exp_20260714_8`，因此只需复制该实验的
-`best_model.pt`；更换其他模型时必须把二者一起更换。
+把同一次训练试次的 checkpoint、`config.json` 和 `deploy_manifest.json` 放到
+`checkpoints/<model_name>/`。部署清单声明动作压力尺度、通道来源、训练时基、毫米状态坐标、
+`K_safe` 和位移统计；加载时会校验 checkpoint 哈希。
 
 离线锚定用的 transition NPZ 放 `data/npz/`(示例 15 节点数据已内置;GUI_GUIDE
 §2.2 有『从 NPZ 建 Anchor』的完整操作入门)。
@@ -61,12 +64,11 @@ Windows 也可以双击 `run_gui.bat`。所有默认路径都由 `real_validatio
 python -c "import real_validation; print('contracts ok')"
 ```
 
-完整测试（10 个模块、130 个测试:契约 + 硬件适配 + GUI 回归 + 感知
-parity/registration/quality/probe + import 卫生)在仓库根运行:
+完整测试在仓库根运行:
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-当前 GUI 中的执行明确标记为 Mock。真阀连接面板、在线骨架提取和完整交互式 Scene
-Editor 接入完成前，不得用此入口控制实机。
+GUI 根据硬件 profile 显式显示 Mock 或 Real 执行。真实计划需要部署合同、当前相机配置、
+Anchor、Scene 和 Safety 全部通过 Preflight，再经操作员 Arm 放行。

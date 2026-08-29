@@ -25,12 +25,14 @@ REQUIRED = (
     "checkpoint_sha256", "action_scale_kpa", "channel_map", "train_dt_nominal_s",
     "mask_source", "n_nodes", "window_size", "z_dim", "episode_len",
     "action_dim", "encoder_type", "hidden_dim", "n_scales",
+    "node_order", "spatial_propagation_direction", "gl_kernel_alignment",
+    "model_contract_version",
 )
 
 
 @dataclass(frozen=True)
 class DeployManifest:
-    schema_version: int = 1
+    schema_version: int = 2
     checkpoint_sha256: str | None = None
     action_scale_kpa: tuple[float, ...] | None = None
     channel_map: tuple[int, ...] | None = None
@@ -58,6 +60,10 @@ class DeployManifest:
     mm_per_px: float | None = None
     state_coordinate_frame: str = "camera_pixel_v1"
     state_length_unit: str = "px"
+    node_order: str = "base_to_tip"
+    spatial_propagation_direction: str = "base_to_tip"
+    gl_kernel_alignment: str = "current_at_window_end"
+    model_contract_version: int = 2
     train_sequences: tuple[str, ...] = ()
     n_nodes: int | None = None
     window_size: int | None = None
@@ -69,6 +75,8 @@ class DeployManifest:
     n_scales: int | None = None
 
     def __post_init__(self) -> None:
+        if int(self.schema_version) != 2:
+            raise ValueError("deploy_manifest schema_version 必须为 2")
         missing = [name for name in REQUIRED if getattr(self, name) is None]
         if missing:
             raise ValueError(f"deploy_manifest 缺必填字段: {missing}")
@@ -121,6 +129,13 @@ class DeployManifest:
             raise ValueError(f"未知 state_coordinate_frame: {self.state_coordinate_frame}")
         if self.state_length_unit != allowed_frames[self.state_coordinate_frame]:
             raise ValueError("state_length_unit 与 state_coordinate_frame 不一致")
+        if self.node_order != "base_to_tip" or \
+                self.spatial_propagation_direction != "base_to_tip":
+            raise ValueError("节点合同与空间传播必须统一为 base_to_tip")
+        if self.gl_kernel_alignment != "current_at_window_end":
+            raise ValueError("GL 权重 w0 必须对齐窗口末尾的当前动作")
+        if int(self.model_contract_version) != 2:
+            raise ValueError("model_contract_version 必须为 2")
         if self.state_coordinate_frame == "robot_planar_mm_v1" and \
                 self.robot_diameter_mm is None:
             raise ValueError("robot_planar_mm_v1 需要 robot_diameter_mm")
@@ -137,6 +152,10 @@ class DeployManifest:
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "DeployManifest":
+        missing = [name for name in ("schema_version",) + REQUIRED
+                   if name not in value]
+        if missing:
+            raise ValueError(f"deploy_manifest 缺必填字段: {missing}")
         return cls(**{k: v for k, v in value.items()
                       if k in cls.__dataclass_fields__})
 

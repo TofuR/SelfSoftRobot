@@ -17,6 +17,7 @@ class FractionalMemory(nn.Module):
         self.action_dim = action_dim
         self.n_orders = n_orders
         self.window_size = window_size
+        self.gl_kernel_alignment = "current_at_window_end"
         self.raw_alphas = nn.Parameter(torch.logit(torch.linspace(0.2, 0.8, n_orders)))
         self.order_weights = nn.Parameter(torch.ones(n_orders))
         input_dim = n_orders * action_dim + 2 * action_dim
@@ -75,7 +76,8 @@ class FractionalMemory(nn.Module):
             else:
                 weights = self._weights(self.alphas[index], length)
                 weights = weights / (weights.abs().sum() + 1e-8)
-            value = torch.einsum("k,bkd->bd", weights, action_window)
+            value = torch.einsum(
+                "k,bkd->bd", torch.flip(weights, dims=(0,)), action_window)
             features.append(value * self.order_weights[index])
         current = action_window[:, -1, :]
         velocity = (current - action_window[:, -2, :]
@@ -92,6 +94,10 @@ class OpenLoopTransitionModel(nn.Module):
         self.hidden_dim = int(hidden_dim)
         self.window_size = int(window_size)
         self.z_dim = int(z_dim)
+        self.node_order = "base_to_tip"
+        self.spatial_propagation_direction = "base_to_tip"
+        self.gl_kernel_alignment = "current_at_window_end"
+        self.model_contract_version = 2
         self.register_buffer("pc_center", torch.zeros(1, 1, 3))
         self.register_buffer("pc_scale", torch.ones(1, 1, 3))
         self.register_buffer("action_norm_factor", torch.tensor(1.0))

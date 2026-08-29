@@ -26,15 +26,19 @@ def main():
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--data-dir", required=True, help="val npz 目录(建 anchor 用)")
     parser.add_argument("--t-init", type=int, required=True, help="起始骨架帧索引")
-    parser.add_argument("--target-x", type=float)
-    parser.add_argument("--target-y", type=float)
-    parser.add_argument("--target-radius", type=float, default=5.0)
-    parser.add_argument("--target-node", type=int, default=0, help="末端 node(默认 0)")
+    parser.add_argument("--target-x", type=float, help="模型状态坐标 x")
+    parser.add_argument("--target-y", type=float, help="模型状态坐标 y")
+    parser.add_argument("--target-radius", type=float, default=5.0,
+                        help="目标圆半径，单位由部署合同声明")
+    parser.add_argument(
+        "--target-node", type=int, default=None,
+        help="目标节点；默认使用末端 nodeN-1")
     parser.add_argument("--target-frame", type=int, default=None,
                         help="从transition NPZ读取该帧的完整N节点目标骨架")
     parser.add_argument("--target-data", default=None,
                         help="目标骨架NPZ；默认与--data-dir中的anchor NPZ相同")
-    parser.add_argument("--target-tolerance-px", type=float, default=4.0)
+    parser.add_argument("--target-tolerance", type=float, default=4.0,
+                        help="整形态容差，单位由部署合同声明")
     parser.add_argument("--obstacle", default="", help="圆障碍 'cx,cy,r',多个用 | 分隔")
     parser.add_argument("--k", type=int, default=None, help="固定 K(与 --auto-k 互斥)")
     parser.add_argument("--auto-k", action="store_true")
@@ -72,6 +76,8 @@ def main():
     from real_validation.runtime.model_runtime import ModelRuntime
     runtime = ModelRuntime(args.checkpoint, device="cuda" if torch.cuda.is_available() else "cpu")
     descriptor = runtime.descriptor
+    target_node = (descriptor.n_nodes - 1
+                   if args.target_node is None else int(args.target_node))
     if descriptor.action_scale_kpa is None:
         parser.error(f"checkpoint 缺 deploy_manifest(部署契约);请先跑 build_deploy_manifest.py")
 
@@ -81,7 +87,7 @@ def main():
         parser.error(f"{args.data_dir} 无 npz")
     anchor = anchor_from_npz(files[0], args.t_init, descriptor, runtime.model, padding="reject")
 
-    # 3. Scene:完整目标骨架或末端目标 + 圆障碍(model坐标=源相机像素)
+    # 3. Scene:完整目标骨架或末端目标 + 圆障碍，统一使用模型状态坐标。
     target_npz = args.target_data or files[0]
     if args.target_frame is not None:
         with np.load(target_npz) as target_data:
@@ -96,14 +102,14 @@ def main():
         primitives = [ScenePrimitive(
             "target_skeleton", "model",
             {"nodes": target_nodes[:, :2].tolist(),
-             "tolerance_px": args.target_tolerance_px}, name="shape_target")]
+             "tolerance": args.target_tolerance}, name="shape_target")]
     else:
         if args.target_x is None or args.target_y is None:
             parser.error("请提供--target-frame，或同时提供--target-x/--target-y")
         primitives = [ScenePrimitive(
             "target_circle", "model",
             {"xy": [args.target_x, args.target_y], "radius": args.target_radius,
-             "node": args.target_node}, name="tip_target")]
+             "node": target_node}, name="tip_target")]
     with np.load(target_npz) as target_data:
         diameter_scale = resolve_diameter_scale(target_data, os.path.dirname(target_npz))
     for obs in [o for o in args.obstacle.split("|") if o]:
@@ -157,22 +163,23 @@ def main():
             plan, os.path.join(args.out, "execution.csv"))
     meta = plan.metadata
     print(f"plan 写入 {args.out}/plan.json")
-    print(f"  K={meta.get('k_effective')} auto_k={meta.get('auto_k')} gap={meta.get('auto_k_gap_px')}px")
+    state_unit = descriptor.state_length_unit
+    print(f"  K={meta.get('k_effective')} auto_k={meta.get('auto_k')} "
+          f"gap={meta.get(f'auto_k_gap_{state_unit}')}{state_unit}")
     print(f"  规划耗时 {meta.get('duration_s', 0):.1f}s  clearance={meta.get('predicted_min_obstacle_clearance')}")
     print(f"  动作数 {plan.horizon}, 步长 {step_interval_s:.3f}s(训练 Δt)")
-    predicted_residual_px = plan.loss_terms.get(
-        "predicted_terminal_target_residual_px", float("nan"))
+    predicted_residual = plan.loss_terms.get(
+        f"predicted_terminal_target_residual_{state_unit}", float("nan"))
     with np.load(os.path.join(args.out, plan.predicted_states_path)) as predicted_data:
         predicted_states = np.asarray(predicted_data["states_model"], dtype=np.float32)
     predicted_scene = evaluate_plan_scene(
-        predicted_states, scene, tip_node=0, mm_per_px=diameter_scale.mm_per_px)
+        predicted_states, scene, tip_node=target_node,
+        state_unit=state_unit,
+        mm_per_state=(1.0 if state_unit == "mm" else diameter_scale.mm_per_px))
     print("  命令安全预检=PASS")
     print(f"  模型预测目标: kind={plan.metadata.get('target_kind')}, "
-          f"residual={predicted_residual_px:.3f}px, "
+          f"residual={predicted_residual:.3f}{state_unit}, "
           f"reached={predicted_scene.get('predicted_target_success')}")
-    print(f"  直径尺度={diameter_scale.mm_per_px:.6f}mm/px, "
-          f"predicted_terminal_target_residual≈"
-          f"{predicted_residual_px * diameter_scale.mm_per_px:.3f}mm")
     print(f"  六通道初始压力={tuple(round(v, 2) for v in initial6)} kPa")
     if args.mock_execute:
         print(f"  Mock执行完成: {args.out}/execution.csv")

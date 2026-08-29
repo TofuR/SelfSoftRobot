@@ -140,6 +140,46 @@ def segment_white_on_blue(bgr, bg_gray, sat=100, val=120, diff=25, dil=35,
     )["final"]
 
 
+def trim_wide_base_attachment(mask, base_side="top", width_ratio=1.5,
+                              stable_span=5):
+    """从基座侧移除宽支架形成的短横向分支。"""
+    result = np.asarray(mask, dtype=np.uint8).copy()
+    if base_side == "none" or width_ratio <= 0 or stable_span <= 0 or \
+            not np.any(result):
+        return result
+    if base_side in ("top", "bottom"):
+        widths = result.sum(axis=1)
+    elif base_side in ("left", "right"):
+        widths = result.sum(axis=0)
+    else:
+        raise ValueError(f"未知 base_side: {base_side}")
+    occupied = widths[widths > 0].astype(float)
+    if not len(occupied):
+        return result
+    body_width = float(np.median(occupied))
+    threshold = max(float(width_ratio) * body_width, body_width + 2.0)
+    indices = (range(len(widths)) if base_side in ("top", "left") else
+               range(len(widths) - 1, -1, -1))
+    ordered = list(indices)
+    cut = None
+    for offset in range(0, len(ordered) - int(stable_span) + 1):
+        values = widths[ordered[offset:offset + int(stable_span)]]
+        if np.all((values > 0) & (values <= threshold)):
+            cut = ordered[offset]
+            break
+    if cut is None:
+        return result
+    if base_side == "top":
+        result[:cut] = 0
+    elif base_side == "bottom":
+        result[cut + 1:] = 0
+    elif base_side == "left":
+        result[:, :cut] = 0
+    else:
+        result[:, cut + 1:] = 0
+    return result
+
+
 def segment_views(images_bgr, method="backlight", bg=None,
                   color_bounds=None, gray_thresh=60, bg_thresh=25,
                   white_on_blue_params=None):
@@ -182,7 +222,7 @@ def masks_to_skeletons_2d(masks, n_points=31, tip_fix=True):
     """(V,N,H,W) 二值 → (V,N,n_points,2) 2D 骨架，复用 skeleton 模块。
 
     返回 [col,row]；无前景帧为全 0（与 extract_skeleton_2d 约定一致，三角化时跳过）。
-    tip_fix=True(默认): 末端 node0 垂直切片修正(修弯管 cap 角落偏移), 实物默认开。
+    tip_fix=True(默认): 末端 nodeN-1 垂直切片修正, 实物默认开。
     """
     from .skeleton import batch_extract_skeleton_2d
 

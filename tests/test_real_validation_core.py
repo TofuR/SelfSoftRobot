@@ -251,7 +251,8 @@ class ValidationCoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "sequence.npz"
             np.savez(path, positions=np.zeros((4, 3, 3), dtype=np.float32),
-                     actions=np.arange(4, dtype=np.float32).reshape(4, 1))
+                     actions=np.arange(4, dtype=np.float32).reshape(4, 1),
+                     node_order=np.array("base_to_tip"))
             with self.assertRaises(ValueError):
                 anchor_from_npz(path, 0, model, runtime_model)
             anchor = anchor_from_npz(path, 2, model, runtime_model)
@@ -392,6 +393,9 @@ class ValidationCoreTest(unittest.TestCase):
                 "model": "OpenLoopTransitionModel", "action_dim": 1,
                 "n_nodes": 3, "window_size": 2, "hidden_dim": 8,
                 "n_scales": 2, "encoder_type": "fractional", "z_dim": 4,
+                "model_contract_version": 2, "node_order": "base_to_tip",
+                "spatial_propagation_direction": "base_to_tip",
+                "gl_kernel_alignment": "current_at_window_end",
             }
             (root / "config.json").write_text(json.dumps(config), encoding="utf-8")
             source = OpenLoopTransitionModel(1, 3, 8, 2, 2, 4)
@@ -410,7 +414,7 @@ class ValidationCoreTest(unittest.TestCase):
     def test_prediction_metrics_include_task_and_collision(self):
         predicted = np.zeros((2, 3, 2))
         observed = np.zeros((2, 3, 2))
-        observed[-1, 0] = (2.0, 0.0)
+        observed[-1, -1] = (2.0, 0.0)
         scene = Scene("metrics", (
             ScenePrimitive("target_circle", "model", {"center": [2, 0], "r": 0.1}),
             ScenePrimitive("obstacle_circle", "model", {"center": [5, 5], "r": 1}),
@@ -420,15 +424,27 @@ class ValidationCoreTest(unittest.TestCase):
         self.assertFalse(metrics["collision"])
         self.assertEqual(len(metrics["error_by_k"]), 2)
 
+    def test_prediction_metrics_honor_explicit_target_node(self):
+        predicted = np.zeros((1, 3, 2))
+        observed = np.zeros((1, 3, 2))
+        observed[0, 1] = (2.0, 0.0)
+        scene = Scene("metrics", (ScenePrimitive(
+            "target_point", "model", {"xy": [2, 0], "node": 1}),))
+
+        metrics = evaluate_prediction(predicted, observed, scene)
+
+        self.assertTrue(metrics["target_success"])
+        self.assertEqual(metrics["terminal_target_distance"], 0.0)
+
     def test_plan_scene_metrics_use_predicted_states_only(self):
         # 打磨①:离线下用 predicted_states 即可算计划侧场景指标(无需 observed/gap)
         predicted = np.zeros((2, 3, 2))
-        predicted[-1, 0] = (2.0, 0.0)              # 末端恰好到达目标中心
+        predicted[-1, -1] = (2.0, 0.0)             # 末端恰好到达目标中心
         scene = Scene("plan", (
             ScenePrimitive("target_circle", "model", {"center": [2, 0], "r": 0.1}),
             ScenePrimitive("obstacle_circle", "model", {"center": [5, 5], "r": 1}),
         ))
-        metrics = evaluate_plan_scene(predicted, scene, tip_node=0, mm_per_px=0.8)
+        metrics = evaluate_plan_scene(predicted, scene, mm_per_px=0.8)
         self.assertTrue(metrics["predicted_target_success"])
         self.assertFalse(metrics["predicted_collision"])
         self.assertEqual(metrics["steps"], 2)

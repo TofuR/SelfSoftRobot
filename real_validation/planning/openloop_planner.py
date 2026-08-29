@@ -106,7 +106,9 @@ def _target(scene: Scene, model, device, expected_nodes: int | None = None):
             target_space = "model_normalized"
         else:
             raise ValueError(f"目标坐标 {item.frame_id} 尚未转换到 model/model_normalized")
-        node = int(item.geometry.get("node", 0))
+        if expected_nodes is None:
+            raise ValueError("解析点目标需要模型节点数以确定默认末端节点")
+        node = int(item.geometry.get("node", int(expected_nodes) - 1))
         return {"kind": item.kind, "point": point, "radius": radius,
                 "node": node, "item": item, "space": target_space}
     if item.kind == "target_skeleton":

@@ -4,7 +4,7 @@
 某一段静止。旧逐行质心 + tip_fix接口原样保留，供在线兼容和历史实验复现。
 src/utils/skeleton_2d.py 是旧公开接口的薄壳；细化方法额外依赖scikit-image。
 
-节点顺序：node0 = tip（图像底部、运动末端），node N-1 = base（图像顶部、固定基座）。
+节点顺序：node0 = base（图像顶部、固定基座），node N-1 = tip（图像底部、运动末端）。
 """
 
 import numpy as np
@@ -30,7 +30,7 @@ def allocate_segment_intervals(n_points, segment_lengths):
 
 
 def _resample_path_segmented(path, n_points, segment_lengths):
-    """沿有序 tip→base 路径采样，并把物理段边界固定到明确节点。"""
+    """沿有序 base→tip 路径采样，并把物理段边界固定到明确节点。"""
     path = np.asarray(path, dtype=np.float64)
     delta = np.diff(path, axis=0)
     seg = np.sqrt((delta ** 2).sum(axis=1))
@@ -116,6 +116,7 @@ def _medial_longest_path(binary_img, algorithm="skeletonize", anchor_xy=None):
         while current is not None:
             ordered.append(current)
             current = previous[current]
+        ordered.reverse()  # base → tip
         path = np.asarray(ordered, dtype=np.float64) if len(ordered) > 1 else None
         return path, int(len(points))
 
@@ -273,27 +274,27 @@ def _fix_one_endcap(mask, path_from_end, width_ratio=0.85):
 
 
 def _fix_path_endcaps(mask, path, enabled=True, fix_base=True):
-    """同时修正 tip/base；任一端失败时只保留该端原路径，绝不让整帧失效。"""
+    """修正 base→tip 路径的两个端帽，并保持节点方向。"""
     path = np.asarray(path, dtype=np.float64)
     if not enabled:
         return path, None, None, ENDPOINT_FIX_NOT_REQUESTED, ENDPOINT_FIX_NOT_REQUESTED
-    tip, tip_reason = _fix_one_endcap(mask, path)
+    tip, tip_reason = _fix_one_endcap(mask, path[::-1])
     if fix_base:
-        base, base_reason = _fix_one_endcap(mask, path[::-1])
+        base, base_reason = _fix_one_endcap(mask, path)
     else:
         base, base_reason = None, ENDPOINT_FIX_BASE_ANCHORED
 
-    tip_join = tip["join_index"] if tip is not None else 0
     base_join = base["join_index"] if base is not None else 0
-    stop = len(path) - base_join
-    if tip_join >= stop:
+    tip_join = tip["join_index"] if tip is not None else 0
+    stop = len(path) - tip_join
+    if base_join >= stop:
         return path, None, None, ENDPOINT_FIX_SKIP_SHORT_PATH, ENDPOINT_FIX_SKIP_SHORT_PATH
     pieces = []
-    if tip is not None:
-        pieces.append(tip["center"][None])
-    pieces.append(path[tip_join:stop])
     if base is not None:
         pieces.append(base["center"][None])
+    pieces.append(path[base_join:stop])
+    if tip is not None:
+        pieces.append(tip["center"][None])
     return np.concatenate(pieces, axis=0), tip, base, tip_reason, base_reason
 
 
@@ -306,7 +307,7 @@ def extract_centerline_2d(binary_img, n_points=15, method="skeletonize",
     ``row_centroid`` 保留旧单段流程。
     细化算法会让长条mask的端点向内收缩或分叉到端帽角点；``endpoint_fix`` 默认在
     tip/base 两端估计局部切向、主体宽度和宽边中心，再替换端帽分支后统一重采样。
-    输出始终为 ``node0=tip``、``nodeN-1=base``。若提供 ``base_anchor_xy``，用它
+    输出始终为 ``node0=base``、``nodeN-1=tip``。若提供 ``base_anchor_xy``，用它
     确定路径方向；否则沿用当前实验中基座靠图像顶部的约定。
     """
     mask = np.asarray(binary_img)
@@ -356,14 +357,14 @@ def extract_centerline_2d(binary_img, n_points=15, method="skeletonize",
     else:
         anchor = np.asarray(base_anchor_xy, dtype=np.float64)
         first_is_base = np.linalg.norm(path[0] - anchor) <= np.linalg.norm(path[-1] - anchor)
-    if first_is_base:
+    if not first_is_base:
         path = path[::-1]
     if base_anchor_xy is not None:
         # 显式base锚点是物理固定端合同：细化中轴会在圆帽内收若干像素，直接把
-        # 权威锚点接回路径，避免nodeN-1随细化端点抖动或停在管体内部。
+        # 权威锚点接回路径，避免node0随细化端点抖动或停在管体内部。
         anchor = np.asarray(base_anchor_xy, dtype=np.float64).reshape(2)
-        if np.linalg.norm(path[-1] - anchor) > 1e-6:
-            path = np.concatenate([path, anchor[None]], axis=0)
+        if np.linalg.norm(path[0] - anchor) > 1e-6:
+            path = np.concatenate([anchor[None], path], axis=0)
     raw_path = path.copy()
     path, tip_cap, base_cap, tip_reason, base_reason = _fix_path_endcaps(
         mask, path, enabled=endpoint_fix, fix_base=base_anchor_xy is None)
@@ -377,10 +378,10 @@ def extract_centerline_2d(binary_img, n_points=15, method="skeletonize",
         "arc_length_px": float(np.linalg.norm(np.diff(path, axis=0), axis=1).sum()),
         "raw_arc_length_px": float(np.linalg.norm(
             np.diff(raw_path, axis=0), axis=1).sum()),
-        "raw_tip_xy": tuple(float(v) for v in raw_path[0]),
-        "raw_base_xy": tuple(float(v) for v in raw_path[-1]),
-        "fixed_tip_xy": tuple(float(v) for v in path[0]),
-        "fixed_base_xy": tuple(float(v) for v in path[-1]),
+        "raw_base_xy": tuple(float(v) for v in raw_path[0]),
+        "raw_tip_xy": tuple(float(v) for v in raw_path[-1]),
+        "fixed_base_xy": tuple(float(v) for v in path[0]),
+        "fixed_tip_xy": tuple(float(v) for v in path[-1]),
         "tip_endpoint_fix_reason": tip_reason,
         "base_endpoint_fix_reason": base_reason,
         "tip_endpoint_fix_applied": tip_reason == ENDPOINT_FIX_APPLIED,
@@ -407,9 +408,11 @@ def _perpendicular_tip_fix_with_reason(skeleton, binary_img, n_points):
     """与 _perpendicular_tip_fix 相同的计算，同时返回 (skeleton, 生效/跳过原因)。
 
     原因取值见模块顶部 TIP_FIX_* 常量。供在线质量门控消费 —— 原实现的门控是
-    静默跳过，调用方无从得知末端 node0 可能落在 cap 角落(B13)。
+    静默跳过，调用方无从得知末端 nodeN-1 可能落在 cap 角落。
     """
-    sk = skeleton.astype(np.float64)
+    # 公开合同为 base→tip；端帽几何在局部使用 tip→base
+    # 视图计算，完成后再恢复公开节点顺序。
+    sk = skeleton[::-1].astype(np.float64).copy()
     if n_points < 5:
         return skeleton, TIP_FIX_SKIP_FEW_POINTS
     if np.abs(sk).max() == 0:
@@ -430,22 +433,22 @@ def _perpendicular_tip_fix_with_reason(skeleton, binary_img, n_points):
     slab = proj >= proj.max() - 0.4 * w   # 尖端垂直切片
     if int(slab.sum()) < 3:
         return skeleton, TIP_FIX_SKIP_THIN_SLAB
-    node0 = pts[slab].mean(0)             # 垂直切片质心 = cap 中心线中点
-    sk[0] = node0
-    a = sk[min(3, n_points - 1)]          # 沿 body→node0 重布 node1,2 消折角
-    sk[1] = node0 + (a - node0) / 3.0
-    sk[2] = node0 + (a - node0) * 2.0 / 3.0
-    return sk.astype(np.float32), TIP_FIX_APPLIED
+    tip_point = pts[slab].mean(0)          # 垂直切片质心 = cap 中心线中点
+    sk[0] = tip_point
+    a = sk[min(3, n_points - 1)]          # 局部视图中沿 body→tip 重布相邻点
+    sk[1] = tip_point + (a - tip_point) / 3.0
+    sk[2] = tip_point + (a - tip_point) * 2.0 / 3.0
+    return sk[::-1].astype(np.float32), TIP_FIX_APPLIED
 
 
 def _perpendicular_tip_fix(skeleton, binary_img, n_points):
-    """末端 node0 的"垂直于局部轴切片质心"修正（修倾斜 cap 的 corner 偏移 + node0-1-2 折角）。
+    """末端 nodeN-1 的"垂直于局部轴切片质心"修正。
 
     根因: 逐行质心对倾斜管的末端 cap 做**水平**切片, 最底行落在 cap 角落而非中点
-    (弯管 cap 倾斜时, 底部几行变窄且偏向一侧→node0 落角落, node0-1-2 形成非物理尖折角)。
+    (弯管 cap 倾斜时,底部几行变窄且偏向一侧→末端落角落并形成非物理尖折角)。
     修法: body 段保留(直管段水平切片本来就对), 仅重算 tip——从 body 节点估**局部轴方向**,
     在尖端做**垂直于轴**的切片(对管左右对称)→质心=局部中心线中点=cap 中点, 与倾斜无关;
-    再沿 body→node0 重布 node1-2 消折角。body(node3+)不动。
+    再沿局部 body→tip 重布相邻点消折角。
 
     实测(实物 10116 帧): 34% 帧(M0 末端误差>4px)从 mean 6.94px→2.01px(-71%); body 不变;
     0 失败; 仅 1.3% 易帧小幅回退(≤3.5px)。详见 scripts/real/compare_skeleton_methods.py。
@@ -459,21 +462,21 @@ def _perpendicular_tip_fix(skeleton, binary_img, n_points):
 def extract_skeleton_2d(binary_img, n_points=31, tip_fix=False, return_info=False):
     """从二值图像提取 2D 中心线骨架。
 
-    对图像每一行（从底到顶）计算白色像素的质心列坐标，
+    对图像每一行（从顶到底）计算白色像素的质心列坐标，
     然后沿弧长均匀重采样到 n_points 个点。
 
     Args:
         binary_img: (H, W) 二值图像，1=前景。
         n_points: 采样点数。
-        tip_fix: 是否对末端 node0 做"垂直于局部轴切片质心"修正。默认 False
-            (保持原有行为, 供 sim 等已验证管线)。实物管在弯曲时逐行质心会把 node0
+        tip_fix: 是否对末端 nodeN-1 做"垂直于局部轴切片质心"修正。默认 False
+            实物管在弯曲时逐行质心会把末端
             落到倾斜 cap 的角落, 置 True 可修正(见 _perpendicular_tip_fix)。
         return_info: True 时返回 (skeleton, info)；info 含 tip_fix_requested /
             tip_fix_applied / tip_fix_reason / n_foreground_px / n_valid_rows。
             默认 False，返回值与迁移前完全一致。
 
     Returns:
-        skeleton_2d: (n_points, 2) 像素坐标 [col, row]，从底部到顶部排列。
+        skeleton_2d: (n_points, 2) 像素坐标 [col, row]，从 base 到 tip 排列。
                      若图像无前景，返回全零。
         (仅 return_info=True) info: dict，见上。
     """
@@ -481,7 +484,7 @@ def extract_skeleton_2d(binary_img, n_points=31, tip_fix=False, return_info=Fals
     n_foreground = int((binary_img > 0.5).sum())
     coords = []
 
-    for row in range(H - 1, -1, -1):
+    for row in range(H):
         white_cols = np.where(binary_img[row] > 0.5)[0]
         if len(white_cols) > 0:
             center_col = white_cols.mean()
@@ -532,7 +535,7 @@ def batch_extract_skeleton_2d(images, n_points=31, tip_fix=False):
     Args:
         images: (T, H, W) 二值图像序列。
         n_points: 采样点数。
-        tip_fix: 末端 node0 垂直切片修正(见 extract_skeleton_2d), 默认 False。
+        tip_fix: 末端 nodeN-1 垂直切片修正(见 extract_skeleton_2d), 默认 False。
 
     Returns:
         skeletons: (T, n_points, 2) 像素坐标。

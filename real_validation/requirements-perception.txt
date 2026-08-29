@@ -2,3 +2,4 @@
 # 只跑离线 Mock 工作台不需要装本文件。
 opencv-python>=4.5
 scipy>=1.7
+scikit-image>=0.19

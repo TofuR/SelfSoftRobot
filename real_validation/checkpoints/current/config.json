@@ -1,12 +1,137 @@
 {
   "model": "OpenLoopTransitionModel",
-  "action_dim": 1,
+  "model_tag": "open_loop_transition",
+  "total_params": 243564,
+  "trainable_params": 243564,
+  "action_dim": 4,
   "window_size": 40,
   "hidden_dim": 128,
   "n_scales": 4,
+  "device": "cuda:0",
+  "phases": [
+    {
+      "name": "open_loop_transition",
+      "forward_attr": "forward",
+      "supervision_mode": "spatial_sequence",
+      "dataset_type": "state_transition",
+      "data_mode": "sequence",
+      "active_losses": [
+        "skeleton",
+        "spatial_smooth"
+      ],
+      "freeze_modules": [],
+      "use_gt_skeleton": false,
+      "trained": true,
+      "best_loss": 0.0006759039718996395
+    }
+  ],
+  "training": {
+    "lr": 0.001,
+    "batch_size": 128,
+    "n_epochs": 240,
+    "optimizer": "Adam",
+    "scheduler": "ReduceLROnPlateau",
+    "scheduler_patience": 10,
+    "seed": 20260827
+  },
+  "loss_weights": {
+    "recon_current": 0.7,
+    "recon_next": 0.3,
+    "smoothness": 0.1,
+    "cd": 0.1,
+    "compact": 1.0,
+    "skeleton": 1.0,
+    "spatial_smooth": 0.5,
+    "_doc": "skeleton=骨架回归MSE权重(SpatialSequenceModel用), spatial_smooth=空间平滑约束权重。其余同各模型通用权重"
+  },
+  "checkpoint_interval": 5,
+  "data_dirs": {
+    "sequence": "data/real_seq/seq_20260819_172644_n15_sam2_robot_mm/train"
+  },
+  "view_strategy": null,
+  "action_view": {
+    "raw_action_dim": 6,
+    "model_action_channels": [
+      0,
+      1,
+      3,
+      5
+    ],
+    "channel_source6": [
+      0,
+      1,
+      1,
+      3,
+      3,
+      5
+    ],
+    "channel_equalities": [
+      [
+        1,
+        2
+      ],
+      [
+        3,
+        4
+      ]
+    ],
+    "action_expansion6": [
+      0,
+      1,
+      1,
+      2,
+      2,
+      3
+    ],
+    "model_action_dim": 4
+  },
+  "state_view": {
+    "state_coordinate_frame": "robot_planar_mm_v1",
+    "state_length_unit": "mm",
+    "node_order": "base_to_tip"
+  },
+  "gl_kernel_alignment": "current_at_window_end",
   "encoder_type": "fractional",
   "n_nodes": 15,
   "z_dim": 16,
   "episode_len": 40,
-  "checkpoint_placeholder": "copy best_model.pt from exp_20260714_8"
+  "node_order": "base_to_tip",
+  "spatial_propagation_direction": "base_to_tip",
+  "model_contract_version": 2,
+  "data_prep": {
+    "n_points": 15,
+    "tip_fix": true,
+    "node_order": "base_to_tip",
+    "state_coordinate_frame": "robot_planar_mm_v1",
+    "state_length_unit": "mm"
+  },
+  "multiview": {
+    "w_depth": 20.0,
+    "w_recon_per_view": 1.0,
+    "n_rays_per_view": 512,
+    "n_samples": 64,
+    "fg_ratio": 0.5,
+    "near": 0.5,
+    "far": 2.5,
+    "fg_threshold": 0.1,
+    "chunk_size": 4096,
+    "use_depth_guided_sampling": false,
+    "n_coarse": 32,
+    "n_fine": 32,
+    "w_consist": 0.1,
+    "w_reproj": 0.1,
+    "warmup_epochs": 10,
+    "n_reproj_points": 256,
+    "alpha_threshold": 0.5,
+    "_doc": "w_depth=深度loss权重, w_recon_per_view=每视角重建权重, n_rays_per_view=每视角采样射线数, fg_ratio=前景射线比例, fg_threshold=前景mask二值化阈值, chunk_size=模型分块查询大小, w_consist=跨视角一致性权重(方案B), w_reproj=重投影权重(方案B), n_reproj_points=重投影采样点数, alpha_threshold=高置信度区域阈值"
+  },
+  "sdf": {
+    "n_surface": 1000,
+    "n_near_surface": 1000,
+    "n_off_surface": 1000,
+    "w_sdf": 3000.0,
+    "w_normal": 10.0,
+    "w_grad": 0.0,
+    "_doc": "w_sdf=SDF L1回归权重, w_normal=法向量一致性权重, w_grad=Eikonal权重(设为0关闭。SIREN w0=30放大梯度27000倍，eikonal不兼容)"
+  }
 }

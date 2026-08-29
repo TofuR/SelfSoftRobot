@@ -29,7 +29,7 @@ def _nearby_config(checkpoint: Path) -> dict[str, Any]:
 
 
 def _nearby_manifest(checkpoint: Path) -> dict[str, Any] | None:
-    """向上 6 层找 deploy_manifest.json;缺失/损坏返回 None(字段留 None,由 preflight 阻断)。"""
+    """向上 6 层读取 deploy_manifest.json；缺失或损坏返回 None。"""
     current = checkpoint.parent
     for _ in range(6):
         candidate = current / "deploy_manifest.json"
@@ -108,12 +108,20 @@ class ModelRuntime:
         self.manifest_path = _nearby_manifest_path(checkpoint_path)
         manifest_raw = _nearby_manifest(checkpoint_path)
         manifest = None
-        if manifest_raw:
+        if self.manifest_path is not None:
+            if manifest_raw is None:
+                raise ModelLoadError("deploy_manifest.json 无法解析为 JSON 对象")
             from ..contracts.deploy_manifest import DeployManifest
             try:
                 manifest = DeployManifest.from_dict(manifest_raw)
-            except ValueError:
-                manifest = None   # manifest 残缺 → 字段留 None,由 preflight 阻断规划
+            except ValueError as error:
+                raise ModelLoadError(
+                    f"deploy_manifest.json 不满足当前部署合同: {error}") from error
+        checkpoint_hash = file_sha256(checkpoint_path)
+        if manifest is not None and manifest.checkpoint_sha256 != checkpoint_hash:
+            raise ModelLoadError(
+                "deploy_manifest.json 的 checkpoint_sha256 与所选模型不一致；"
+                "请导出同一次训练试次的部署包")
         effective_k_safe = (int(k_safe) if k_safe is not None else
                             certified_k_safe(
                                 (manifest.k_safe_table or manifest.k_safe_table_px)
@@ -127,7 +135,7 @@ class ModelRuntime:
             self.reference_frame_path = reference.resolve()
         self.descriptor = ModelDescriptor(
             checkpoint=str(checkpoint_path),
-            checkpoint_hash=file_sha256(checkpoint_path),
+            checkpoint_hash=checkpoint_hash,
             model_type=str(info["model_type"]),
             action_dim=int(info["action_dim"]),
             n_nodes=n_nodes,
@@ -166,6 +174,8 @@ class ModelRuntime:
             state_length_unit=(manifest.state_length_unit if manifest
                                else config.get("state_view", {}).get(
                                    "state_length_unit", "px")),
+            node_order=(manifest.node_order if manifest else
+                        config.get("node_order")),
             registration_residual_max_px=manifest.registration_residual_max_px
                 if manifest else 2.0,
         )

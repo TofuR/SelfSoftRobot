@@ -38,11 +38,13 @@ from real_validation.contracts.models import validate_hardware_action_contract
 
 
 def find_checkpoint(exp_dir):
-    """exp 根 → phase_*/model/best_model.pt。"""
-    candidates = sorted(glob.glob(os.path.join(exp_dir, "phase_*", "model", "best_model.pt")))
-    if not candidates:
-        raise FileNotFoundError(f"{exp_dir} 下没有 phase_*/model/best_model.pt")
-    return candidates[0]
+    """exp 根 → 验证集选中权重，兼容早期训练试次。"""
+    for name in ("best_eval_model.pt", "best_model.pt"):
+        candidates = sorted(glob.glob(os.path.join(
+            exp_dir, "phase_*", "model", name)))
+        if candidates:
+            return candidates[0]
+    raise FileNotFoundError(f"{exp_dir} 下没有可部署 checkpoint")
 
 
 def find_config(checkpoint):
@@ -92,6 +94,8 @@ def measure_planning_displacement(npz_path, max_horizon, quantile=95.0):
 def main():
     parser = argparse.ArgumentParser(description="生成 deploy_manifest.json(4 源 join)")
     parser.add_argument("--exp-dir", required=True)
+    parser.add_argument("--checkpoint", default=None,
+                        help="部署权重；默认优先使用 best_eval_model.pt")
     parser.add_argument("--raw-seq", required=True)
     parser.add_argument("--horizon-summary")
     parser.add_argument("--channels", default=None,
@@ -99,7 +103,10 @@ def main():
     parser.add_argument("--out")
     args = parser.parse_args()
 
-    checkpoint = find_checkpoint(args.exp_dir)
+    checkpoint = args.checkpoint or find_checkpoint(args.exp_dir)
+    checkpoint = os.path.abspath(checkpoint)
+    if not os.path.isfile(checkpoint):
+        raise FileNotFoundError(checkpoint)
     config_path = find_config(checkpoint)
     with open(config_path) as stream:
         config = json.load(stream)
@@ -161,9 +168,26 @@ def main():
                     data["state_coordinate_frame"].item())
             if "state_length_unit" in data:
                 state_view["state_length_unit"] = str(data["state_length_unit"].item())
+            if "node_order" in data:
+                state_view["node_order"] = str(data["node_order"].item())
     state_coordinate_frame = state_view.get(
         "state_coordinate_frame", "camera_pixel_v1")
     state_length_unit = state_view.get("state_length_unit", "px")
+    node_order = state_view.get("node_order")
+    if node_order != "base_to_tip":
+        raise ValueError(f"训练数据 node_order 必须为 base_to_tip，当前为 {node_order!r}")
+    expected_model_contract = {
+        "model_contract_version": 2,
+        "spatial_propagation_direction": "base_to_tip",
+        "gl_kernel_alignment": "current_at_window_end",
+    }
+    actual_model_contract = {
+        key: config.get(key) for key in expected_model_contract
+    }
+    if actual_model_contract != expected_model_contract:
+        raise ValueError(
+            "训练 config 的时间/节点合同不完整；"
+            f" required={expected_model_contract}, actual={actual_model_contract}")
     planning_displacement = (measure_planning_displacement(
         training_npz[0], int(config.get("episode_len", config.get("window_size", 40))))
         if training_npz else None)
@@ -214,7 +238,7 @@ def main():
                 break
 
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "checkpoint_sha256": file_sha256(checkpoint),
         "action_scale_kpa": [float(v) for v in maxes],
         "channel_map": channels,
@@ -245,6 +269,11 @@ def main():
         "mm_per_px": diameter_scale.mm_per_px if diameter_scale else None,
         "state_coordinate_frame": state_coordinate_frame,
         "state_length_unit": state_length_unit,
+        "node_order": node_order,
+        "spatial_propagation_direction": config.get(
+            "spatial_propagation_direction"),
+        "gl_kernel_alignment": config.get("gl_kernel_alignment"),
+        "model_contract_version": config.get("model_contract_version"),
         "train_sequences": [os.path.basename(args.raw_seq)],
         "n_nodes": int(config.get("n_nodes", 15)),
         "window_size": int(config.get("window_size", 40)),
@@ -260,8 +289,9 @@ def main():
     with open(out, "w", encoding="utf-8") as stream:
         json.dump(manifest, stream, ensure_ascii=False, indent=2)
     print(f"manifest 写入 {out}")
+    certified_table = k_safe_table or k_safe_table_px
     print(f"  action_scale_kpa={manifest['action_scale_kpa']}  train_dt={dt_mean:.4f}±{dt_std:.4f}"
-          f"  mask_source={mask_source}  k_safe={k_safe_table_px}")
+          f"  mask_source={mask_source}  k_safe_table={certified_table}")
 
 
 if __name__ == "__main__":

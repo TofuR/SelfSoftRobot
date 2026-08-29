@@ -14,7 +14,7 @@ from typing import Any, Iterable
 
 from .io import stable_digest
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 N_HARDWARE_CHANNELS = 6
 CHANNEL_EQUALITY_TOLERANCE = 0.5
 
@@ -181,6 +181,7 @@ class ModelDescriptor:
     mm_per_px: float | None = None
     state_coordinate_frame: str = "camera_pixel_v1"
     state_length_unit: str = "px"
+    node_order: str = "base_to_tip"
     registration_residual_max_px: float = 2.0
     provenance: dict[str, str] = field(default_factory=dict)
 
@@ -231,6 +232,8 @@ class ModelDescriptor:
             raise ValueError(f"未知 state_coordinate_frame: {self.state_coordinate_frame}")
         if self.state_length_unit != allowed_frames[self.state_coordinate_frame]:
             raise ValueError("state_length_unit 与 state_coordinate_frame 不一致")
+        if self.node_order != "base_to_tip":
+            raise ValueError("node_order 必须为 base_to_tip")
         if self.k_safe_table is not None:
             table = {str(key): int(value) for key, value in self.k_safe_table.items()}
             if any(value <= 0 for value in table.values()):
@@ -245,7 +248,9 @@ class ModelDescriptor:
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "ModelDescriptor":
         data = dict(value)
-        data.pop("schema_version", None)
+        if int(data.pop("schema_version", 0)) != SCHEMA_VERSION:
+            raise ValueError(
+                f"ModelDescriptor schema_version 必须为 {SCHEMA_VERSION}")
         return cls(**data)
 
 
@@ -262,6 +267,7 @@ class Anchor:
     quality: dict[str, Any] = field(default_factory=dict)     # ★P1b:float → 标志集
     state_space: str = "model_normalized"
     action_units: str = "kpa"
+    node_order: str = "base_to_tip"
 
     def __post_init__(self) -> None:
         state = tuple(tuple(float(v) for v in node) for node in self.state)
@@ -285,6 +291,8 @@ class Anchor:
             raise ValueError("anchor state_space 必须是 model 或 model_normalized")
         if self.action_units not in {"kpa", "model_normalized"}:
             raise ValueError("anchor action_units 必须是 kpa 或 model_normalized")
+        if self.node_order != "base_to_tip":
+            raise ValueError("anchor node_order 必须为 base_to_tip")
         if not isinstance(self.quality, dict):
             raise ValueError("anchor quality 必须是 dict(标志集)")
         object.__setattr__(self, "state", state)
@@ -296,7 +304,10 @@ class Anchor:
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "Anchor":
         data = dict(value)
-        data.pop("schema_version", None)
+        if int(data.pop("schema_version", 0)) != SCHEMA_VERSION:
+            raise ValueError(f"Anchor schema_version 必须为 {SCHEMA_VERSION}")
+        if "node_order" not in data:
+            raise ValueError("Anchor 缺少 node_order")
         data["state"] = tuple(tuple(row) for row in data["state"])
         data["action_history"] = tuple(tuple(row) for row in data["action_history"])
         if data.get("prev_state") is not None:
@@ -333,10 +344,13 @@ class Scene:
     primitives: tuple[ScenePrimitive, ...] = ()
     dimension: int = 2
     revision: str = field(default_factory=lambda: uuid.uuid4().hex)
+    node_order: str = "base_to_tip"
 
     def __post_init__(self) -> None:
         if self.dimension not in (2, 3):
             raise ValueError("scene dimension 只能是 2 或 3")
+        if self.node_order != "base_to_tip":
+            raise ValueError("scene node_order 必须为 base_to_tip")
         object.__setattr__(self, "primitives", tuple(self.primitives))
 
     @property
@@ -345,14 +359,15 @@ class Scene:
 
     def with_primitive(self, primitive: ScenePrimitive) -> "Scene":
         return Scene(name=self.name, primitives=self.primitives + (primitive,),
-                     dimension=self.dimension)
+                     dimension=self.dimension, node_order=self.node_order)
 
     def without_primitive(self, primitive_id: str) -> "Scene":
         """按 primitive_id 移除一个原语(B7:原来只能追加,交互式编辑无法删除)。"""
         kept = tuple(item for item in self.primitives if item.primitive_id != primitive_id)
         if len(kept) == len(self.primitives):
             raise KeyError(f"primitive_id 不存在: {primitive_id}")
-        return Scene(name=self.name, primitives=kept, dimension=self.dimension)
+        return Scene(name=self.name, primitives=kept, dimension=self.dimension,
+                     node_order=self.node_order)
 
     def replace_primitive(self, primitive_id: str, new_primitive: "ScenePrimitive") -> "Scene":
         """按 primitive_id 替换一个原语。"""
@@ -360,7 +375,8 @@ class Scene:
                          for item in self.primitives)
         if replaced == self.primitives:
             raise KeyError(f"primitive_id 不存在: {primitive_id}")
-        return Scene(name=self.name, primitives=replaced, dimension=self.dimension)
+        return Scene(name=self.name, primitives=replaced, dimension=self.dimension,
+                     node_order=self.node_order)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -368,15 +384,21 @@ class Scene:
             "name": self.name,
             "dimension": self.dimension,
             "revision": self.revision,
+            "node_order": self.node_order,
             "primitives": [asdict(item) for item in self.primitives],
         }
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "Scene":
+        if int(value.get("schema_version", 0)) != SCHEMA_VERSION:
+            raise ValueError(f"Scene schema_version 必须为 {SCHEMA_VERSION}")
+        if "node_order" not in value:
+            raise ValueError("Scene 缺少 node_order")
         return cls(
             name=value.get("name", "untitled"),
             dimension=int(value.get("dimension", 2)),
             revision=value.get("revision", uuid.uuid4().hex),
+            node_order=value["node_order"],
             primitives=tuple(ScenePrimitive(**item) for item in value.get("primitives", [])),
         )
 

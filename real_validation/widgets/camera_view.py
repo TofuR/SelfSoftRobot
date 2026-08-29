@@ -29,6 +29,7 @@ class CameraViewWidget(QWidget):
     skeleton_draft_changed = pyqtSignal(int)       # 当前未提交节点数
     selection_changed = pyqtSignal(str)           # primitive_id
     geometry_edited = pyqtSignal(object)          # 编辑后的 Scene
+    roi_selection_changed = pyqtSignal(object)    # (x,y,w,h) 源相机像素
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -58,6 +59,9 @@ class CameraViewWidget(QWidget):
         self._scene: Scene | None = None
         self._frame_transform = None
         self._scene_items: list[tuple[str, object]] = []   # [(primitive_id, item)]
+        self._roi_item = None
+        self._frame_size_wh: tuple[int, int] | None = None
+        self._tip_node_index: int | None = None
         self.plot.scene().sigMouseClicked.connect(self._on_click)
 
         # ---- 主显示增强图层(规划预测轨迹 / 执行实际骨架 / NDI 末端) ----
@@ -80,13 +84,85 @@ class CameraViewWidget(QWidget):
         }
 
     # ---- 图层更新 ----
+    def set_node_count(self, n_nodes: int) -> None:
+        count = int(n_nodes)
+        if count <= 0:
+            raise ValueError("n_nodes 必须为正整数")
+        self._tip_node_index = count - 1
+
     def set_frame(self, bgr) -> None:
         """显示一帧 BGR;并锁定 view 到图像范围。"""
         bgr = np.asarray(bgr)
         rgb = bgr[..., ::-1] if bgr.ndim == 3 and bgr.shape[2] == 3 else bgr
         self.image_item.setImage(rgb)
+        self._frame_size_wh = (int(rgb.shape[1]), int(rgb.shape[0]))
         self.plot.setXRange(0, rgb.shape[1])
         self.plot.setYRange(0, rgb.shape[0])
+
+    # ---- 当前相机 ROI ----
+    def begin_roi_selection(self, roi_xywh=None) -> None:
+        """在源相机画面上显示可拖拽、可缩放的方形 ROI。"""
+        if self._frame_size_wh is None:
+            raise RuntimeError("收到相机帧后才能框选 ROI")
+        from ..perception.roi import clamp_roi_xywh
+        width, height = self._frame_size_wh
+        if roi_xywh is None:
+            side = int(min(width, height) * 0.8)
+            roi_xywh = ((width - side) // 2, (height - side) // 2, side, side)
+        x, y, roi_width, roi_height = clamp_roi_xywh(
+            roi_xywh, self._frame_size_wh, minimum_side=32, square=True)
+        if self._roi_item is not None:
+            self.plot.removeItem(self._roi_item)
+        item = pg.RectROI(
+            [x, y], [roi_width, roi_height], movable=True,
+            pen=pg.mkPen("#F6AD55", width=2))
+        item.addScaleHandle([1, 1], [0, 0])
+        item.addScaleHandle([0, 0], [1, 1])
+        item.sigRegionChanged.connect(self._emit_roi_selection)
+        self._roi_item = item
+        self.plot.addItem(item)
+        self._emit_roi_selection()
+
+    def _emit_roi_selection(self) -> None:
+        if self._roi_item is None or self._frame_size_wh is None:
+            return
+        from ..perception.roi import clamp_roi_xywh
+        pos = self._roi_item.pos()
+        size = self._roi_item.size()
+        roi = clamp_roi_xywh(
+            (pos.x(), pos.y(), size.x(), size.y()), self._frame_size_wh,
+            minimum_side=32, square=True)
+        self.roi_selection_changed.emit(roi)
+
+    def selected_roi(self) -> tuple[int, int, int, int] | None:
+        if self._roi_item is None or self._frame_size_wh is None:
+            return None
+        from ..perception.roi import clamp_roi_xywh
+        pos = self._roi_item.pos()
+        size = self._roi_item.size()
+        return clamp_roi_xywh(
+            (pos.x(), pos.y(), size.x(), size.y()), self._frame_size_wh,
+            minimum_side=32, square=True)
+
+    def confirm_roi(self, roi_xywh=None) -> tuple[int, int, int, int]:
+        if roi_xywh is not None:
+            self.begin_roi_selection(roi_xywh)
+        roi = self.selected_roi()
+        if roi is None:
+            raise RuntimeError("请先框选 ROI")
+        self.plot.removeItem(self._roi_item)
+        x, y, width, height = roi
+        self._roi_item = pg.RectROI(
+            [x, y], [width, height], movable=False,
+            pen=pg.mkPen("#38A169", width=2))
+        self._roi_item.setAcceptedMouseButtons(Qt.NoButton)
+        self.plot.addItem(self._roi_item)
+        return roi
+
+    def clear_roi(self) -> None:
+        if self._roi_item is not None:
+            self.plot.removeItem(self._roi_item)
+            self._roi_item = None
 
     def set_skeleton(self, skeleton) -> None:
         sk = np.asarray(skeleton, dtype=np.float64)
@@ -264,9 +340,12 @@ class CameraViewWidget(QWidget):
             self.skeleton_draft_changed.emit(len(self._skeleton_points))
             return
         if self.tool == "add_target":
+            if self._tip_node_index is None:
+                raise RuntimeError("加载模型后才能添加末端目标")
             self.target_picked.emit(ScenePrimitive(
                 "target_point", "model",
-                {"xy": [float(model_xy[0]), float(model_xy[1])], "node": 0},
+                {"xy": [float(model_xy[0]), float(model_xy[1])],
+                 "node": self._tip_node_index},
                 name=f"target_{len(self._scene_items)}"))
         elif self.tool == "add_obstacle":
             self.obstacle_picked.emit(ScenePrimitive(

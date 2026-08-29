@@ -22,6 +22,8 @@ def anchor_from_npz(path: str | Path, frame_index: int, model: ModelDescriptor,
             if "state_coordinate_frame" in data else "camera_pixel_v1"
         state_unit = str(data["state_length_unit"].item()) \
             if "state_length_unit" in data else "px"
+        node_order = str(data["node_order"].item()) \
+            if "node_order" in data else None
         transform_payload = (json.loads(str(data["skeleton_frame_transform"].item()))
                              if "skeleton_frame_transform" in data else None)
     if positions.ndim != 3 or actions.ndim != 2 or len(positions) != len(actions):
@@ -30,6 +32,9 @@ def anchor_from_npz(path: str | Path, frame_index: int, model: ModelDescriptor,
         raise ValueError(
             f"NPZ state_coordinate_frame={state_frame} 与模型 "
             f"{model.state_coordinate_frame} 不一致")
+    if node_order != model.node_order:
+        raise ValueError(
+            f"NPZ node_order={node_order!r} 与模型 {model.node_order!r} 不一致")
     if frame_index < 0 or frame_index >= len(positions):
         raise IndexError(f"frame_index={frame_index} 超出 0..{len(positions) - 1}")
     if actions.shape[1] != model.action_dim:
@@ -74,6 +79,7 @@ def anchor_from_npz(path: str | Path, frame_index: int, model: ModelDescriptor,
         prev_state=(None if prev_state is None else float_rows(prev_state)),
         frame_id="model_normalized", state_space="model_normalized",
         action_units="model_normalized",   # B2:npz actions 已归一到 [0,1],不是 kPa
+        node_order=model.node_order,
         source=f"{source}#frame={frame_index}",
         quality={
             "kind": "offline_npz", "score": 1.0,

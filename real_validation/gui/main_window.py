@@ -8,6 +8,8 @@ import time
 import traceback
 from pathlib import Path
 
+import numpy as np
+
 if __package__ in (None, ""):  # 支持复制目录后直接 ``python gui/main_window.py``
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
     __package__ = "real_validation.gui"
@@ -21,9 +23,10 @@ from PyQt5.QtWidgets import (
 )
 
 from ..execution.executor import PlanExecutor
-from ..contracts.io import atomic_write_json, read_json
+from ..contracts.io import atomic_write_json, file_sha256, read_json
 from ..runtime.model_runtime import ModelRuntime
 from ..contracts.models import ActionPlan, Anchor, SafetyPolicy, Scene, ScenePrimitive
+from ..contracts.validation_setup import ValidationSetup
 from ..planning.openloop_planner import OpenLoopShootingPlanner, ShootingConfig
 from ..runtime.anchors import anchor_from_npz
 from ..contracts.plan_io import write_actions6_csv
@@ -207,9 +210,14 @@ class ValidationWindow(QMainWindow):
         self.valve_controller = None   # 兼容旧槽函数；真实来源为 self.hardware
         self.ndi_thread = None
         self._camera_frames: dict[int, object] = {}   # 多相机最新帧(cam_index → bgr)
+        self._camera_frame_times: dict[int, float] = {}
         self._current_cam_index = 0    # 主显示当前相机
         self._skeleton_frame_transform = None
         self._coordinate_reference_frame = None
+        self._online_background_gray = None
+        self._last_camera_skeleton = None
+        self._post_evaluation_context = None
+        self._last_live_perception_time = 0.0
         self._valve_connect_thread: _ValveConnectThread | None = None
         configure_pyqtgraph()          # 任何 PlotWidget 之前,保证白底全局生效
         self._build_ui()
@@ -483,8 +491,11 @@ class ValidationWindow(QMainWindow):
         row = QHBoxLayout()
         row.addWidget(self.anchor_npz, 1)
         row.addWidget(self._browse_button(self.anchor_npz, False))
+        off.addLayout(row)
+        row = QHBoxLayout()
         row.addWidget(QLabel("帧")); row.addWidget(self.anchor_index)
         row.addWidget(load_npz)
+        row.addStretch()
         off.addLayout(row)
         self.anchor_help = QLabel(
             "Anchor = 规划起点(当前形状 + 最近 H 步动作),从 transition NPZ 选一帧提取;\n"
@@ -494,7 +505,50 @@ class ValidationWindow(QMainWindow):
         off.addWidget(self.anchor_help)
         root.addWidget(gb_off)
 
-        # 卡2:目标与障碍(两行紧凑)
+        # 卡2:当前相机的实验级 ROI 与在线感知配置
+        gb_camera_setup = QGroupBox("当前相机与在线感知")
+        camera_setup = QVBoxLayout(gb_camera_setup)
+        camera_setup.setContentsMargins(10, 12, 10, 10)
+        camera_setup.setSpacing(6)
+        row = QHBoxLayout()
+        self.online_segment_method = QComboBox()
+        self.online_segment_method.addItem("白色机器人 / 蓝背景", "white_on_blue")
+        self.online_segment_method.addItem("背光暗剪影", "backlight")
+        self.online_segment_method.currentIndexChanged.connect(
+            self._on_online_segment_method_changed)
+        row.addWidget(QLabel("在线分割"))
+        row.addWidget(self.online_segment_method, 1)
+        camera_setup.addLayout(row)
+        row = QHBoxLayout()
+        self.roi_begin_btn = QPushButton("框选 ROI")
+        self.roi_begin_btn.clicked.connect(self._begin_roi_selection)
+        self.roi_auto_btn = QPushButton("当前 mask 自动建议")
+        self.roi_auto_btn.clicked.connect(self._suggest_current_roi)
+        self.roi_confirm_btn = QPushButton("确认 ROI")
+        self.roi_confirm_btn.setObjectName("primary")
+        self.roi_confirm_btn.clicked.connect(self._confirm_validation_setup)
+        row.addWidget(self.roi_begin_btn)
+        row.addWidget(self.roi_auto_btn)
+        row.addWidget(self.roi_confirm_btn)
+        row.addStretch()
+        camera_setup.addLayout(row)
+        row = QHBoxLayout()
+        self.capture_background_btn = QPushButton("保存当前空场为背景")
+        self.capture_background_btn.clicked.connect(self._capture_online_background)
+        self.load_background_btn = QPushButton("加载背景图")
+        self.load_background_btn.clicked.connect(self._load_online_background)
+        row.addWidget(self.capture_background_btn)
+        row.addWidget(self.load_background_btn)
+        row.addStretch()
+        camera_setup.addLayout(row)
+        self.roi_status = QLabel(
+            "连接相机后框选机器人完整工作区；ROI 确认后保存到本次 run。")
+        self.roi_status.setWordWrap(True)
+        self.roi_status.setStyleSheet("color:#486581;font-size:11px;")
+        camera_setup.addWidget(self.roi_status)
+        root.addWidget(gb_camera_setup)
+
+        # 卡3:目标与障碍(两行紧凑)
         gb_tgt = QGroupBox("目标与障碍")
         t = QVBoxLayout(gb_tgt); t.setContentsMargins(10, 12, 10, 10); t.setSpacing(6)
         self.target_x = QDoubleSpinBox(); self.target_x.setRange(-100000, 100000); self.target_x.setFixedWidth(78)
@@ -520,7 +574,7 @@ class ValidationWindow(QMainWindow):
         t.addWidget(self.scene_unit_label)
         root.addWidget(gb_tgt)
 
-        # 卡3:相机锚定与工具(交互发生在右上面板主摄像头)
+        # 卡4:相机锚定与工具(交互发生在右上面板主摄像头)
         gb_live = QGroupBox("相机锚定与工具(在右上面板画面上操作)")
         live = QVBoxLayout(gb_live); live.setContentsMargins(10, 12, 10, 10); live.setSpacing(6)
         live_buttons = QHBoxLayout()
@@ -555,7 +609,7 @@ class ValidationWindow(QMainWindow):
         self.tool_target_btn.clicked.connect(lambda: self._set_tool("add_target"))
         self.tool_skeleton_btn = QPushButton("点出目标骨架"); self.tool_skeleton_btn.setCheckable(True)
         self.tool_skeleton_btn.setToolTip(
-            "点出目标骨架:按末端 node0 到基座 nodeN-1 依次点击 N 个点,\n"
+            "点出目标骨架:按基座 node0 到末端 nodeN-1 依次点击 N 个点,\n"
             "然后点击『完成目标骨架』。"
             "规划让机器人拟合这个目标骨架(全身目标)。")
         self.tool_skeleton_btn.clicked.connect(lambda: self._set_tool("add_target_skeleton"))
@@ -579,7 +633,7 @@ class ValidationWindow(QMainWindow):
         live.addLayout(skeleton_row)
         root.addWidget(gb_live)
 
-        # 卡4:场景编辑(原语列表 + 状态)
+        # 卡5:场景编辑(原语列表 + 状态)
         gb_scene = QGroupBox("场景编辑")
         sc = QVBoxLayout(gb_scene); sc.setContentsMargins(10, 12, 10, 10); sc.setSpacing(6)
         self.scene_editor = SceneEditorPanel()
@@ -603,6 +657,7 @@ class ValidationWindow(QMainWindow):
         self.main_display.obstacle_picked.connect(self._add_primitive)
         self.main_display.target_skeleton_picked.connect(self._add_primitive)
         self.main_display.skeleton_draft_changed.connect(self._on_skeleton_draft_changed)
+        self.main_display.roi_selection_changed.connect(self._on_roi_selection_changed)
         self.scene_editor.scene_edited.connect(self._apply_scene_edit)
         self.scene_editor.redraw_requested.connect(self._redraw_target_skeleton)
         self._latest_frame = None
@@ -617,9 +672,226 @@ class ValidationWindow(QMainWindow):
         if not is_observe:
             self.main_display.set_tool("select")
 
+    def _on_roi_selection_changed(self, roi_xywh) -> None:
+        self._roi_candidate = tuple(int(value) for value in roi_xywh)
+        self.roi_status.setText(
+            f"ROI 候选: x={self._roi_candidate[0]}, y={self._roi_candidate[1]}, "
+            f"w={self._roi_candidate[2]}, h={self._roi_candidate[3]}；确认后绑定本次实验。")
+
+    def _on_online_segment_method_changed(self, *_args) -> None:
+        if self.session is None or self.session.replay_only or \
+                self.session.validation_setup is None:
+            return
+        setup = self.session.validation_setup
+        method = str(self.online_segment_method.currentData())
+        if method == setup.segmentation_method:
+            return
+        roi = setup.roi_xywh
+        if self.session.state in {SessionState.IDLE, SessionState.READY}:
+            self.session.invalidate_validation_setup("online segmentation changed")
+            self._reset_camera_coordinate_state()
+            if self._latest_frame is not None:
+                self.main_display.begin_roi_selection(roi)
+            self.roi_status.setText("在线分割方法已更新，请检查 mask 并重新确认 ROI。")
+            self._refresh_anchor_controls()
+
+    def _begin_roi_selection(self) -> None:
+        if self._latest_frame is None:
+            self._error("连接相机并收到画面后再框选 ROI")
+            return
+        existing = (self.session.validation_setup.roi_xywh
+                    if self.session and self.session.validation_setup else None)
+        try:
+            self.main_display.begin_roi_selection(existing)
+        except Exception as error:
+            self._error(str(error))
+
+    def _online_segment_params(self) -> dict:
+        method = str(self.online_segment_method.currentData())
+        if method == "backlight":
+            return {"thresh": 60}
+        defaults = {
+            "sat": 100, "val": 120, "diff": 25, "dil": 35,
+            "open_k": 5, "close_k": 15,
+            "min_area_frac": 0.003, "min_h_frac": 0.15,
+        }
+        manifest = self.runtime.manifest if self.runtime is not None else None
+        if manifest is not None and manifest.segment_params:
+            defaults.update(manifest.segment_params)
+        return defaults
+
+    def _segment_frame_for_setup(self, frame, roi_xywh):
+        from ..perception.roi import crop_frame
+        from ..perception.segmentation import (segment_backlight,
+                                               segment_white_on_blue,
+                                               trim_wide_base_attachment)
+        local = crop_frame(frame, roi_xywh)
+        method = str(self.online_segment_method.currentData())
+        params = self._online_segment_params()
+        if method == "backlight":
+            return segment_backlight(self._gray(local), params["thresh"])
+        if self._online_background_gray is None:
+            raise RuntimeError("白色机器人分割需要先保存或加载当前相机的空场背景")
+        background = crop_frame(self._online_background_gray, roi_xywh)
+        mask = segment_white_on_blue(local, background, **params)
+        return trim_wide_base_attachment(mask, base_side="top")
+
+    def _suggest_current_roi(self) -> None:
+        if self._latest_frame is None:
+            self._error("连接相机并收到画面后再生成 ROI 候选")
+            return
+        try:
+            frame = np.asarray(self._latest_frame)
+            selected = self.main_display.selected_roi()
+            search_roi = selected or (0, 0, frame.shape[1], frame.shape[0])
+            mask = self._segment_frame_for_setup(frame, search_roi)
+            from scipy.ndimage import distance_transform_edt
+            positive = distance_transform_edt(mask > 0)
+            positive = positive[positive > 0]
+            if not len(positive):
+                raise RuntimeError("当前分割没有机器人 mask")
+            diameter_px = 2.0 * float(np.percentile(positive, 95))
+            from ..perception.roi import suggest_square_roi
+            roi = suggest_square_roi(
+                mask, source_offset_xy=search_roi[:2],
+                source_size_wh=(frame.shape[1], frame.shape[0]),
+                padding_px=max(24.0, 3.0 * diameter_px))
+            self.main_display.begin_roi_selection(roi)
+            self.roi_status.setText(
+                f"自动候选 ROI={roi}，当前机器人直径估计 {diameter_px:.1f}px；"
+                "可拖拽调整后确认。")
+        except Exception as error:
+            self._error(f"ROI 自动建议失败: {error}")
+
+    def _camera_identity(self) -> str:
+        cameras = self.hardware.cameras
+        if 0 <= self._current_cam_index < len(cameras):
+            serial = getattr(cameras[self._current_cam_index], "serial", None)
+            if serial:
+                return str(serial)
+        return f"{self.hardware.profile.camera_backend.value}:cam{self._current_cam_index}"
+
+    def _capture_online_background(self) -> None:
+        if self.session is None or self._latest_frame is None:
+            self._error("新建实验并收到相机画面后再保存空场背景")
+            return
+        try:
+            from ..perception._compat import cv2
+            if cv2 is None:
+                raise RuntimeError("保存背景需要 OpenCV")
+            directory = self.session.run_dir / "perception"
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / "background.png"
+            if not cv2.imwrite(str(path), np.asarray(self._latest_frame)):
+                raise RuntimeError("背景图写入失败")
+            self._online_background_gray = self._gray(self._latest_frame)
+            self._online_background_path = path
+            self._log(f"当前相机空场背景已保存: {path}")
+            if self.session.validation_setup is not None:
+                setup = self.session.validation_setup.updated(
+                    background_path=str(path.relative_to(self.session.run_dir)),
+                    background_sha256=file_sha256(path))
+                self.session.set_validation_setup(setup)
+                atomic_write_json(self.session.run_dir / "validation_setup.json",
+                                  setup.to_dict())
+                self._reset_camera_coordinate_state()
+            self._refresh_anchor_controls()
+        except Exception as error:
+            self._error(str(error))
+
+    def _load_online_background(self) -> None:
+        if self.session is None:
+            self._error("请先新建实验")
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择当前相机空场背景", "", "Images (*.png *.jpg *.jpeg)")
+        if not path:
+            return
+        try:
+            from ..perception._compat import cv2
+            image = cv2.imread(path) if cv2 is not None else None
+            if image is None:
+                raise RuntimeError("背景图无法读取")
+            if self._latest_frame is not None and image.shape[:2] != \
+                    np.asarray(self._latest_frame).shape[:2]:
+                raise RuntimeError("背景图尺寸与当前相机画面不同")
+            directory = self.session.run_dir / "perception"
+            directory.mkdir(parents=True, exist_ok=True)
+            target = directory / "background.png"
+            if not cv2.imwrite(str(target), image):
+                raise RuntimeError("背景图写入 run 失败")
+            self._online_background_gray = self._gray(image)
+            self._online_background_path = target
+            self._log(f"当前相机背景已载入: {target}")
+            if self.session.validation_setup is not None:
+                setup = self.session.validation_setup.updated(
+                    background_path=str(target.relative_to(self.session.run_dir)),
+                    background_sha256=file_sha256(target))
+                self.session.set_validation_setup(setup)
+                atomic_write_json(self.session.run_dir / "validation_setup.json",
+                                  setup.to_dict())
+                self._reset_camera_coordinate_state()
+            self._refresh_anchor_controls()
+        except Exception as error:
+            self._error(str(error))
+
+    def _confirm_validation_setup(self) -> None:
+        if self.session is None or self.runtime is None or self._latest_frame is None:
+            self._error("确认 ROI 需要：本次实验、部署模型和当前相机画面")
+            return
+        try:
+            roi = self.main_display.confirm_roi()
+            frame = np.asarray(self._latest_frame)
+            descriptor = self.runtime.descriptor
+            if descriptor.state_coordinate_frame == "robot_planar_mm_v1" and \
+                    descriptor.robot_diameter_mm is None:
+                raise RuntimeError("毫米状态模型的部署清单需要 robot_diameter_mm")
+            method = str(self.online_segment_method.currentData())
+            background_path = getattr(self, "_online_background_path", None)
+            if method == "white_on_blue" and background_path is None:
+                raise RuntimeError("确认白色机器人 ROI 前请保存或加载当前相机空场背景")
+            setup = ValidationSetup(
+                camera_backend=self.hardware.profile.camera_backend.value,
+                camera_index=self._current_cam_index,
+                camera_identity=self._camera_identity(),
+                frame_size_wh=(frame.shape[1], frame.shape[0]),
+                roi_xywh=roi,
+                segmentation_method=method,
+                segment_params=self._online_segment_params(),
+                background_path=(str(background_path.relative_to(self.session.run_dir))
+                                 if background_path else None),
+                background_sha256=(file_sha256(background_path)
+                                   if background_path else None),
+                model_checkpoint_hash=descriptor.checkpoint_hash,
+                state_coordinate_frame=descriptor.state_coordinate_frame,
+                state_length_unit=descriptor.state_length_unit,
+                robot_diameter_mm=float(descriptor.robot_diameter_mm or 16.0),
+                base_side="top", segment_lengths=(1.0, 1.0))
+            self.session.set_validation_setup(setup)
+            atomic_write_json(self.session.run_dir / "validation_setup.json",
+                              setup.to_dict())
+            self._reset_camera_coordinate_state()
+            self.roi_status.setText(
+                f"已确认 ROI={roi} | {method} | camera={setup.camera_identity} | "
+                f"setup={setup.setup_id[:8]}")
+            self._log("当前相机 ROI 与在线感知配置已绑定本次实验")
+            self._refresh_anchor_controls()
+        except Exception as error:
+            self._error(str(error))
+
+    def _reset_camera_coordinate_state(self) -> None:
+        self._skeleton_frame_transform = None
+        self._coordinate_reference_frame = None
+        self._last_camera_skeleton = None
+        self.main_display.set_coordinate_transform(None)
+        self.main_display.set_anchor([])
+
     def _set_tool(self, tool: str) -> None:
         if tool != "select" and not self.session:
             self._error("请先新建实验，再在画面上编辑目标/障碍")
+            return
+        if tool != "select" and not self._camera_scene_interaction_ready():
+            self._error("画面点选需要先加载模型并完成当前相机 Anchor")
             return
         self.main_display.set_read_only(False)   # 选工具即进入可交互(Observe 锚定)
         self.main_display.set_tool(tool)         # 锚定交互在右上面板主摄像头
@@ -628,6 +900,14 @@ class ValidationWindow(QMainWindow):
                           (self.tool_skeleton_btn, "add_target_skeleton"),
                           (self.tool_obstacle_btn, "add_obstacle")):
             btn.setChecked(name == tool)
+
+    def _camera_scene_interaction_ready(self) -> bool:
+        if self.session is None or self.runtime is None or self.session.replay_only:
+            return False
+        descriptor = self.runtime.descriptor
+        return (getattr(descriptor, "state_coordinate_frame",
+                        "camera_pixel_v1") == "camera_pixel_v1" or
+                self._skeleton_frame_transform is not None)
 
     def _on_skeleton_draft_changed(self, count: int) -> None:
         expected = (self.runtime.descriptor.n_nodes if self.runtime is not None else None)
@@ -646,7 +926,7 @@ class ValidationWindow(QMainWindow):
             return
         if self.runtime is not None and count != self.runtime.descriptor.n_nodes:
             self._error(f"目标骨架已点 {count} 个节点，但当前模型需要 "
-                        f"{self.runtime.descriptor.n_nodes} 个；请按末端 node0 到基座 nodeN-1 顺序重画")
+                        f"{self.runtime.descriptor.n_nodes} 个；请按基座 node0 到末端 nodeN-1 顺序重画")
             return
         self.main_display.commit_skeleton_target()
         self._set_tool("select")
@@ -834,6 +1114,13 @@ class ValidationWindow(QMainWindow):
     def _stop_camera(self) -> None:
         self.hardware.stop_cameras()
         self._camera_frames.clear()
+        self._camera_frame_times.clear()
+        self._latest_frame = None
+        self._reset_camera_coordinate_state()
+        if self.session is not None and not self.session.replay_only and \
+                self.session.state in {SessionState.IDLE, SessionState.READY}:
+            self.session.invalidate_validation_setup("camera disconnected")
+        self.main_display.clear_roi()
 
     def _start_camera(self) -> None:
         import numpy as np
@@ -845,21 +1132,33 @@ class ValidationWindow(QMainWindow):
         except Exception as error:
             self._error(f"相机连接失败: {error}")
 
-    def _on_camera_frame(self, bgr) -> None:
+    def _on_camera_frame(self, bgr, timestamp=None) -> None:
         if bgr is None:   # 真实相机 error → 显示提示,不崩
             self._log("ERROR: 相机错误(检查 RealSense 连接)")
             return
         self._latest_frame = bgr
+        self._latest_frame_timestamp = (float(timestamp) if timestamp is not None
+                                        else time.monotonic())
         self._refresh_anchor_controls()
         self.main_display.set_frame(bgr)                       # 主显示区(唯一画面)
-        if self.runtime is not None:
-            from ..perception.segmentation import segment_white_on_blue
-            from ..perception.skeleton import extract_skeleton_2d
-            # Mock 场景:背景 = 帧自身灰度近似(真机用 manifest.segment_params + 无臂静态背景)
-            mask = segment_white_on_blue(bgr, self._gray(bgr))
-            skeleton, _ = extract_skeleton_2d(mask, self.runtime.descriptor.n_nodes,
-                                              tip_fix=True, return_info=True)
-            self.main_display.set_skeleton(skeleton)           # 主显示骨架层
+        setup = self.session.validation_setup if self.session is not None else None
+        if self.runtime is not None and setup is not None and setup.ready_for_anchor:
+            now = time.monotonic()
+            if now - self._last_live_perception_time < 0.2:
+                return
+            self._last_live_perception_time = now
+            try:
+                if tuple(setup.frame_size_wh) != (bgr.shape[1], bgr.shape[0]):
+                    raise RuntimeError("当前帧尺寸与已确认 ROI 配置不同")
+                skeleton = self._extract_preview_skeleton(bgr, setup)
+                self._last_camera_skeleton = skeleton
+                self.main_display.set_skeleton(skeleton)
+            except Exception as error:
+                self._last_camera_skeleton = None
+                self.main_display.set_skeleton([])
+                self.roi_status.setText(f"在线骨架更新失败: {error}")
+        else:
+            self.main_display.set_skeleton([])
 
     def _on_camera_frame_cam(self, cam_index: int, bgr, _timestamp=None) -> None:
         """多相机按索引存帧，只将所选视图送入主显示和感知。"""
@@ -868,8 +1167,10 @@ class ValidationWindow(QMainWindow):
         if bgr is None:
             return
         self._camera_frames[cam_index] = bgr
+        if _timestamp is not None:
+            self._camera_frame_times[cam_index] = float(_timestamp)
         if cam_index == self._current_cam_index:
-            self._on_camera_frame(bgr)
+            self._on_camera_frame(bgr, _timestamp)
 
     def _on_camera_error(self, cam_index: int, message: str) -> None:
         """兼容旧信号的错误日志；不改 backend，不自动降级。"""
@@ -877,11 +1178,18 @@ class ValidationWindow(QMainWindow):
 
     def _on_camera_view_changed(self, index: int) -> None:
         """切换主显示区显示哪台相机(多相机时)。"""
+        if int(index) != self._current_cam_index and self.session is not None and \
+                not self.session.replay_only and self.session.state in {
+                    SessionState.IDLE, SessionState.READY}:
+            self.session.invalidate_validation_setup("primary camera changed")
+            self._reset_camera_coordinate_state()
+            self.main_display.clear_roi()
         self._current_cam_index = int(index)
         frames = getattr(self, "_camera_frames", {})
         frame = frames.get(self._current_cam_index)
         if frame is not None:
-            self._on_camera_frame(frame)
+            self._on_camera_frame(
+                frame, self._camera_frame_times.get(self._current_cam_index))
         self._update_main_info()
 
     def _update_main_info(self) -> None:
@@ -903,10 +1211,37 @@ class ValidationWindow(QMainWindow):
         import numpy as np
         return np.mean(np.asarray(bgr, dtype=np.float64), axis=2).astype(np.uint8)
 
+    def _extract_preview_skeleton(self, frame, setup: ValidationSetup):
+        from ..runtime.online_perception import extract_skeleton_with_setup
+        skeleton, _mask, _info = extract_skeleton_with_setup(
+            frame, setup, n_nodes=self.runtime.descriptor.n_nodes,
+            background_gray=self._online_background_gray)
+        return skeleton
+
+    def _mask_for_validation_setup(self, frame, setup: ValidationSetup):
+        from ..runtime.online_perception import load_background, segment_with_setup
+        if setup.segmentation_method != "backlight" and \
+                self._online_background_gray is None:
+            self._online_background_gray = load_background(
+                setup, self.session.run_dir if self.session else None)
+        return segment_with_setup(frame, setup, self._online_background_gray)
+
+    def _save_online_observation_artifacts(self, label: str, skeleton_camera,
+                                           quality) -> None:
+        if self.session is None or self.session.validation_setup is None or \
+                self._latest_frame is None:
+            return
+        from ..runtime.online_perception import save_observation_artifacts
+        setup = self.session.validation_setup
+        save_observation_artifacts(
+            self.session.run_dir, label, self._latest_frame, setup,
+            skeleton_camera, quality,
+            background_gray=self._online_background_gray)
+
     def _refresh_anchor_controls(self) -> None:
         if not hasattr(self, "camera_anchor_btn"):
             return
-        scene_editable = bool(self.session is not None and not self.session.replay_only)
+        scene_editable = self._camera_scene_interaction_ready()
         for button in (self.tool_target_btn, self.tool_skeleton_btn, self.tool_obstacle_btn):
             button.setEnabled(scene_editable)
         missing = []
@@ -918,16 +1253,23 @@ class ValidationWindow(QMainWindow):
             missing.append("相机 READY")
         if self._latest_frame is None:
             missing.append("收到相机帧")
-        if self.hardware.profile.camera_backend == BackendMode.REAL and self.runtime is not None:
-            reference = getattr(self.runtime, "reference_frame_path", None)
-            if reference is None or not Path(reference).is_file():
-                missing.append("部署包参考背景")
+        setup = self.session.validation_setup if self.session is not None else None
+        if setup is None:
+            missing.append("确认当前相机 ROI 与参考背景")
+        elif not setup.ready_for_anchor:
+            missing.append("当前相机在线背景")
+        elif setup.camera_index != self._current_cam_index:
+            missing.append("切回 ROI 对应相机")
+        elif self.runtime is not None and setup.model_checkpoint_hash != \
+                self.runtime.descriptor.checkpoint_hash:
+            missing.append("按当前模型重新确认 ROI")
         self.camera_anchor_btn.setEnabled(not missing)
         if missing:
             self.anchor_prereq.setText("相机锚定尚缺：" + "、".join(missing))
             self.anchor_prereq.setStyleSheet("color:#B7791F;font-size:11px;")
         else:
-            self.anchor_prereq.setText("相机锚定已就绪：当前帧 + 最近 H 步动作历史将成为 Planner 起点")
+            self.anchor_prereq.setText(
+                "相机锚定已就绪：ROI 骨架 + 最近 H 步 ACK 动作将成为 Planner 起点")
             self.anchor_prereq.setStyleSheet("color:#18794E;font-size:11px;")
 
         mock_warmup = (self.hardware.profile.valve_backend == BackendMode.MOCK)
@@ -971,94 +1313,125 @@ class ValidationWindow(QMainWindow):
             "color:#F6AD55;font-size:11px;" if checked else "color:#486581;font-size:11px;")
 
     def _camera_anchor(self) -> None:
-        import numpy as np   # 冒烟分支 np.asarray 用(本模块 numpy 均为方法局部 import)
+        try:
+            anchor, quality, skeleton = self._build_camera_anchor()
+            assert self.session is not None
+            self.session.set_anchor(anchor)
+            atomic_write_json(self.session.run_dir / "anchor.json", anchor.to_dict())
+            self._apply_anchor_coordinate_transform(anchor)
+            self._anchor_camera_skeleton = np.asarray(skeleton).copy()
+            self._save_online_observation_artifacts(
+                f"anchor_{anchor.anchor_id[:8]}", skeleton, quality)
+            self._sync_safety_initial(self.hardware.last_applied6)
+            zero_note = (" · 零历史起步(OOD)"
+                         if self.zero_history_cb.isChecked() else "")
+            self.anchor_status.setText(
+                f"已锚定 {anchor.anchor_id[:8]} verdict={quality.verdict}{zero_note} "
+                "→ 可前往 3 Plan 规划")
+            self.main_display.set_anchor(skeleton)
+            self._refresh()
+        except Exception as error:
+            self._error(str(error))
+
+    def _build_camera_anchor(self):
         if self.session is None or self._latest_frame is None or not self.runtime:
-            self._error("相机锚定需要：已建实验、已加载模型、相机 READY 并收到帧")
-            return
+            raise RuntimeError("相机锚定需要：本次实验、部署模型、相机 READY 和当前帧")
+        setup = self.session.validation_setup
+        if setup is None or not setup.ready_for_anchor:
+            raise RuntimeError("请先确认当前相机 ROI 与在线感知配置")
+        if setup.camera_index != self._current_cam_index:
+            raise RuntimeError("当前主显示相机与 ROI 配置不一致")
+        if setup.camera_backend != self.hardware.profile.camera_backend.value or \
+                setup.camera_identity != self._camera_identity():
+            raise RuntimeError("当前相机身份与验证实验配置不一致")
+        frame = np.asarray(self._latest_frame)
+        if setup.frame_size_wh != (frame.shape[1], frame.shape[0]):
+            raise RuntimeError("当前相机分辨率与验证实验配置不一致")
+        if setup.model_checkpoint_hash != self.runtime.descriptor.checkpoint_hash:
+            raise RuntimeError("当前模型与 ROI 配置不一致，请重新确认 ROI")
+        if setup.background_path:
+            background_path = Path(setup.background_path)
+            if not background_path.is_absolute():
+                background_path = self.session.run_dir / background_path
+            if not background_path.is_file() or \
+                    file_sha256(background_path) != setup.background_sha256:
+                raise RuntimeError("在线背景图与验证实验配置不一致")
+            if self._online_background_gray is None:
+                from ..perception.background import load_median_background
+                self._online_background_gray = load_median_background(background_path)
         buffered_history = getattr(self, "_history_buffer", None)
         if (not self._action_history and
                 not (buffered_history is not None and buffered_history.ready) and
                 not self.zero_history_cb.isChecked()):
-            self._error("无动作历史:勾选『零历史起步』可免 warmup 直接锚定,或先点 Warmup")
-            return
-        from ..runtime.anchors import anchor_from_camera_frame
+            raise RuntimeError("请先建立动作历史，或显式选择零历史起步")
         descriptor = self.runtime.descriptor
-        manifest = self.runtime.manifest
-        if self.hardware.profile.camera_backend == BackendMode.MOCK:
-            bg = None
-            segmentation_method = "backlight"
-            segment_params = {"thresh": 60}
-        else:
-            reference = getattr(self.runtime, "reference_frame_path", None)
-            if reference is None or not Path(reference).is_file():
-                self._error("真实相机锚定需要 deploy_manifest.reference_frame 参考背景")
-                return
-            from ..perception._compat import cv2
-            if cv2 is None:
-                self._error("读取参考背景需要 OpenCV")
-                return
-            bg = cv2.imread(str(reference), cv2.IMREAD_GRAYSCALE)
-            if bg is None or bg.shape != self._latest_frame.shape[:2]:
-                self._error("参考背景无法读取或尺寸与当前相机帧不一致")
-                return
-            segmentation_method = "white_on_blue"
-            segment_params = manifest.segment_params if manifest else {}
-        area_median = manifest.mask_area_median_px if manifest else None
-        if area_median is None:
-            if segmentation_method != "backlight":
-                self._error("真实相机锚定需要 deploy_manifest.mask_area_median_px")
-                return
-            area_median = float(self._latest_frame.shape[0] * self._latest_frame.shape[1] * 0.035)
         action_history = self._action_history
-        history_buffer = getattr(self, "_history_buffer", None)
-        if history_buffer is not None and history_buffer.ready:
+        if buffered_history is not None and buffered_history.ready:
             from ..planning.units import kPa_to_model
             action_history = kPa_to_model(
-                np.asarray(history_buffer.snapshot(), dtype=np.float32),
+                np.asarray(buffered_history.snapshot(), dtype=np.float32),
                 action_scale_kpa=descriptor.action_scale_kpa,
                 action_norm_factor=self.runtime.info["norm_factor"]).tolist()
         registration_displacement = None
-        if (self.hardware.profile.camera_backend == BackendMode.REAL and
-                self._coordinate_reference_frame is not None):
-            from ..perception.registration import estimate_registration
+        if self._coordinate_reference_frame is not None:
+            from ..perception.registration import estimate_registration, save_registration
             registration = estimate_registration(
                 self._gray(self._coordinate_reference_frame),
                 self._gray(self._latest_frame),
                 max_displacement_px=descriptor.registration_residual_max_px)
+            (self.session.run_dir / "perception").mkdir(parents=True, exist_ok=True)
+            save_registration(registration,
+                              self.session.run_dir / "perception" / "registration_latest.json")
             registration_displacement = (
                 registration.displacement_px if registration.ok else float("nan"))
+        from ..runtime.anchors import anchor_from_camera_frame
         anchor, quality, skeleton = anchor_from_camera_frame(
-            self._latest_frame, background_gray=bg,
-            segment_params=segment_params,
+            self._latest_frame, background_gray=self._online_background_gray,
+            segment_params=setup.segment_params,
             n_nodes=descriptor.n_nodes, model=self.runtime.model,
-            action_history=action_history, area_median_px=float(area_median),
-            frame_ref=f"camera_live#{self.hardware.profile.camera_backend.value}",
+            action_history=action_history,
+            area_median_px=setup.mask_area_reference_px,
+            frame_ref=(f"camera_live#{setup.camera_identity}#setup="
+                       f"{setup.setup_id}"),
+            frame_age_s=max(
+                0.0, time.monotonic() - getattr(
+                    self, "_latest_frame_timestamp", time.monotonic())),
             registration_displacement_px=registration_displacement,
             zero_pad_history=self.zero_history_cb.isChecked(),
-            segmentation_method=segmentation_method,
+            segmentation_method=setup.segmentation_method,
             state_coordinate_frame=descriptor.state_coordinate_frame,
             robot_diameter_mm=descriptor.robot_diameter_mm,
-            frame_transform=self._skeleton_frame_transform)
+            frame_transform=self._skeleton_frame_transform,
+            roi_xywh=setup.roi_xywh, skeleton_method="skeletonize",
+            segment_lengths=setup.segment_lengths,
+            quality_params={"max_top_row": max(20, int(0.25 * setup.roi_xywh[3]))},
+            validation_setup_id=setup.setup_id,
+            base_side=setup.base_side)
         if anchor is None:
-            self._error(f"帧质量 reject:{quality.reasons};请重试或调场景")
-            return
-        self.session.set_anchor(anchor)
-        self._apply_anchor_coordinate_transform(anchor)
-        if (self.hardware.profile.camera_backend == BackendMode.REAL and
-                self._coordinate_reference_frame is None):
+            raise RuntimeError(
+                f"当前帧质量为 reject: {', '.join(quality.reasons)}")
+        from dataclasses import replace
+        transform_payload = anchor.quality.get("skeleton_frame_transform")
+        refined = replace(
+            setup,
+            mask_area_reference_px=(setup.mask_area_reference_px or
+                                    float(quality.flags["mask_area_px"])),
+            skeleton_frame_transform=(setup.skeleton_frame_transform or
+                                      transform_payload))
+        if refined.digest != setup.digest:
+            self.session.set_validation_setup(refined)
+            setup = refined
+            atomic_write_json(self.session.run_dir / "validation_setup.json",
+                              setup.to_dict())
+        if self._coordinate_reference_frame is None:
             self._coordinate_reference_frame = np.asarray(self._latest_frame).copy()
             from ..perception._compat import cv2
+            directory = self.session.run_dir / "perception"
+            directory.mkdir(parents=True, exist_ok=True)
             if cv2 is not None:
-                cv2.imwrite(
-                    str(self.session.run_dir / "camera_coordinate_reference.png"),
-                    self._coordinate_reference_frame)
-        self._sync_safety_initial(self.hardware.last_applied6)
-        # 打磨③:页间引导 —— 锚定成功提示下一步
-        zero_note = " · 零历史起步(OOD)" if self.zero_history_cb.isChecked() else ""
-        self.anchor_status.setText(
-            f"已锚定 {anchor.anchor_id[:8]} verdict={quality.verdict}{zero_note} → 可前往 3 Plan 规划")
-        self.main_display.set_anchor(skeleton)
-        self._refresh()
+                cv2.imwrite(str(directory / "coordinate_reference.png"),
+                            self._coordinate_reference_frame)
+        return anchor, quality, skeleton
 
     def _plan_page(self) -> QWidget:
         page = QWidget(); root = QVBoxLayout(page)
@@ -1115,19 +1488,26 @@ class ValidationWindow(QMainWindow):
 
         # 卡1:执行控制
         gb_ctrl = QGroupBox("执行控制")
-        c = QHBoxLayout(gb_ctrl); c.setContentsMargins(12, 14, 12, 12)
+        c = QVBoxLayout(gb_ctrl); c.setContentsMargins(12, 14, 12, 12)
         self.arm_button = QPushButton("Arm / Confirm"); self.arm_button.setObjectName("primary")
         self.arm_button.clicked.connect(self._arm)
         self.execute_button = QPushButton("运行 Mock 计划"); self.execute_button.setObjectName("primary")
         self.execute_button.clicked.connect(self._execute)
         self.pause_button = QPushButton("归零并重新锚定"); self.pause_button.setObjectName("accent")
         self.pause_button.clicked.connect(self._pause)
+        self.post_observe_button = QPushButton("采集执行后形态并评价")
+        self.post_observe_button.setObjectName("accent")
+        self.post_observe_button.setEnabled(False)
+        self.post_observe_button.clicked.connect(self._observe_after_execution)
         self.resume_button = QPushButton("Resume"); self.resume_button.setObjectName("accent")
         self.resume_button.clicked.connect(self._resume)
         self.resume_button.hide()  # pause_policy=zero 时不允许恢复旧计划
+        row = QHBoxLayout()
         for button in (self.arm_button, self.execute_button, self.pause_button):
-            c.addWidget(button)
-        c.addStretch()
+            row.addWidget(button)
+        row.addStretch(); c.addLayout(row)
+        row = QHBoxLayout(); row.addWidget(self.post_observe_button)
+        row.addStretch(); c.addLayout(row)
         root.addWidget(gb_ctrl)
 
         # 卡2:执行日志
@@ -1169,9 +1549,10 @@ class ValidationWindow(QMainWindow):
     def _new_session(self) -> None:
         try:
             self.session = ExperimentSession.create(self.run_root.text().strip())
-            self._skeleton_frame_transform = None
-            self._coordinate_reference_frame = None
-            self.main_display.set_coordinate_transform(None)
+            self._reset_camera_coordinate_state()
+            self._online_background_gray = None
+            self._online_background_path = None
+            self.main_display.clear_roi()
             atomic_write_json(self.session.run_dir / "hardware_profile.json",
                               self.hardware.profile.to_dict())
             self._log(f"创建 {self.session.run_dir}")
@@ -1191,6 +1572,10 @@ class ValidationWindow(QMainWindow):
                 if self.session.model else "model=None\n"))
             if self.session.anchor is not None:
                 self._apply_anchor_coordinate_transform(self.session.anchor)
+            if self.session.validation_setup is not None:
+                setup = self.session.validation_setup
+                self.roi_status.setText(
+                    f"回放 ROI={setup.roi_xywh} | setup={setup.setup_id[:8]}")
             self._scene_changed(display_only=True)
             if self.session.plan:
                 self.plan_summary.setPlainText("历史计划（只读，不能 Arm）")
@@ -1238,6 +1623,7 @@ class ValidationWindow(QMainWindow):
         assert self.session is not None
         self.session.configure_model(runtime.descriptor)
         descriptor = runtime.descriptor
+        self.main_display.set_node_count(descriptor.n_nodes)
         self.scene_unit_label.setText(
             f"场景单位：{descriptor.state_length_unit}；点击坐标会自动从相机像素转换")
         if descriptor.channel_map is not None:
@@ -1530,10 +1916,13 @@ class ValidationWindow(QMainWindow):
         retained = tuple(item for item in self.session.scene.primitives
                          if not item.kind.startswith("target_"))
         kind = "target_circle" if self.target_radius.value() > 0 else "target_point"
-        primitive = ScenePrimitive(kind, "model", {
+        geometry = {
             "xy": [self.target_x.value(), self.target_y.value()],
-            "radius": self.target_radius.value(), "node": 0,
-        }, name="tip_target")
+            "radius": self.target_radius.value(),
+        }
+        if self.runtime is not None:
+            geometry["node"] = self.runtime.descriptor.n_nodes - 1
+        primitive = ScenePrimitive(kind, "model", geometry, name="tip_target")
         self.session.set_scene(Scene(self.session.scene.name, retained + (primitive,),
                                      self.session.scene.dimension))
         self._scene_changed()
@@ -1784,6 +2173,11 @@ class ValidationWindow(QMainWindow):
     def _execution_done(self, receipts) -> None:
         assert self.session is not None
         self.session.transition(SessionState.COMPLETED, "all commands acked")
+        self._post_evaluation_context = {
+            "plan": self.session.plan,
+            "scene": self.session.scene,
+            "completed_at": time.time(),
+        }
         # P4:执行摘要 —— 命令安全 + jitter 统计(替代占位符)
         from ..execution.metrics import evaluate_command_safety, evaluate_plan_scene
         plan = self.session.plan
@@ -1809,7 +2203,7 @@ class ValidationWindow(QMainWindow):
                         key = "states_model" if "states_model" in data else "states_normalized"
                         states = np.asarray(data[key], dtype=np.float32)
                     scene_metrics = evaluate_plan_scene(
-                        states, self.session.scene, tip_node=0,
+                        states, self.session.scene,
                         mm_per_px=(self.runtime.descriptor.mm_per_px
                                    if self.runtime else None),
                         state_unit=(self.runtime.descriptor.state_length_unit
@@ -1844,15 +2238,148 @@ class ValidationWindow(QMainWindow):
                 except Exception as error:
                     plan_scene_summary = f"(计划场景指标不可用: {error})\n"
 
+        can_observe = bool(
+            self.session.validation_setup is not None and
+            self.hardware.states["camera"] == DeviceState.READY and
+            self._latest_frame is not None)
+        observation_note = (
+            "等待机器人稳定后点击“采集执行后形态并评价”"
+            if can_observe else
+            "本次使用离线 Anchor；真实控制评价需要在执行前建立当前相机配置和 Anchor")
         self.results.setPlainText(
             f"执行完成:{len(receipts)} 条命令\n"
             f"{plan_scene_summary}"
             f"压力越界:{safety_metrics['pressure_violation_count']}  "
             f"速率越界:{safety_metrics['slew_violation_count']}\n"
             f"{jitter_summary}\n"
-            f"prediction-to-execution gap: 待真机闭环(M5)\n"
+            f"执行后相机观测: {observation_note}\n"
             f"{self.session.run_dir / 'execution.csv'}")
+        self.post_observe_button.setEnabled(can_observe)
         self._refresh()
+
+    def _observe_after_execution(self) -> None:
+        """冻结执行后相机形态，分别计算真实目标残差和前向预测误差。"""
+        if self.session is None or self.runtime is None or \
+                self._post_evaluation_context is None:
+            self._error("当前实验没有待评价的已执行计划")
+            return
+        if self.session.state not in {SessionState.COMPLETED, SessionState.IDLE}:
+            self._error("执行完成并等待机器人稳定后再采集结果")
+            return
+        context = dict(self._post_evaluation_context)
+        plan = context.get("plan")
+        scene = context.get("scene")
+        if plan is None or scene is None:
+            self._error("执行上下文缺少 plan 或 scene")
+            return
+        try:
+            if self.session.state == SessionState.COMPLETED:
+                self.session.transition(SessionState.IDLE, "post-execution observation")
+            anchor, quality, skeleton = self._build_camera_anchor()
+            predicted_path = Path(plan.predicted_states_path or "")
+            if not predicted_path.is_absolute():
+                predicted_path = self.session.run_dir / predicted_path
+            if not predicted_path.is_file():
+                raise RuntimeError("计划缺少 predicted_states.npz")
+            with np.load(predicted_path) as data:
+                if "states_model" not in data:
+                    raise RuntimeError("预测轨迹缺少 states_model")
+                predicted_terminal = np.asarray(data["states_model"][-1],
+                                                dtype=np.float32)
+            from ..runtime.anchor_utils import model_normalization
+            center, scale = model_normalization(self.runtime.model)
+            observed = np.asarray(anchor.state, dtype=np.float32)
+            observed_model = observed * scale[:observed.shape[1]] + \
+                center[:observed.shape[1]]
+            from ..execution.metrics import evaluate_prediction
+            comparison = evaluate_prediction(
+                predicted_terminal[None, ..., :observed_model.shape[1]],
+                observed_model[None], scene=scene)
+            unit = self.runtime.descriptor.state_length_unit
+            observed_target = {}
+            for key in ("terminal_target_distance", "terminal_skeleton_mne",
+                        "target_success", "minimum_obstacle_clearance", "collision"):
+                if key in comparison:
+                    observed_target[key] = comparison[key]
+            payload = {
+                "schema_version": 1,
+                "observation_source": (
+                    "real_camera" if self.hardware.profile.camera_backend == BackendMode.REAL
+                    else "mock_camera"),
+                "state_coordinate_frame": self.runtime.descriptor.state_coordinate_frame,
+                "state_length_unit": unit,
+                "validation_setup_id": anchor.quality.get("validation_setup_id"),
+                "plan_id": plan.plan_id,
+                "executed_anchor_id": plan.anchor_id,
+                "post_observation_anchor_id": anchor.anchor_id,
+                "frame_quality": {"verdict": quality.verdict,
+                                  "reasons": list(quality.reasons),
+                                  "flags": quality.flags},
+                "observed_control_result": observed_target,
+                "forward_model_prediction_error": {
+                    "terminal_all_node_mean": comparison["terminal_mne"],
+                    "terminal_tip": comparison["terminal_tip_error"],
+                    "unit": unit,
+                },
+            }
+            result_path = self.session.run_dir / "post_control_metrics.json"
+            atomic_write_json(result_path, payload)
+            self._save_post_observation_overlay(
+                skeleton, predicted_terminal, scene,
+                self.session.run_dir / "post_control_overlay.png")
+            self._save_online_observation_artifacts(
+                f"post_{plan.plan_id[:8]}", skeleton, quality)
+            self.session.set_anchor(anchor)
+            atomic_write_json(self.session.run_dir / "anchor_post_execution.json",
+                              anchor.to_dict())
+            self._apply_anchor_coordinate_transform(anchor)
+            self._anchor_camera_skeleton = np.asarray(skeleton).copy()
+            self.main_display.set_actual_skeleton(skeleton)
+            target_value = observed_target.get(
+                "terminal_skeleton_mne",
+                observed_target.get("terminal_target_distance"))
+            source_label = ("真实相机观测" if payload["observation_source"] ==
+                            "real_camera" else "Mock 相机链路观测")
+            target_text = (f"{target_value:.3f} {unit}"
+                           if target_value is not None else "场景未设置目标")
+            self.results.appendPlainText(
+                f"\n{source_label}→目标残差: {target_text}\n"
+                f"前向模型预测→执行后观测全节点均值: "
+                f"{comparison['terminal_mne']:.3f} {unit}\n"
+                f"评价文件: {result_path}\n"
+                f"叠图: {self.session.run_dir / 'post_control_overlay.png'}\n"
+                "执行后形态已成为下一规划窗口的 Anchor。")
+            self.post_observe_button.setEnabled(False)
+            self._post_evaluation_context = None
+            self._refresh()
+        except Exception as error:
+            self._error(f"执行后观测失败: {error}")
+
+    def _save_post_observation_overlay(self, skeleton_camera, predicted_terminal_model,
+                                       scene: Scene, output_path: Path) -> None:
+        from ..perception._compat import cv2
+        if cv2 is None or self._latest_frame is None:
+            return
+        image = np.asarray(self._latest_frame).copy()
+        observed = np.rint(np.asarray(skeleton_camera)[:, :2]).astype(np.int32)
+        if len(observed) > 1:
+            cv2.polylines(image, [observed], False, (0, 0, 255), 2,
+                          lineType=cv2.LINE_AA)
+        transform = self._skeleton_frame_transform
+        predicted = np.asarray(predicted_terminal_model)[:, :2]
+        if transform is not None:
+            predicted = transform.model_to_camera(predicted)
+        predicted = np.rint(predicted).astype(np.int32)
+        if len(predicted) > 1:
+            cv2.polylines(image, [predicted], False, (255, 180, 0), 2,
+                          lineType=cv2.LINE_AA)
+        for point in observed:
+            cv2.circle(image, tuple(point), 3, (0, 0, 255), -1)
+        cv2.putText(image, "observed", (12, 24), cv2.FONT_HERSHEY_SIMPLEX,
+                    .6, (0, 0, 255), 2, cv2.LINE_AA)
+        cv2.putText(image, "predicted", (12, 48), cv2.FONT_HERSHEY_SIMPLEX,
+                    .6, (255, 180, 0), 2, cv2.LINE_AA)
+        cv2.imwrite(str(output_path), image)
 
     def _execution_failed(self, error: str) -> None:
         if self.session and self.session.state == SessionState.REANCHOR \

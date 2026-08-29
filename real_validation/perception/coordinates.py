@@ -147,7 +147,7 @@ def _skeleton_xy(positions) -> np.ndarray:
 def estimate_skeleton_frame(positions_camera_px, *, robot_diameter_mm: float,
                             robot_diameter_px: float,
                             source: str = "skeleton") -> SkeletonFrameTransform:
-    """从一帧或一段 tip→base 骨架估计固定机器人坐标。
+    """从一帧或一段 base→tip 骨架估计固定机器人坐标。
 
     序列输入使用各帧基座和基座附近切向的稳健中位数。单帧输入用于在线锚定；
     得到的变换随后由当前实验固定保存并复用。
@@ -162,8 +162,8 @@ def estimate_skeleton_frame(positions_camera_px, *, robot_diameter_mm: float,
     if node_count < 3:
         raise ValueError("建立机器人坐标至少需要3个骨架节点")
     inward = max(1, min(node_count - 2, int(round((node_count - 1) * 0.2))))
-    base = xy[:, -1]
-    near_base = xy[:, -1 - inward]
+    base = xy[:, 0]
+    near_base = xy[:, inward]
     directions = near_base - base
     lengths = np.linalg.norm(directions, axis=1)
     directions = directions[lengths > 1e-6] / lengths[lengths > 1e-6, None]

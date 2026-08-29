@@ -13,6 +13,16 @@ from real_validation.contracts.models import Anchor, ModelDescriptor, SafetyPoli
 
 
 class PlannerTargetSemanticsTest(unittest.TestCase):
+    def test_point_target_defaults_to_tip_at_last_node(self):
+        from real_validation.planning.openloop_planner import _target
+        scene = Scene(primitives=(
+            ScenePrimitive("target_point", "model", {"xy": [0, 0]}),))
+
+        target = _target(
+            scene, None, torch.device("cpu"), expected_nodes=15)
+
+        self.assertEqual(target["node"], 14)
+
     def test_multiple_targets_are_rejected_explicitly(self):
         from real_validation.planning.openloop_planner import _target
         scene = Scene(primitives=(
@@ -28,6 +38,28 @@ class PlannerTargetSemanticsTest(unittest.TestCase):
             "target_skeleton", "model", {"nodes": [[0, 0], [1, 1]]}),))
         with self.assertRaisesRegex(ValueError, "节点数 2 与模型 15 不一致"):
             _target(scene, None, torch.device("cpu"), expected_nodes=15)
+
+
+class DirectionManifestContractTest(unittest.TestCase):
+    def test_manifest_dict_requires_explicit_direction_contract(self):
+        from real_validation.contracts.deploy_manifest import DeployManifest
+
+        with self.assertRaisesRegex(ValueError, "缺必填字段"):
+            DeployManifest.from_dict({"schema_version": 2})
+
+    def test_anchor_and_scene_require_explicit_node_order_on_load(self):
+        with self.assertRaisesRegex(ValueError, "Anchor 缺少 node_order"):
+            Anchor.from_dict({
+                "schema_version": 2,
+                "state": [[0.0, 0.0]],
+                "action_history": [[0.0]],
+            })
+        with self.assertRaisesRegex(ValueError, "Scene 缺少 node_order"):
+            Scene.from_dict({
+                "schema_version": 2,
+                "name": "old",
+                "primitives": [],
+            })
 
 
 class UnitConversionTest(unittest.TestCase):
