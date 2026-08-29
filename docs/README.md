@@ -28,6 +28,11 @@
 | [`directions/directions_overview.md`](directions/directions_overview.md) | 17 个研究方向索引 |
 | `directions/02_*.md` ~ `17_*.md` | 各方向详述(迟滞/编码/骨架/多视角/sim2real/OpenLoop/控制/路径依赖 IK 等) |
 
+## 设计 (`designs/`)
+| 文档 | 说明 |
+|---|---|
+| [`designs/2026-08-29_hereditary_operator_model.md`](designs/2026-08-29_hereditary_operator_model.md) | **HereditaryOperatorModel 设计(定稿未实现)**:迟滞的显式算子状态表示(PI play 组+广义 Maxwell+线性模态读出),含对抗审稿裁决、四公理、可辨识性协议、E0-E4 实验协议、论文定位与退路阶梯 |
+
 ## 文献与背景 (`background/`)
 | 文档 | 说明 |
 |---|---|
