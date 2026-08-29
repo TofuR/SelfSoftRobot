@@ -7,7 +7,7 @@
   所以 w1 vs w40 在 open_loop 下才真正检验"动作历史记忆有没有用"。
 
 做什么(每模型, 8 种子 × 300 步纯自回归):
-  - 漂移曲线: 平均节点误差、末端(node0)误差, ±跨种子 std, log-y
+  - 漂移曲线: 平均节点误差、末端(nodeN-1)误差, ±跨种子 std, log-y
   - K_max: 平均曲线 & 末端曲线, 在多 mm 容差下的可信步数(+秒)
   - 分布: std / max across nodes(沿臂误差分布), 末步 per-node 误差
   - 单位: px 与 mm 双标(mm 由臂直径 10mm=33px → 0.302 mm/px)
@@ -98,7 +98,7 @@ def characterize(ckpt, data_dir, max_steps, n_seeds, device):
         acc.append(rollout_pernode(m, actions_norm, positions, int(t0), max_steps, ws, device))
     K = min(acc[0].shape[0], max_steps)
     acc = np.stack([a[:K] for a in acc])            # (n_seeds, K, N)
-    tip = acc[:, :, 0]                               # node0 = 末端
+    tip = acc[:, :, -1]                              # nodeN-1 = 末端
     meannode = acc.mean(2)
     maxnode = acc.max(2)
     stdnode = acc.std(2)
@@ -147,7 +147,7 @@ def main():
         ax.plot(k, res[key]["mean_mean"] * MM_PER_PX, "-", color=COLORS[key], lw=2,
                 label=f"{LABELS[key]} — mean node")
         ax.plot(k, res[key]["tip_mean"] * MM_PER_PX, "--", color=COLORS[key], lw=1.5,
-                label=f"{LABELS[key]} — tip (node0)")
+                label=f"{LABELS[key]} — tip (nodeN-1)")
     for mtol in (1.5, 3.0, 6.0):
         ax.axhline(mtol, color="gray", ls=":", lw=0.8)
         ax.text(res["w1"]["K"] * 0.99, mtol, f"{mtol}mm", fontsize=8, color="gray",
@@ -160,7 +160,7 @@ def main():
 
     # ── Fig 2: K_max 柱状 @ 多 mm 容差, mean vs tip × w1 vs w40 ──
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    for ax, curve_key, title in [(axes[0], "mean_mean", "平均节点"), (axes[1], "tip_mean", "末端 node0")]:
+    for ax, curve_key, title in [(axes[0], "mean_mean", "平均节点"), (axes[1], "tip_mean", "末端 nodeN-1")]:
         x = np.arange(len(mm_tols)); w = 0.35
         for i, key in enumerate(("w1", "w40")):
             vals = []
@@ -175,14 +175,13 @@ def main():
         ax.grid(axis="y", alpha=0.3)
     plt.tight_layout(); plt.savefig(os.path.join(args.out, "kmax_bar.png"), dpi=150); plt.close()
 
-    # ── Fig 3: 末步沿臂各 node 误差(node0=末端 ... node14=基座)──
+    # ── Fig 3: 末步沿臂各 node 误差(node0=基座 ... nodeN-1=末端)──
     fig, ax = plt.subplots(figsize=(10, 5))
     nn = np.arange(res["w1"]["pernode_final"].shape[0])
     for key in ("w1", "w40"):
         ax.plot(nn, res[key]["pernode_final"] * MM_PER_PX, "-o", color=COLORS[key], lw=2,
                 ms=4, label=LABELS[key])
-    ax.invert_xaxis()  # node0(末端)在右, 基座在左
-    ax.set_xlabel("node index(右=末端 node0, 左=基座 node14)")
+    ax.set_xlabel("node index(左=基座 node0, 右=末端 nodeN-1)")
     ax.set_ylabel("末步(k=300)误差 (mm)")
     ax.set_title("沿臂误差分布(k=300): 看 w1 是否在末端/某段更糟"); ax.legend(); ax.grid(alpha=0.3)
     plt.tight_layout(); plt.savefig(os.path.join(args.out, "pernode_final.png"), dpi=150); plt.close()

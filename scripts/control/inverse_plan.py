@@ -167,19 +167,19 @@ def optimize_plan(model, history_t, s_init, s_target, K, window_size, a_lo, a_hi
 
 
 def node_err_px(pred_norm, gt_norm, pc_center, pc_scale):
-    """pred/gt (N,3) 归一化 → 平均节点 L2 px + 末端(node0) L2 px。"""
+    """pred/gt (N,3) 归一化 → 平均节点 L2 px + 末端(nodeN-1) L2 px。"""
     p = pred_norm * pc_scale + pc_center
     g = gt_norm * pc_scale + pc_center
     d = np.sqrt(((p[:, :2] - g[:, :2]) ** 2).sum(-1))  # (N,)
-    return float(d.mean()), float(d[0])   # (mean_node_px, tip_px)
+    return float(d.mean()), float(d[-1])   # (mean_node_px, tip_px)
 
 
 # ── 变长 K 辅助 ──
 def tip_gap_px(s_init, s_target, pc_center, pc_scale):
-    """init→target 末端(node0) px 距离 + 平均节点 px 距离。s_*: (1,N,3) 归一化。"""
+    """init→target 末端(nodeN-1) px 距离 + 平均节点 px 距离。"""
     p = s_init.squeeze(0).cpu().numpy() * pc_scale + pc_center
     g = s_target.squeeze(0).cpu().numpy() * pc_scale + pc_center
-    tip = float(np.hypot(*(p[0, :2] - g[0, :2])))
+    tip = float(np.hypot(*(p[-1, :2] - g[-1, :2])))
     mean = float(np.sqrt(((p[:, :2] - g[:, :2]) ** 2).sum(-1)).mean())
     return tip, mean
 

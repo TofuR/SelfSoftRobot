@@ -435,7 +435,7 @@ def save_npz(path, positions, actions, n_points=None, tip_fix=None,
     if skeleton_method is not None:
         kw['skeleton_method'] = np.array(str(skeleton_method))
     kw['mask_close_kernel'] = np.array(int(mask_close_kernel))
-    kw['node_order'] = np.array('tip_to_base')
+    kw['node_order'] = np.array('base_to_tip')
     kw['segment_lengths'] = np.asarray(segment_lengths, dtype=np.float32)
     kw['segment_intervals'] = np.asarray(segment_intervals, dtype=np.int64)
     kw['joint_node_indices'] = np.asarray(joint_node_indices, dtype=np.int64)
@@ -617,11 +617,11 @@ def build_parser():
                     default="skeletonize",
                     help="默认快速细化主路径；medial_axis更慢；row_centroid仅兼容旧数据")
     pa.add_argument("--segment-lengths", default="1,1",
-                    help="tip→base各物理段相对长度；默认两段等长，15节点得到7+7区间")
+                    help="base→tip各物理段相对长度；默认两段等长，15节点得到7+7区间")
     pa.add_argument("--base-anchor", default=None,
                     help="可选基座像素x,y；默认以主路径较上端为base")
     pa.add_argument("--tip-fix", action=argparse.BooleanOptionalAction, default=True,
-                    help="仅旧row_centroid：末端node0垂直切片修正")
+                    help="仅旧row_centroid：末端nodeN-1垂直切片修正")
     pa.add_argument("--endpoint-fix", action=argparse.BooleanOptionalAction, default=True,
                     help="skeletonize/medial_axis双端端帽中心修正（默认开）")
     pa.add_argument("--mask-close-k", type=int, default=11,

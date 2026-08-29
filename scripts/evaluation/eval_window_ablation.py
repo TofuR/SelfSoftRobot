@@ -167,18 +167,18 @@ def main():
     ax.legend(); ax.grid(axis="y", alpha=0.3)
     plt.tight_layout(); plt.savefig(os.path.join(args.out, "err_by_trend.png"), dpi=150); plt.close()
 
-    # ── Fig B: 末端预测(node0) vs 动作值, 按趋势着色 ──
+    # ── Fig B: 末端预测(nodeN-1) vs 动作值, 按趋势着色 ──
     fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
     for ax, k in zip(axes, ("w1", "w40")):
-        tip_pred = res[k]["preds_xy"][:, 0, :]  # (T,2)
-        tip_gt = res[k]["gts_xy"][:, 0, :]
+        tip_pred = res[k]["preds_xy"][:, -1, :]  # (T,2)
+        tip_gt = res[k]["gts_xy"][:, -1, :]
         for tag, col in TREND_COLORS.items():
             msk = trs[k] == tag
             if not msk.any():
                 continue
             ax.scatter(res[k]["acts"][msk], tip_pred[msk, 0], s=6, color=col, alpha=0.4, label=f"pred {tag}")
         ax.scatter(res[k]["acts"], tip_gt[:, 0], s=3, color="black", alpha=0.15, label="GT")
-        ax.set_xlabel("action (归一化气压)"); ax.set_ylabel("node0 col (px)")
+        ax.set_xlabel("action (归一化气压)"); ax.set_ylabel("nodeN-1 col (px)")
         ax.set_title(LABELS[k]); ax.legend(fontsize=7, loc="best"); ax.grid(alpha=0.3)
     fig.suptitle("末端预测 vs 动作值(按趋势着色): w1 呈 load/unload 双带(预测不出方向), w40 双带应更窄", fontsize=11)
     plt.tight_layout(); plt.savefig(os.path.join(args.out, "err_vs_action.png"), dpi=150); plt.close()

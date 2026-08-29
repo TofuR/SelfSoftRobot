@@ -268,13 +268,18 @@ class UnifiedTrainer:
             config["action_view"] = self.config["action_view"]
         if self.config.get("state_view"):
             config["state_view"] = self.config["state_view"]
+        temporal = getattr(model, "temporal", None)
+        if getattr(temporal, "gl_kernel_alignment", None) is not None:
+            config["gl_kernel_alignment"] = temporal.gl_kernel_alignment
 
         # 模型特有参数
         for attr in ('skeleton_mode', 'rod_radius', 'd_filter', 'n_freqs',
                      'n_fine', 'n_medium', 'n_coarse', 'deform_n_freqs',
                      'fourier_n_freq', 'bspline_n_ctrl', 'catmullrom_n_ctrl',
                      'encoder_type',
-                     'n_nodes', 'z_dim', 'episode_len'):   # 状态转移族关键参数(辨识模型用)
+                     'n_nodes', 'z_dim', 'episode_len', 'node_order',
+                     'spatial_propagation_direction', 'gl_kernel_alignment',
+                     'model_contract_version'):
             val = getattr(model, attr, None)
             if val is not None:
                 config[attr] = val
@@ -286,8 +291,8 @@ class UnifiedTrainer:
             if _npzs:
                 try:
                     _d = np.load(_npzs[0], allow_pickle=False)
-                    for _k in ('n_points', 'tip_fix', 'state_coordinate_frame',
-                               'state_length_unit'):
+                    for _k in ('n_points', 'tip_fix', 'node_order',
+                               'state_coordinate_frame', 'state_length_unit'):
                         if _k in _d:
                             _v = _d[_k]
                             data_prep[_k] = _v.item() if hasattr(_v, 'item') else _v

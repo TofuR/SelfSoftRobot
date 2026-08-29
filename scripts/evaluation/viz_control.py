@@ -245,13 +245,13 @@ def viz_plan_gif(model, history_t, s_init, s_target, a_plan, K, window_size,
 
 # ── 4. 大运动段自动选择(首末端端到端位移最大) ──
 def pick_large_motion_segment(positions, segment_len, top_n=1):
-    """返回末端(node0)端到端位移最大的 segment_len 段起始索引 + disp 数组。
+    """返回末端(nodeN-1)端到端位移最大的 segment_len 段起始索引 + disp 数组。
     positions (T,3,N)。端到端位移 = ||tip(i+len)-tip(i)||(px), 选单调大移动非高频抖动。"""
     T = positions.shape[0]
-    node0 = positions[:, :, 0]                       # (T,3) [col,row,z]
+    tip = positions[:, :, -1]                        # (T,3) [col,row,z]
     seg = min(segment_len, T - 1)
-    disp = np.array([np.hypot(node0[i + seg, 0] - node0[i, 0],
-                              node0[i + seg, 1] - node0[i, 1])
+    disp = np.array([np.hypot(tip[i + seg, 0] - tip[i, 0],
+                              tip[i + seg, 1] - tip[i, 1])
                      for i in range(T - seg)])
     top = np.argsort(disp)[::-1][:top_n]
     return sorted(int(i) for i in top), disp

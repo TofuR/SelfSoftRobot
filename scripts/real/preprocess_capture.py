@@ -289,6 +289,10 @@ def summarize_npz(path):
     with np.load(path, allow_pickle=False) as data:
         positions = np.asarray(data["positions"])
         actions = np.asarray(data["actions"])
+        node_order = _npz_scalar(data, "node_order")
+        if node_order != "base_to_tip":
+            raise ValueError(
+                f"{path} 的 node_order 必须为 base_to_tip，当前为 {node_order!r}")
         camera_positions = (np.asarray(data["positions_camera_px"])
                             if "positions_camera_px" in data else None)
         return {
@@ -302,7 +306,7 @@ def summarize_npz(path):
                 camera_positions is not None and np.isfinite(camera_positions).all()),
             "action_range": [float(actions.min()), float(actions.max())],
             "n_points": int(_npz_scalar(data, "n_points", positions.shape[2])),
-            "node_order": str(_npz_scalar(data, "node_order", "tip_to_base")),
+            "node_order": str(node_order),
             "segment_lengths": _npz_scalar(data, "segment_lengths", []),
             "segment_intervals": _npz_scalar(data, "segment_intervals", []),
             "joint_node_indices": _npz_scalar(data, "joint_node_indices", []),
@@ -676,6 +680,19 @@ def main(argv=None):
             command.extend(("--repair-frames", args.repair_frames))
         run(command, project_root, commands, common_env)
 
+        stage_qc_command = [
+            python, "scripts/real/save_preprocess_stage_example.py",
+            "--seq", seq, "--camera", args.camera,
+            "--derived", derived, "--masks-dir", mask_dir,
+            "--dataset-root", out_root,
+            "--mask-close-k", str(args.mask_close_k),
+            "--n-points", str(args.n_points),
+            "--segment-lengths", args.segment_lengths,
+        ]
+        if args.base_anchor:
+            stage_qc_command.extend(("--base-anchor", args.base_anchor))
+        run(stage_qc_command, project_root, commands, common_env)
+
     dataset_manifest = build_dataset_manifest(
         seq=seq, camera=args.camera, derived=derived, crop_root=crop_root,
         mask_dir=mask_dir, out_root=out_root,
@@ -735,6 +752,7 @@ def main(argv=None):
         stream.write("## 抽样 QC（按需查看）\n\n")
         stream.write(f"- `{crop_root}/qc/`\n- `{derived}/qc_candidate/`\n")
         stream.write(f"- `{mask_dir}/qc/`\n- `{out_root}/qc_skeleton/`\n")
+        stream.write(f"- `{derived}/qc_pipeline_example/`\n")
     if not training_ready:
         failed = [item["name"] for item in
                   dataset_manifest["quality_control"]["checks"]

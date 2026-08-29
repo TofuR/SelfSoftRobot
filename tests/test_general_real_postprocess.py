@@ -25,7 +25,7 @@ class GeneralCenterlineTest(unittest.TestCase):
         self.assertTrue(info["success"])
         self.assertEqual(info["segment_intervals"], (7, 7))
         self.assertEqual(info["joint_node_indices"], (7,))
-        self.assertGreater(skeleton[0, 1], skeleton[-1, 1])
+        self.assertLess(skeleton[0, 1], skeleton[-1, 1])
 
     def test_explicit_base_anchor_controls_direction(self):
         from real_validation.perception.skeleton import extract_centerline_2d
@@ -33,8 +33,8 @@ class GeneralCenterlineTest(unittest.TestCase):
         skeleton = extract_centerline_2d(
             self._s_mask(), n_points=15, method="skeletonize",
             segment_lengths=(1, 1), base_anchor_xy=(90, 175))
-        self.assertLess(skeleton[0, 1], skeleton[-1, 1])
-        self.assertTrue(np.allclose(skeleton[-1], [90, 175]))
+        self.assertGreater(skeleton[0, 1], skeleton[-1, 1])
+        self.assertTrue(np.allclose(skeleton[0], [90, 175]))
 
     def test_base_anchor_excludes_attachment_branch_from_main_path(self):
         from real_validation.perception.skeleton import extract_centerline_2d
@@ -46,8 +46,8 @@ class GeneralCenterlineTest(unittest.TestCase):
         skeleton = extract_centerline_2d(
             mask, n_points=15, method="skeletonize",
             base_anchor_xy=anchor, endpoint_fix=True)
-        self.assertLess(np.linalg.norm(skeleton[-1] - anchor), 8.0)
-        self.assertGreater(skeleton[0, 1], 145)
+        self.assertLess(np.linalg.norm(skeleton[0] - anchor), 8.0)
+        self.assertGreater(skeleton[-1, 1], 145)
         self.assertLess(
             np.linalg.norm(np.diff(skeleton, axis=0), axis=1).sum(), 150)
 
@@ -59,10 +59,10 @@ class GeneralCenterlineTest(unittest.TestCase):
         raw = extract_centerline_2d(mask, n_points=15, endpoint_fix=False)
         fixed, info = extract_centerline_2d(
             mask, n_points=15, endpoint_fix=True, return_info=True)
-        self.assertGreater(160 - raw[0, 1], 10)
-        self.assertGreater(raw[-1, 1] - 20, 10)
-        self.assertTrue(np.allclose(fixed[0], [90, 160], atol=1.0))
-        self.assertTrue(np.allclose(fixed[-1], [90, 20], atol=1.0))
+        self.assertGreater(raw[0, 1] - 20, 10)
+        self.assertGreater(160 - raw[-1, 1], 10)
+        self.assertTrue(np.allclose(fixed[0], [90, 20], atol=1.0))
+        self.assertTrue(np.allclose(fixed[-1], [90, 160], atol=1.0))
         self.assertTrue(info["tip_endpoint_fix_applied"])
         self.assertTrue(info["base_endpoint_fix_applied"])
         self.assertEqual(info["segment_intervals"], (7, 7))

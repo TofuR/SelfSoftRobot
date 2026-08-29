@@ -4,8 +4,8 @@
 ``camera_pixel_v1`` 报告像素并使用 16 mm 直径给出尺度估计。NDI 保持独立末端评价流。
 
 【NDI mm 误差原理(免相机标定)】
-  NDI 末端 (x,y,z mm) 与图像骨架 node0 (col,row px) 是同一物理点、逐帧配对。末端在平面内
-  做 ~1-DOF 弯曲(x 扫 ~24mm / y 扫 ~9mm, 2D 铺开)。用全部帧 (GT node0 px ↔ NDI x,y mm)
+  NDI 末端 (x,y,z mm) 与图像骨架 nodeN-1 (col,row px) 是同一物理点、逐帧配对。
+  做 ~1-DOF 弯曲(x 扫 ~24mm / y 扫 ~9mm, 2D 铺开)。用全部帧 (GT nodeN-1 px ↔ NDI x,y mm)
   最小二乘拟合 2D 仿射 A: (col,row,1)→(x,y)。残差RMS = 标定噪声底(骨架化+NDI+非平面)。
   模型末端像素经同一 A→mm, 与 NDI 比 → 末端毫米误差。同时报 GT末端↔NDI 残差(底)以校准。
   严格评价从独立 calibration 序列加载该仿射；同 split 临时拟合只标记为诊断值，避免评价泄漏。
@@ -266,14 +266,14 @@ def main(argv=None):
 
     # ---- ② 像素前向预测指标(每帧) ----
     d2 = np.sqrt(((pred_world[:, :, :2] - gt_world[:, :, :2]) ** 2).sum(-1))   # (T,N) px
-    tip_px = d2[:, 0]
+    tip_px = d2[:, -1]
     node_mean_px = d2.mean(1)
     chamfer_px = np.array([chamfer_distance(pred_world[t, :, :2], gt_world[t, :, :2]) for t in range(T)])
     hausdorff_px = np.array([hausdorff_distance(pred_world[t, :, :2], gt_world[t, :, :2]) for t in range(T)])
     procrustes_px = np.array([procrustes_shape_rms(pred_world[t, :, :2], gt_world[t, :, :2]) for t in range(T)])
     nb, nm = N // 3, 2 * N // 3
-    region = {"tip": d2[:, :nb].mean(1),
-              "mid": d2[:, nb:nm].mean(1), "base": d2[:, nm:].mean(1)}
+    region = {"base": d2[:, :nb].mean(1),
+              "mid": d2[:, nb:nm].mean(1), "tip": d2[:, nm:].mean(1)}
     joint_nodes = (tuple(int(v) for v in np.asarray(raw["joint_node_indices"]).tolist())
                    if "joint_node_indices" in raw else ())
     bounds = (0,) + joint_nodes + (N - 1,)
@@ -313,7 +313,7 @@ def main(argv=None):
             floor = float("nan")
             calibration_mode = "independent_file"
         else:
-            A, floor = fit_affine_px_to_mm(gt_world[:, 0, :2], ndi_tip)
+            A, floor = fit_affine_px_to_mm(gt_world[:, -1, :2], ndi_tip)
             calibration_mode = "same_split_diagnostic"
             print("  [警告] 未提供--calibration-file：tip_mm为同split自标定诊断值，不是严格held-out毫米误差")
         if args.save_calibration:
@@ -324,7 +324,7 @@ def main(argv=None):
                                 ndi_index=np.array(args.ndi_index),
                                 source_data_dir=np.array(os.path.abspath(args.data_dir)))
         gt_tip_mm_floor = floor
-        Xm = np.hstack([pred_world[:, 0, :2], np.ones((T, 1))])
+        Xm = np.hstack([pred_world[:, -1, :2], np.ones((T, 1))])
         model_tip_mm = Xm @ A                                  # (T,2) mm
         tip_mm = np.sqrt(((model_tip_mm - ndi_tip) ** 2).sum(1))   # (T,) mm
         ndi_z_abs = np.abs(ndi_split[:, 2] - np.nanmedian(ndi_split[:, 2]))
@@ -368,7 +368,7 @@ def main(argv=None):
                 for k in range(K):
                     roll_k[k].append(((roll[k] - gt[k]) ** 2).mean())
                     one_k[k].append(((one[k] - gt[k]) ** 2).mean())
-                    tippx_k[k].append(np.hypot(*(roll_w[k, 0, :2] - gt_w[k, 0, :2])))
+                    tippx_k[k].append(np.hypot(*(roll_w[k, -1, :2] - gt_w[k, -1, :2])))
                 n_win += 1; t0 += K
         if n_win:
             rm = np.array([np.mean(x) for x in roll_k]); om = np.array([np.mean(x) for x in one_k])
@@ -542,7 +542,7 @@ def main(argv=None):
             ax[1].set_title(f"metric tip err (floor {gt_tip_mm_floor:.2f}mm)")
         plt.tight_layout(); plt.savefig(os.path.join(out_dir, "err_vs_action.png"), dpi=120); plt.close()
         plt.figure(figsize=(8, 3))
-        plt.plot(d2[prediction_valid].mean(0), "o-"); plt.xlabel(f"node (0=tip .. {N - 1}=base)")
+        plt.plot(d2[prediction_valid].mean(0), "o-"); plt.xlabel(f"node (0=base .. {N - 1}=tip)")
         for node in joint_nodes:
             plt.axvline(node, color="tab:orange", ls="--", alpha=.6, label=f"joint node {node}")
         plt.ylabel(f"mean err [{state_unit}]"); plt.title("per-node error profile"); plt.grid(alpha=.3)

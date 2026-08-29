@@ -38,7 +38,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SAM2_SRC = os.path.join(HERE, "sam2_src")
 os.environ.setdefault("SAM2_HOME", SAM2_SRC)
 sys.path.insert(0, SAM2_SRC)
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "3")
 
 import cv2
 import numpy as np

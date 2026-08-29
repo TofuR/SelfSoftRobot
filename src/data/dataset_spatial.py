@@ -59,12 +59,14 @@ class SpatialSequenceDataset(Dataset):
                 state_contracts.append((
                     _npz_text(data, "state_coordinate_frame", "camera_pixel_v1"),
                     _npz_text(data, "state_length_unit", "px"),
+                    _npz_text(data, "node_order", "unspecified"),
                 ))
         unique_state_contracts = tuple(dict.fromkeys(state_contracts))
         if len(unique_state_contracts) != 1:
             raise ValueError(
                 f"数据目录混用了多个状态坐标合同: {unique_state_contracts}")
-        self.state_coordinate_frame, self.state_length_unit = unique_state_contracts[0]
+        (self.state_coordinate_frame, self.state_length_unit,
+         self.node_order) = unique_state_contracts[0]
 
         # 动作归一化因子
         all_acts = []
@@ -103,7 +105,7 @@ class SpatialSequenceDataset(Dataset):
               f"action_dim={self.action_dim}, channels={self.action_channels}, "
               f"n_seqs={len(self.data_cache)}, "
               f"state_frame={self.state_coordinate_frame}, "
-              f"unit={self.state_length_unit}")
+              f"unit={self.state_length_unit}, node_order={self.node_order}")
 
         # 计算归一化参数（基于中心线坐标范围）
         self._compute_normalization()
@@ -179,6 +181,7 @@ class SpatialSequenceDataset(Dataset):
         return {
             "state_coordinate_frame": self.state_coordinate_frame,
             "state_length_unit": self.state_length_unit,
+            "node_order": self.node_order,
         }
 
     def _get_action_window(self, data, t):
@@ -243,6 +246,10 @@ class StateTransitionDataset(SpatialSequenceDataset):
         # 父类先按单帧模式构建 self.samples（episode 模式随后重建）
         super().__init__(data_dir, seq_len=seq_len, pairs=pairs,
                          action_channels=action_channels)
+        if self.node_order != "base_to_tip":
+            raise ValueError(
+                "StateTransitionDataset 要求 node_order=base_to_tip；"
+                f"当前数据为 {self.node_order!r}。请用新前处理流程重建 NPZ。")
         if self.episode_mode:
             self._build_episode_samples()
             print(f"StateTransitionDataset (episode mode): {len(self.samples)} "

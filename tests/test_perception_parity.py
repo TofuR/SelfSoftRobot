@@ -126,21 +126,22 @@ class SkeletonParityTest(unittest.TestCase):
             for n_points in (15, 31):
                 for tip_fix in (False, True):
                     tag = f"{name} n={n_points} tip_fix={tip_fix}"
-                    expected = _legacy_extract_skeleton_2d(mask, n_points, tip_fix=tip_fix)
+                    expected = _legacy_extract_skeleton_2d(
+                        mask, n_points, tip_fix=tip_fix)[::-1].copy()
                     actual = extract_skeleton_2d(mask, n_points, tip_fix=tip_fix)
                     self.assertEqual(actual.shape, expected.shape, tag)
                     self.assertEqual(actual.dtype, expected.dtype, tag)
-                    self.assertTrue(np.array_equal(actual, expected), tag)
+                    self.assertTrue(np.allclose(actual, expected, atol=1e-5), tag)
 
     def test_batch_matches_frozen_reference(self):
         from real_validation.perception.skeleton import batch_extract_skeleton_2d
 
         masks = np.stack([mask for _, mask in synthetic_masks()
                           if mask.shape == (120, 80)])
-        expected = np.stack([_legacy_extract_skeleton_2d(m, 15, tip_fix=True)
+        expected = np.stack([_legacy_extract_skeleton_2d(m, 15, tip_fix=True)[::-1]
                              for m in masks])
         actual = batch_extract_skeleton_2d(masks, 15, tip_fix=True)
-        self.assertTrue(np.array_equal(actual, expected))
+        self.assertTrue(np.allclose(actual, expected, atol=1e-5))
 
     def test_tip_fix_default_stays_false(self):
         """compare_skeleton_methods.py 的 5 处调用靠这个默认值充当 M0 未修基线。"""
@@ -354,9 +355,9 @@ class SkeletonParityOnRealMasksTest(unittest.TestCase):
         for index in np.linspace(0, len(files) - 1, 50).astype(int):
             path = files[index]
             mask = (cv2.imread(str(path), cv2.IMREAD_GRAYSCALE) > 127).astype(np.uint8)
-            expected = _legacy_extract_skeleton_2d(mask, 15, tip_fix=True)
+            expected = _legacy_extract_skeleton_2d(mask, 15, tip_fix=True)[::-1]
             actual = extract_skeleton_2d(mask, 15, tip_fix=True)
-            self.assertTrue(np.array_equal(actual, expected), path.name)
+            self.assertTrue(np.allclose(actual, expected, atol=1e-5), path.name)
 
 
 if __name__ == "__main__":

@@ -44,6 +44,7 @@ class FractionalMemory(nn.Module):
         self.action_dim = action_dim
         self.n_orders = n_orders
         self.window_size = window_size
+        self.gl_kernel_alignment = "current_at_window_end"
 
         # 可学习的分数阶参数 α ∈ (0, 1)
         # 初始化为 [0.2, 0.4, 0.6, 0.8] 的均匀分布
@@ -112,8 +113,11 @@ class FractionalMemory(nn.Module):
             w = self._compute_gl_weights(alphas[i], K)  # (K,)
             # 归一化权重（绝对值归一化，因为有负项）
             w_norm = w / (w.abs().sum() + 1e-8)
-            # 加权求和: (K,) @ (B, K, D) → (B, D)
-            feat = torch.einsum('k,bkd->bd', w_norm, action_window)
+            # action_window 按时间正序排列：索引0最旧，索引-1是当前动作。
+            # GL 定义中 w_0 属于当前时刻，因此权重需按滞后时间与窗口
+            # 反向对齐：w[0]·a_t + w[1]·a_{t-1} + ...。
+            feat = torch.einsum('k,bkd->bd', torch.flip(w_norm, dims=(0,)),
+                                action_window)
             frac_features.append(feat * self.order_weights[i])
 
         frac_flat = torch.cat(frac_features, dim=-1)  # (B, n_orders * D)

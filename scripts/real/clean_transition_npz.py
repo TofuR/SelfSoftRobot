@@ -124,6 +124,11 @@ def qc_montage(raw_all, clean_all, frame_ids, cam0, masks_dir, out_path,
 
 def process_npz(npz_path, out_path, act_dev_thresh, act_nodes, joint_xy=None):
     d = np.load(npz_path)
+    node_order = d["node_order"].item() if "node_order" in d else None
+    if node_order != "tip_to_base":
+        raise ValueError(
+            "静态近端历史清洗仅接受带 node_order=tip_to_base 的归档数据；"
+            f"当前为 {node_order!r}")
     pos = d['positions'].astype(np.float32)
     act = d['actions'].astype(np.float32)
     _meta = {k: np.asarray(d[k]).copy() for k in d.files

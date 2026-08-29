@@ -94,6 +94,9 @@ def run_rollout(model, mode, actions, positions, window_size, norm_factor, devic
                 pred[t] = out['skeleton'].squeeze(0).cpu().numpy()
                 z_t = out['latent_z']
         else:  # open_loop windowed
+            # t=0 是该序列的真实观测锚点，不是模型预测。保存其归一化坐标，供
+            # 相机坐标反变换和叠图使用；统计时由 prediction_valid 单独排除。
+            pred[0] = to_norm(positions[0]).squeeze(0).cpu().numpy()
             t = 1
             while t < T:
                 z_t = model.init_z_from_action(aw_tensor(t))
@@ -142,9 +145,9 @@ def overlay(photo, mask, gt_xy, pred_xy, onestep_xy=None, *,
     draw_skel(img, gt_xy, gt_color, r=3, lw=2)
     draw_skel(img, pred_xy, pred_color, r=3, lw=2)
     if gt_xy is not None and np.abs(gt_xy).max() > 0:
-        cv2.circle(img, (int(gt_xy[0, 0]), int(gt_xy[0, 1])), 6, tip_gt, 2, cv2.LINE_AA)
+        cv2.circle(img, (int(gt_xy[-1, 0]), int(gt_xy[-1, 1])), 6, tip_gt, 2, cv2.LINE_AA)
     if pred_xy is not None and np.abs(pred_xy).max() > 0:
-        cv2.circle(img, (int(pred_xy[0, 0]), int(pred_xy[0, 1])), 6, tip_pred, 2, cv2.LINE_AA)
+        cv2.circle(img, (int(pred_xy[-1, 0]), int(pred_xy[-1, 1])), 6, tip_pred, 2, cv2.LINE_AA)
     return img
 
 
@@ -267,8 +270,10 @@ def main(argv=None):
                   (frame_transform.model_to_camera(one_world[:, :, :2])
                    if frame_transform is not None else one_world[:, :, :2]))
 
-    tip_err = np.hypot(*(pred_world[:, 0, :2] - gt_world[:, 0, :2]).T)     # (T,)
+    tip_err = np.hypot(*(pred_world[:, -1, :2] - gt_world[:, -1, :2]).T)   # (T,)
     node_err = np.sqrt(((pred_world[:, :, :2] - gt_world[:, :, :2]) ** 2).sum(-1)).mean(axis=1)
+    prediction_valid = (np.arange(T) > 0 if mode == "open_loop" else
+                        np.ones(T, dtype=bool))
 
     seq = sequence_from_npz(selected_npz)
     cam0 = args.cam0 or os.path.join(PROJECT_ROOT, "real_capture", "data", "raw", seq, "cam0")
@@ -279,10 +284,12 @@ def main(argv=None):
           f"masks={'OK' if os.path.isdir(masks_dir) else 'MISSING'} frame_offset={offset}")
     print(f"  state_frame={state_frame} unit={state_unit}")
     print(f"  预测 z 量级: mean|z|={z_mag:.3f}{state_unit}")
-    print(f"  末端(tip)误差: mean={tip_err.mean():.2f}{state_unit} "
-          f"median={np.median(tip_err):.2f}{state_unit} "
-          f"max={tip_err.max():.1f}{state_unit} | "
-          f"全节点均误: mean={node_err.mean():.2f}{state_unit}")
+    valid_tip = tip_err[prediction_valid]
+    valid_node = node_err[prediction_valid]
+    print(f"  末端(tip)误差: mean={valid_tip.mean():.2f}{state_unit} "
+          f"median={np.median(valid_tip):.2f}{state_unit} "
+          f"max={valid_tip.max():.1f}{state_unit} | "
+          f"全节点均误: mean={valid_node.mean():.2f}{state_unit}")
 
     ckpt_tag = os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(args.checkpoint)))) \
         or os.path.basename(args.checkpoint)
@@ -322,15 +329,24 @@ def main(argv=None):
             else:
                 print(f"  [忽略 f{f} mask] mask={mask.shape} photo={photo.shape[:2]}且无ROI合同")
                 mask = None
-        img = overlay(photo, mask, gt_camera[t], pred_camera[t],
-                      onestep_xy=(one_camera[t] if one_camera is not None else None))
-        cv2.putText(img, f"f{f} t{t} {mode} tipErr={tip_err[t]:.1f}{state_unit}", (8, 26),
+        is_prediction = bool(prediction_valid[t])
+        img = overlay(
+            photo, mask, gt_camera[t],
+            pred_camera[t] if is_prediction else None,
+            onestep_xy=(one_camera[t] if one_camera is not None and is_prediction
+                        else None))
+        status = (f"tipErr={tip_err[t]:.1f}{state_unit}" if is_prediction
+                  else "observed anchor")
+        cv2.putText(img, f"f{f} t{t} {mode} {status}", (8, 26),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
-        cv2.putText(img, "GT green / pred cyan" + (" / onestep orange" if one_world is not None else ""),
+        legend = ("GT green / pred cyan" if is_prediction else
+                  "observed anchor green")
+        cv2.putText(img, legend + (" / onestep orange" if one_world is not None and is_prediction else ""),
                     (8, img.shape[0] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
         cv2.imwrite(os.path.join(out_dir, f"frame_{f:05d}.png"), img)
         cells.append((f, img))
-        recs.append((t, f, tip_err[t], node_err[t]))
+        if is_prediction:
+            recs.append((t, f, tip_err[t], node_err[t]))
 
     if cells:
         h, w = cells[0][1].shape[:2]
@@ -347,8 +363,11 @@ def main(argv=None):
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         plt.figure(figsize=(8, 3))
-        plt.plot(tip_err, label=f"tip (node0) err [{state_unit}]")
-        plt.plot(node_err, label=f"mean node err [{state_unit}]", alpha=0.7)
+        prediction_index = np.flatnonzero(prediction_valid)
+        plt.plot(prediction_index, valid_tip,
+                 label=f"tip (node{pred_world.shape[1] - 1}) err [{state_unit}]")
+        plt.plot(prediction_index, valid_node,
+                 label=f"mean node err [{state_unit}]", alpha=0.7)
         plt.xlabel("frame index (npz)"); plt.ylabel(state_unit)
         plt.title(f"{ckpt_tag}  {mode}  z={z_mag:.3f}")
         plt.legend(); plt.grid(alpha=0.3)
@@ -361,9 +380,10 @@ def main(argv=None):
         fp.write(f"T={T} N={N} window={window_size} norm_factor={norm_factor:.4g}\n")
         fp.write(f"state_frame={state_frame} state_unit={state_unit}\n")
         fp.write(f"pred |z| mean = {z_mag:.4f}{state_unit}\n")
-        fp.write(f"tip err: mean={tip_err.mean():.3f} median={np.median(tip_err):.3f} "
-                 f"max={tip_err.max():.3f} {state_unit}\n")
-        fp.write(f"node err mean = {node_err.mean():.3f} {state_unit}\n\n"
+        fp.write(f"prediction_rows={int(prediction_valid.sum())}/{T}\n")
+        fp.write(f"tip err: mean={valid_tip.mean():.3f} median={np.median(valid_tip):.3f} "
+                 f"max={valid_tip.max():.3f} {state_unit}\n")
+        fp.write(f"node err mean = {valid_node.mean():.3f} {state_unit}\n\n"
                  f"frame,tip_{state_unit},node_{state_unit}\n")
         for t, f, te, ne in recs:
             fp.write(f"{t},{f},{te:.2f},{ne:.2f}\n")

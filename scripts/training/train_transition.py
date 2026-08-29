@@ -208,7 +208,19 @@ def _warm_start_open_loop(model, init_from, device, action_dim=None):
         return
     if not os.path.exists(init_from):
         raise FileNotFoundError(f"--init_from 不存在: {init_from}")
-    from src.utils.model_loader import _migrate_gru_keys
+    from src.utils.model_loader import _load_config_json, _migrate_gru_keys
+    saved_cfg = _load_config_json(init_from) or {}
+    required_contract = {
+        "model_contract_version": model.model_contract_version,
+        "node_order": model.node_order,
+        "spatial_propagation_direction": model.spatial_propagation_direction,
+        "gl_kernel_alignment": model.gl_kernel_alignment,
+    }
+    actual_contract = {key: saved_cfg.get(key) for key in required_contract}
+    if actual_contract != required_contract:
+        raise ValueError(
+            "GT 热启动 checkpoint 与当前时间/节点方向合同不一致；"
+            f" required={required_contract}, actual={actual_contract}")
     sd = torch.load(init_from, map_location=device, weights_only=True)
     sd = _migrate_gru_keys(sd)
     incompatible = model.load_state_dict(sd, strict=False)
