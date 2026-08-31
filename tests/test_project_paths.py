@@ -69,6 +69,17 @@ class TestProjectPaths(unittest.TestCase):
         with self.assertRaises(ValueError):
             paths.raw_sequence("real", "../escape")
 
+    def test_repo_uri_roundtrip_and_escape_rejection(self):
+        paths = ProjectPaths.load(repo_root=self.root, environ={})
+        config = self.root / "config/paths.example.toml"
+        self.assertEqual(paths.repo_uri(config),
+                         "repo://config/paths.example.toml")
+        self.assertEqual(paths.resolve_repo_uri(paths.repo_uri(config)), config)
+        with self.assertRaises(ValueError):
+            paths.resolve_repo_uri("repo://docs/../../outside")
+        with self.assertRaises(ValueError):
+            paths.repo_uri(Path(self.temp.name) / "outside")
+
     def test_legacy_roots_are_read_only_candidates(self):
         legacy = self.root / "old_raw" / "seq_a"
         legacy.mkdir(parents=True)

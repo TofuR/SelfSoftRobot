@@ -3,6 +3,7 @@
 from .manifests import (
     ManifestError,
     ManifestStore,
+    atomic_write_json,
     build_file_record,
     sha256_file,
     validate_dataset_manifest,
@@ -15,6 +16,7 @@ __all__ = [
     "ManifestError",
     "ManifestStore",
     "ProjectPaths",
+    "atomic_write_json",
     "build_file_record",
     "sha256_file",
     "validate_dataset_manifest",

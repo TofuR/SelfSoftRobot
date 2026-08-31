@@ -277,7 +277,7 @@ def build_file_record(paths: ProjectPaths, path: str | os.PathLike[str]) -> dict
     }
 
 
-def _atomic_write_json(
+def atomic_write_json(
         target: Path, value: Mapping[str, Any], *, overwrite: bool = False) -> Path:
     target = target.resolve(strict=False)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -327,7 +327,7 @@ class ManifestStore:
         destination = Path(target) if target is not None else (
             self.paths.processed_dataset("real", dataset_id) / "manifest.json")
         self.paths.artifact_uri(destination)
-        return _atomic_write_json(destination, manifest, overwrite=overwrite)
+        return atomic_write_json(destination, manifest, overwrite=overwrite)
 
     def write_run(
         self,
@@ -341,7 +341,7 @@ class ManifestStore:
             self.paths.training_run(manifest["study_id"], manifest["run_id"]) /
             "run_manifest.json")
         self.paths.artifact_uri(destination)
-        return _atomic_write_json(destination, manifest, overwrite=overwrite)
+        return atomic_write_json(destination, manifest, overwrite=overwrite)
 
     @staticmethod
     def read_dataset(path: str | os.PathLike[str]) -> dict:

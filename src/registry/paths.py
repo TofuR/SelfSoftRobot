@@ -21,6 +21,7 @@ except ImportError:  # Python 3.10
 WORKSPACE_ENV = "SSR_WORKSPACE_ROOT"
 CONFIG_ENV = "SSR_PATHS_CONFIG"
 ARTIFACT_SCHEME = "artifact://"
+REPO_SCHEME = "repo://"
 
 
 def _default_repo_root() -> Path:
@@ -221,6 +222,28 @@ class ProjectPaths:
             resolved.relative_to(self.workspace_root)
         except ValueError as exc:
             raise ValueError(f"artifact URI 越过 workspace: {uri!r}") from exc
+        return resolved
+
+    def repo_uri(self, path: str | os.PathLike[str]) -> str:
+        resolved = Path(path).expanduser().resolve(strict=False)
+        try:
+            relative = resolved.relative_to(self.repo_root)
+        except ValueError as exc:
+            raise ValueError(f"路径不在源码仓库内: {resolved}") from exc
+        return REPO_SCHEME + relative.as_posix()
+
+    def resolve_repo_uri(self, uri: str) -> Path:
+        if not isinstance(uri, str) or not uri.startswith(REPO_SCHEME):
+            raise ValueError(f"不是 repo URI: {uri!r}")
+        relative = PurePosixPath(uri[len(REPO_SCHEME):])
+        if (not relative.parts or relative.is_absolute() or
+                any(part in ("", ".", "..") for part in relative.parts)):
+            raise ValueError(f"非法 repo URI: {uri!r}")
+        resolved = self.repo_root.joinpath(*relative.parts).resolve(strict=False)
+        try:
+            resolved.relative_to(self.repo_root)
+        except ValueError as exc:
+            raise ValueError(f"repo URI 越过源码仓库: {uri!r}") from exc
         return resolved
 
     def legacy_candidates(
