@@ -88,6 +88,10 @@ def main(argv=None):
     lines = [
         f"checkpoint: {args.checkpoint}",
         f"dt = {rep['dt']:.4f} s",
+        f"burnin_mode = {saved_cfg.get('burnin_mode', 'rest (pre-F1)')}"
+        f"  tau_max = {saved_cfg.get('tau_max', 'n/a')}s",
+        "（F3 注意: rest 烧入 + tau_max>episode 时域的旧谱含伪静态 aliasing，"
+        "定量结论须以 equilibrium 烧入的重训谱为准）",
         "",
         "PI play 密度 μ_c(r_j) = b/r（率无关迟滞容量分布）:",
         f"  r grid: {np.array2string(r, precision=3)}",
