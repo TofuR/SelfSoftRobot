@@ -34,6 +34,11 @@
 | [`designs/2026-08-29_hereditary_operator_model.md`](designs/2026-08-29_hereditary_operator_model.md) | **HereditaryOperatorModel 设计(定稿未实现)**:迟滞的显式算子状态表示(PI play 组+广义 Maxwell+线性模态读出),含对抗审稿裁决、四公理、可辨识性协议、E0-E4 实验协议、论文定位与退路阶梯 |
 | [`designs/2026-08-31_repository_organization_refactor.md`](designs/2026-08-31_repository_organization_refactor.md) | **仓库整理与重构提案**：统一数据/运行路径、manifest 谱系、训练验证与早停共识、文档治理及分阶段迁移验收 |
 
+## 项目规范 (`standards/`)
+| 文档 | 说明 |
+|---|---|
+| [`standards/repository_layout.md`](standards/repository_layout.md) | **当前生效的仓库与工作区合同**：源码/产物边界、统一 workspace、历史路径只读兼容和迁移验收 |
+
 ## 文献与背景 (`background/`)
 | 文档 | 说明 |
 |---|---|

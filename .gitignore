@@ -37,6 +37,12 @@ output/
 docs/ref/
 docs/papers/*.pdf
 
+# 统一运行工作区（数据、训练、评价、缓存均不提交）
+/workspace/
+
+# 本机路径覆盖；可提交模板见 config/paths.example.toml
+/config/paths.local.toml
+
 # SAM2 (大: 源码/checkpoints/输出仅本地; 只入库脚本 sam2/segment_video.py 与 README)
 sam2/sam2_src/
 sam2/checkpoints/
