@@ -1,6 +1,6 @@
 # docs/ 导航索引
 
-> docs/ 的地图。按主题找文档; 每条一行说明。最后更新 2026-07-20。
+> docs/ 的唯一导航。按主题找权威文档；“当前/最好/最新”只由状态页或具体 run 记录拥有。最后更新 2026-08-31。
 
 ## 接手指南(给 AI agent)
 
@@ -31,13 +31,17 @@
 ## 设计 (`designs/`)
 | 文档 | 说明 |
 |---|---|
-| [`designs/2026-08-29_hereditary_operator_model.md`](designs/2026-08-29_hereditary_operator_model.md) | **HereditaryOperatorModel 设计(定稿未实现)**:迟滞的显式算子状态表示(PI play 组+广义 Maxwell+线性模态读出),含对抗审稿裁决、四公理、可辨识性协议、E0-E4 实验协议、论文定位与退路阶梯 |
+| [`designs/2026-08-29_hereditary_operator_model.md`](designs/2026-08-29_hereditary_operator_model.md) | **HereditaryOperatorModel v2 设计与实现边界**：PI play + 广义 Maxwell + 局部模态读出、验证协议和文献边界 |
 | [`designs/2026-08-31_repository_organization_refactor.md`](designs/2026-08-31_repository_organization_refactor.md) | **仓库整理与重构提案**：统一数据/运行路径、manifest 谱系、训练验证与早停共识、文档治理及分阶段迁移验收 |
 
 ## 项目规范 (`standards/`)
 | 文档 | 说明 |
 |---|---|
 | [`standards/repository_layout.md`](standards/repository_layout.md) | **当前生效的仓库与工作区合同**：源码/产物边界、统一 workspace、历史路径只读兼容和迁移验收 |
+| [`standards/dataset_split.md`](standards/dataset_split.md) | **数据划分共识**：先划分后构窗、证据等级、时序泄漏与模型可声明差异 |
+| [`standards/training_and_evaluation.md`](standards/training_and_evaluation.md) | **训练与选择共识**：验证、早停、checkpoint 语义、模型差异和测试集使用 |
+| [`standards/experiment_layout.md`](standards/experiment_layout.md) | **试次归档共识**：run 布局、无覆盖、resume、完成标记和历史运行 |
+| [`standards/evidence_language.md`](standards/evidence_language.md) | **证据语言共识**：模型误差、离线规划、Mock 链路和实机控制的表述边界 |
 
 ## 文献与背景 (`background/`)
 | 文档 | 说明 |
