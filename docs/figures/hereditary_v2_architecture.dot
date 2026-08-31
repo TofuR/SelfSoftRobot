@@ -1,0 +1,77 @@
+digraph HereditaryV2 {
+  graph [rankdir=LR, bgcolor="white", pad="0.15", nodesep="0.28", ranksep="0.55",
+         splines=polyline, fontname="Helvetica", fontsize=12,
+         label="HereditaryOperatorModel v2: structured grey-box whole-body kinematic memory",
+         labelloc=t, labeljust=c];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10,
+        color="#344054", penwidth=1.1, margin="0.10,0.06"];
+  edge [fontname="Helvetica", fontsize=9, color="#475467", arrowsize=0.7,
+        penwidth=1.0];
+
+  input [label="Action window\na_{t-K+1:t}\n(normalized)", fillcolor="#F2F4F7"];
+  current [label="Current action\na_t = a_{t-K:t}[-1]", fillcolor="#F2F4F7"];
+  burn [label="Burn-in / initialization\nequilibrium: p=h=e(a_0)\nrest: p=h=0\nthen consume history", fillcolor="#F9FAFB", color="#98A2B3"];
+  zprev [label="Packed operator state\nz_{t-1}=vec(p_{t-1},h_{t-1})", fillcolor="#F9FAFB", color="#98A2B3"];
+  drive [label="MonotoneSplineDrive\ne_{ct}=Σ_l softplus(ω_{cl})[a_{ct}-κ_l]_+\n(memory-free, channel-wise)", fillcolor="#EAF2FF", color="#3976B8"];
+
+  subgraph cluster_static {
+    label="Static branch (no history)"; color="#3976B8"; fontcolor="#245A8D";
+    style="rounded,dashed"; penwidth=1.1;
+    static [label="Static shape\nŝ_t=s_0+Σ_c e_{ct}D_c", fillcolor="#DCEBFF"];
+  }
+
+  subgraph cluster_pi {
+    label="PI play / stop branch (rate-independent path memory)"; color="#3A8C68"; fontcolor="#246044";
+    style="rounded,dashed"; penwidth=1.1;
+    pi_state [label="Play update\np_{cjt}=clip(p_{cj,t-1}, e_{ct}-r_j, e_{ct}+r_j)", fillcolor="#DDF5E8"];
+    pi_read [label="Stop readout\nq_{cjt}=e_{ct}-p_{cjt},  |q|≤r_j\nA^PI_{jt}=Σ_c b_{cj}q_{cjt}", fillcolor="#DDF5E8"];
+    pi_mode [label="LocalFrameModeBank B_j(ŝ_t)\nα_j·normal + β_j·tangent", fillcolor="#DDF5E8"];
+    pi_state -> pi_read;
+    pi_read -> pi_mode [label="A^PI"];
+  }
+
+  subgraph cluster_m {
+    label="Generalized Maxwell branch (rate-dependent relaxation)"; color="#C77A16"; fontcolor="#8B560D";
+    style="rounded,dashed"; penwidth=1.1;
+    m_state [label="Exact ZOH update\nh_{ckt}=λ_k h_{ck,t-1}+(1-λ_k)e_{ct}\nλ_k=exp(-Δt/τ_k)", fillcolor="#FFF0D6"];
+    m_read [label="Relaxation deficit\nd_{ckt}=h_{ckt}-e_{ct}\nA^M_{kt}=Σ_c v_{ck}d_{ckt}", fillcolor="#FFF0D6"];
+    m_mode [label="LocalFrameModeBank C_k(ŝ_t)\nα_k·normal + β_k·tangent", fillcolor="#FFF0D6"];
+    m_state -> m_read;
+    m_read -> m_mode [label="A^M"];
+  }
+
+  subgraph cluster_res {
+    label="Small bounded residual (no independent recurrent state)"; color="#7A54A8"; fontcolor="#5B3C80";
+    style="rounded,dashed"; penwidth=1.1;
+    res [label="x_t=[a_t;q_t;d_t]\n32-unit SiLU MLP → tanh\nr_t=clamp(ρ,0,ρ_max)·reshape(tanh(·))", fillcolor="#F0E7FA"];
+  }
+
+  sum [label="Additive whole-body readout\ns_t = ŝ_t + Σ_j A^PI_{jt}B_j(ŝ_t)\n     + Σ_k A^M_{kt}C_k(ŝ_t) + r_t", fillcolor="#FFF8E6", color="#B54708", penwidth=1.4];
+  output [label="Predicted centerline\ns_t∈R^{N×3}\n(normalized → physical mm)", fillcolor="#FEF3F2", color="#B42318", penwidth=1.3];
+  pack [label="State transition\nz_t=pack(p_t,h_t)\ncarry to next time step", fillcolor="#F9FAFB", color="#667085"];
+  nofeedback [label="No skeleton feedback\nprev_skeleton is ignored\nstate is only (p,h)", shape=note, fillcolor="#F9FAFB", color="#98A2B3"];
+
+  input -> current [label="select last action"];
+  input -> burn [label="history before current step"];
+  burn -> zprev;
+  current -> drive;
+  zprev -> pi_state [label="p_{t-1}"];
+  zprev -> m_state [label="h_{t-1}"];
+  drive -> static [label="e_t"];
+  drive -> pi_state [label="e_t"];
+  drive -> m_state [label="e_t"];
+  static -> pi_mode [label="reference shape ŝ_t", style=dashed];
+  static -> m_mode [label="reference shape ŝ_t", style=dashed];
+  drive -> res [label="a_t/e_t", style=dashed];
+  pi_read -> res [label="q_t", style=dashed];
+  m_read -> res [label="d_t", style=dashed];
+  static -> sum;
+  pi_mode -> sum;
+  m_mode -> sum;
+  res -> sum;
+  sum -> output;
+  pi_state -> pack [label="p_t", style=dashed];
+  m_state -> pack [label="h_t", style=dashed];
+  pack -> zprev [label="next step", style=dashed, color="#667085"];
+  nofeedback -> output [style=dotted, arrowhead=none, color="#98A2B3"];
+}
