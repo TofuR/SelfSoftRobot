@@ -19,6 +19,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from src.utils.experiment import create_experiment, save_config  # noqa: E402
+from src.registry.paths import ProjectPaths  # noqa: E402
 
 
 LAYOUT = {
@@ -111,6 +112,38 @@ def infer_sequence_tag(train_dir, dataset_manifest=None):
     dataset_dir = os.path.basename(os.path.dirname(os.path.normpath(train_dir)))
     concise = PROCESSING_SUFFIX_PATTERN.sub("", dataset_dir)
     return validate_sequence_tag(concise)
+
+
+def resolve_real_pipeline_paths(
+        sequence_id, dataset_id, sequence_tag, paths=None, camera="cam0"):
+    """解析正式真实训练使用的统一写入根和新旧只读观测资产。"""
+    paths = paths or ProjectPaths.load()
+    validate_sequence_tag(sequence_id)
+    validate_sequence_tag(dataset_id)
+    validate_sequence_tag(sequence_tag)
+    validate_sequence_tag(camera)
+
+    canonical_raw = paths.raw_sequence("real", sequence_id)
+    raw_candidates = (canonical_raw, *paths.legacy_candidates(
+        "raw", sequence_id))
+    raw = next((candidate for candidate in raw_candidates
+                if candidate.is_dir()), canonical_raw)
+
+    canonical_masks = paths.intermediate_sequence(
+        "real", sequence_id, dataset_id) / "sam2_masks"
+    mask_candidates = (canonical_masks, *paths.legacy_candidates(
+        "intermediate", f"{sequence_id}_full"))
+    masks = next((candidate for candidate in mask_candidates
+                  if candidate.is_dir()), canonical_masks)
+
+    return {
+        "trial_base": paths.training_study("real_pipeline") / sequence_tag,
+        "raw_sequence": raw,
+        "camera_dir": raw / camera,
+        "masks_dir": masks,
+        "ndi_csv": raw / "ndi.csv",
+        "frame_times": raw / "frame_times.txt",
+    }
 
 
 def prepare_trial_layout(trial_dir):
@@ -445,6 +478,15 @@ def build_parser():
         "infer-sequence-tag", help="从数据清单推导简洁采集序列标签")
     infer.add_argument("--train-dir", required=True)
     infer.add_argument("--dataset-manifest", default=None)
+    resolve = subparsers.add_parser(
+        "resolve-real-path", help="解析正式真实训练的统一路径或历史只读资产")
+    resolve.add_argument("--sequence-id", required=True)
+    resolve.add_argument("--dataset-id", required=True)
+    resolve.add_argument("--sequence-tag", required=True)
+    resolve.add_argument("--camera", default="cam0")
+    resolve.add_argument("--field", required=True, choices=(
+        "trial_base", "raw_sequence", "camera_dir", "masks_dir",
+        "ndi_csv", "frame_times"))
     return parser
 
 
@@ -479,8 +521,12 @@ def main(argv=None):
                 "open_loop_scheduler_patience":
                     args.open_loop_scheduler_patience,
             }), ensure_ascii=False))
-    else:
+    elif args.command == "infer-sequence-tag":
         print(infer_sequence_tag(args.train_dir, args.dataset_manifest))
+    else:
+        print(resolve_real_pipeline_paths(
+            args.sequence_id, args.dataset_id, args.sequence_tag,
+            camera=args.camera)[args.field])
     return 0
 
 

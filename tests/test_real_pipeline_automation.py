@@ -10,6 +10,7 @@ import numpy as np
 from scripts.real.manage_training_trial import (
     infer_sequence_tag,
     prepare_trial_layout,
+    resolve_real_pipeline_paths,
     validate_dataset_manifest,
     validate_open_loop_start,
 )
@@ -178,6 +179,40 @@ class RealPipelineAutomationTest(unittest.TestCase):
             self.assertEqual(
                 infer_sequence_tag(root, str(manifest_path)),
                 "seq_20260819_172644")
+
+    def test_real_training_paths_use_workspace_and_legacy_read_fallback(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo = Path(root) / "repo"
+            (repo / "config").mkdir(parents=True)
+            (repo / "config/paths.local.toml").write_text(
+                "schema_version = 1\n"
+                "[paths]\nworkspace_root = 'artifacts'\n"
+                "[compat]\nraw_roots = ['old_raw']\n"
+                "intermediate_roots = ['old_derived', 'old_masks']\n",
+                encoding="utf-8")
+            raw = repo / "old_raw/seq_demo"
+            masks = repo / "old_masks/seq_demo_full"
+            raw.mkdir(parents=True)
+            masks.mkdir(parents=True)
+            paths = ProjectPaths.load(repo_root=repo, environ={})
+
+            resolved = resolve_real_pipeline_paths(
+                "seq_demo", "dataset_demo", "seq_demo", paths)
+            self.assertEqual(resolved["raw_sequence"], raw)
+            self.assertEqual(resolved["masks_dir"], masks)
+            self.assertEqual(
+                resolved["trial_base"],
+                repo / "artifacts/runs/training/real_pipeline/seq_demo")
+
+            canonical_raw = paths.raw_sequence("real", "seq_demo")
+            canonical_masks = paths.intermediate_sequence(
+                "real", "seq_demo", "dataset_demo") / "sam2_masks"
+            canonical_raw.mkdir(parents=True)
+            canonical_masks.mkdir(parents=True)
+            resolved = resolve_real_pipeline_paths(
+                "seq_demo", "dataset_demo", "seq_demo", paths)
+            self.assertEqual(resolved["raw_sequence"], canonical_raw)
+            self.assertEqual(resolved["masks_dir"], canonical_masks)
 
     def test_json_config_and_cli_override(self):
         with tempfile.TemporaryDirectory() as root:

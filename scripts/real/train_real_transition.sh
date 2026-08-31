@@ -50,6 +50,7 @@ else
   DEFAULT_CAPTURE_SEQ="$(basename "$TRAIN_NPZ" _train.npz)"
 fi
 CAPTURE_SEQ="${CAPTURE_SEQ:-$DEFAULT_CAPTURE_SEQ}"
+CAMERA="${CAMERA:-cam0}"
 if [[ -n "${SEQUENCE_TAG:-}" ]]; then
   SEQ_TAG="$SEQUENCE_TAG"
 else
@@ -60,11 +61,17 @@ else
   fi
   SEQ_TAG="$("${INFER_TAG_CMD[@]}")"
 fi
-CAM0_DIR="${CAM0_DIR:-real_capture/data/raw/${CAPTURE_SEQ}/cam0}"
-MASKS_DIR="${MASKS_DIR:-sam2/masks/${CAPTURE_SEQ}_full}"
-TRIAL_BASE="train_log/real_pipeline/${SEQ_TAG}"
-NDI_CSV="real_capture/data/raw/${CAPTURE_SEQ}/ndi.csv"
-FRAME_TIMES_FILE="real_capture/data/raw/${CAPTURE_SEQ}/frame_times.txt"
+DATASET_ID="$(basename "$(dirname "$DATA_TRAIN_DIR")")"
+resolve_real_path() {
+  python scripts/real/manage_training_trial.py resolve-real-path \
+    --sequence-id "$CAPTURE_SEQ" --dataset-id "$DATASET_ID" \
+    --sequence-tag "$SEQ_TAG" --camera "$CAMERA" --field "$1"
+}
+CAM0_DIR="${CAM0_DIR:-$(resolve_real_path camera_dir)}"
+MASKS_DIR="${MASKS_DIR:-$(resolve_real_path masks_dir)}"
+TRIAL_BASE="${TRIAL_BASE:-$(resolve_real_path trial_base)}"
+NDI_CSV="${NDI_CSV:-$(resolve_real_path ndi_csv)}"
+FRAME_TIMES_FILE="${FRAME_TIMES_FILE:-$(resolve_real_path frame_times)}"
 HAS_NDI=0
 if [[ -f "$NDI_CSV" && -f "$FRAME_TIMES_FILE" ]]; then
   HAS_NDI=1
