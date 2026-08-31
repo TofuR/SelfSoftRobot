@@ -23,8 +23,12 @@
   恰好一次；init_z_from_action(aw_0) 烧入 aw_0[:, :-1]（不含当前步），
   留给首个 forward 消费——同一动作不被重复计入。
 
-冷启动约定: 静息 p=0, h=0（零压静止），在窗口前 K−1 步烧入。慢模态
-（τ ≫ K·Δt）初始化不足是已知限制（设计文档 §六 v2: TBPTT 跨 episode 续态）。
+冷启动约定（F1 修复，v2 分析）: 默认 burnin_mode="equilibrium" —— 假设
+系统在窗口首动作 a₀ 处已充分驻留，p=h=e(a₀)（play 读出 q=0、Maxwell
+亏量 d=0），再步进窗口其余历史。这消除静息零初始化下慢 Maxwell 模态
+（τ_max=10s ≫ 40 步 episode）永远不热化、被学成伪静态容量的 aliasing
+（根因分析: output/hereditary_analysis/ROOT_CAUSE_report.txt）。
+burnin_mode="rest" 保留旧行为（p=h=0 起烧入整个窗口），仅供对照。
 
 与 StateTransitionSpatialModel 的接口兼容（trainer 无需改动）:
   forward(action_window, prev_skeleton, prev_prev_skeleton, prev_z)
@@ -59,6 +63,11 @@ class HereditaryOperatorModel(nn.Module):
         dt: 采样间隔（秒，必须与数据合同一致；实物 10 Hz → 0.1）。
         r_range: play 死区阈值对数网格范围。
         tau_range: Maxwell 时间常数对数网格范围（None → [3dt, 10s]）。
+            F2: 建议上界 ≤ episode 时域的 ~1/2（如 40 步×dt=4s → 2s），
+            保证每个模态在 episode 内可辨识;配合 equilibrium 烧入。
+        burnin_mode: 冷启动烧入方式。"equilibrium"（默认，F1 修复）从窗口
+            首动作的平衡态起烧（p=h=e(a₀)，慢 Maxwell 模态无伪静态瞬态）；
+            "rest" 为旧行为（p=h=0），仅供 A/B 对照。
         residual_scale_max: 残差幅度上限（归一化骨架单位；残差必须保持
             "小"——超过此值说明结构欠拟合，应加容量而非放残差）。
     """
@@ -93,6 +102,7 @@ class HereditaryOperatorModel(nn.Module):
         dt=0.1,
         r_range=(0.02, 0.5),
         tau_range=None,
+        burnin_mode="equilibrium",
         residual_scale_max=0.3,
         episode_len=40,
     ):
@@ -102,6 +112,9 @@ class HereditaryOperatorModel(nn.Module):
         self.window_size = window_size
         self.n_play = n_play
         self.n_maxwell = n_maxwell
+        if burnin_mode not in ("equilibrium", "rest"):
+            raise ValueError(f"burnin_mode 须为 'equilibrium' 或 'rest'，得到 {burnin_mode!r}")
+        self.burnin_mode = burnin_mode
         # 节点/合同属性（与 state_transition 家族同槽，供检查器识别）
         self.node_order = "base_to_tip"
         self.model_contract_version = 2
@@ -164,7 +177,13 @@ class HereditaryOperatorModel(nn.Module):
     # ── 冷启动烧入 ──
 
     def _burn_in(self, action_window: torch.Tensor):
-        """静息起烧入算子状态。
+        """烧入算子状态（F1: 默认平衡一致起点）。
+
+        equilibrium 模式: 假设系统在窗口首动作 a₀ 已充分驻留 ——
+        p=h=e(a₀)（play 读出 q=0、Maxwell 亏量 d=0），随后步进窗口
+        其余历史。慢 Maxwell 模态不再携带 rest→a₀ 的人为瞬态，消除
+        "冷亏损被学成伪静态容量"的 aliasing（τ_max ≫ episode 时域时）。
+        rest 模式: 旧行为，p=h=0（零压静止）起烧入整个窗口。
 
         Args:
             action_window: (B, K, D) —— 应传"当前步之前"的历史
@@ -172,11 +191,19 @@ class HereditaryOperatorModel(nn.Module):
         Returns:
             (p, h) 各 (B, C, J) / (B, C, M)。
         """
-        B = action_window.shape[0]
+        B, K, _ = action_window.shape
         device = action_window.device
-        p = self.play.init_state(B, device)
-        h = self.maxwell.init_state(B, device)
-        for k in range(action_window.shape[1]):
+        if self.burnin_mode == "equilibrium" and K >= 1:
+            e0 = self.drive(action_window[:, 0])             # (B, C)
+            # 平衡态: p=e → q=0（无迟滞记忆）；h=e → d=0（粘弹已弛豫）
+            p = e0.unsqueeze(-1).repeat(1, 1, self.n_play)   # (B, C, J)
+            h = e0.unsqueeze(-1).repeat(1, 1, self.n_maxwell)  # (B, C, M)
+            steps = range(1, K)
+        else:
+            p = self.play.init_state(B, device)
+            h = self.maxwell.init_state(B, device)
+            steps = range(K)
+        for k in steps:
             e = self.drive(action_window[:, k])              # (B, C)
             p, _ = self.play.step(p, e)
             h = self.maxwell.step(h, e)

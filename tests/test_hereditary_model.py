@@ -15,11 +15,12 @@ import torch
 from src.models.model_hereditary_operator import HereditaryOperatorModel
 
 
-def _model(C=2, N=15, K=10, seed=0):
+def _model(C=2, N=15, K=10, seed=0, burnin_mode="equilibrium"):
     torch.manual_seed(seed)
     return HereditaryOperatorModel(
         action_dim=C, n_nodes=N, window_size=K,
         n_play=4, n_maxwell=3, dt=0.1,
+        burnin_mode=burnin_mode,
     )
 
 
@@ -106,42 +107,54 @@ class TestStateInvariant(unittest.TestCase):
 
     def test_single_consumption_of_current_action(self):
         """init_z 烧入 K−1 步后，forward 消费 a_t 恰一次:
-        等价于从静息直接烧入整个窗口（同一输入序列，单次计入）。"""
+        等价于按当前 burn-in 协议烧入整个窗口（同一输入序列，单次计入）。"""
         model = _model()
         aw = _window(1, 10, 2)
         z = model.init_z_from_action(aw)           # 烧入 aw[:, :-1]
         out = model.forward(aw, None, None, z)     # step 用 aw[:, -1]
 
-        # 手工参照: 静息烧入全部 K 步（含最后一步，同一序列）
+        # 参照: 按同一协议烧入全部 K 步（含最后一步，同一序列）
         p, h = model._burn_in(aw)
         p_out, h_out = model._unpack_state(out["latent_z"])
         self.assertTrue(torch.allclose(p_out, p, atol=1e-6))
         self.assertTrue(torch.allclose(h_out, h, atol=1e-6))
 
     def test_episode_rollout_matches_manual_stepping(self):
-        """trainer 的 z 线程化 rollout == 算子逐库手工步进。"""
-        model = _model()
+        """两种 burn-in 下 trainer 的 z 线程化 rollout == 独立手工步进。"""
         T, K, C, B = 6, 10, 2, 2
         # (B, T, K, C) 逐 episode 步窗口（forward 只消费各窗口末元素 a_t）
         g = torch.Generator().manual_seed(3)
         aws = torch.rand(B, T, K, C, generator=g)
-        _, z_final = _rollout(model, aws)
 
-        # 手工: 烧入首窗口前 K−1 步，再逐步消费各窗口末元素
-        p = model.play.init_state(B, aws.device)
-        h = model.maxwell.init_state(B, aws.device)
-        for k in range(K - 1):
-            e = model.drive(aws[:, 0, k])
-            p, _ = model.play.step(p, e)
-            h = model.maxwell.step(h, e)
-        for t in range(T):
-            e = model.drive(aws[:, t, -1])
-            p, _ = model.play.step(p, e)
-            h = model.maxwell.step(h, e)
+        for burnin_mode in ("equilibrium", "rest"):
+            with self.subTest(burnin_mode=burnin_mode):
+                model = _model(burnin_mode=burnin_mode)
+                _, z_final = _rollout(model, aws)
 
-        p_out, h_out = model._unpack_state(z_final)
-        self.assertTrue(torch.allclose(p_out, p, atol=1e-6))
-        self.assertTrue(torch.allclose(h_out, h, atol=1e-6))
+                # 独立手工参照: equilibrium 从首个历史动作的平衡态开始，
+                # rest 从零状态开始；随后消费其余历史与各窗口末动作。
+                if burnin_mode == "equilibrium":
+                    e0 = model.drive(aws[:, 0, 0])
+                    p = e0.unsqueeze(-1).repeat(1, 1, model.n_play)
+                    h = e0.unsqueeze(-1).repeat(1, 1, model.n_maxwell)
+                    history_start = 1
+                else:
+                    p = model.play.init_state(B, aws.device)
+                    h = model.maxwell.init_state(B, aws.device)
+                    history_start = 0
+
+                for k in range(history_start, K - 1):
+                    e = model.drive(aws[:, 0, k])
+                    p, _ = model.play.step(p, e)
+                    h = model.maxwell.step(h, e)
+                for t in range(T):
+                    e = model.drive(aws[:, t, -1])
+                    p, _ = model.play.step(p, e)
+                    h = model.maxwell.step(h, e)
+
+                p_out, h_out = model._unpack_state(z_final)
+                self.assertTrue(torch.allclose(p_out, p, atol=1e-6))
+                self.assertTrue(torch.allclose(h_out, h, atol=1e-6))
 
 
 class TestHysteresisSemantics(unittest.TestCase):

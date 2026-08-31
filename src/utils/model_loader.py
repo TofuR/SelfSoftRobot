@@ -481,6 +481,8 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
         # HereditaryOperatorModel — 显式迟滞算子模型（PI play + Maxwell）。
         # 算子网格 buffer（thresholds/taus/decays）随 state_dict 恢复，
         # dt/n_play/n_maxwell 从 config.json 透传字段读（缺失时用构造默认）。
+        # burnin_mode 缺省 'rest'：旧 checkpoint（F1 修复前）以静息烧入
+        # 训练，须按其训练协议评估;新 checkpoint 显式记录该字段。
         from src.models.model_hereditary_operator import HereditaryOperatorModel
         model = HereditaryOperatorModel(
             action_dim=action_dim,
@@ -489,6 +491,8 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
             n_play=(saved_cfg or {}).get('n_play', 8),
             n_maxwell=(saved_cfg or {}).get('n_maxwell', 6),
             dt=(saved_cfg or {}).get('dt', 0.1),
+            burnin_mode=(saved_cfg or {}).get('burnin_mode', 'rest'),
+            residual_scale_max=(saved_cfg or {}).get('residual_scale_max', 0.3),
             episode_len=(saved_cfg or {}).get('episode_len', 40),
         ).to(device)
         # strict 加载：算子网格 buffer 必须精确恢复，静默丢键 = 错误网格

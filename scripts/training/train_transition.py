@@ -88,14 +88,25 @@ def build_parser():
                         choices=["linear", "staircase"],
                         help="[open_loop] 退火形状: staircase(前半 nominal/后半 tf_min) | linear")
     # ── hereditary 专属（其它模式忽略）──
-    parser.add_argument("--n_play", type=int, default=8,
-                        help="[hereditary] PI play 算子数 J（率无关迟滞容量）")
+    parser.add_argument("--n_play", type=int, default=2,
+                        help="[hereditary] PI play 算子数 J（率无关迟滞容量，下限 1）。"
+                             "F4: v1 分析显示本数据上 play bank 近乎死（LOO +0.32mm），"
+                             "默认降为 2 仅保留 E1 可证伪的最小容量")
     parser.add_argument("--n_maxwell", type=int, default=6,
                         help="[hereditary] Maxwell 元件数 M（率相关迟滞容量）")
     parser.add_argument("--dt", type=float, default=0.1,
                         help="[hereditary] 采样间隔秒（必须与数据合同一致; 实物 10Hz → 0.1）")
-    parser.add_argument("--tau_max", type=float, default=10.0,
-                        help="[hereditary] Maxwell 时间常数网格上界秒（下界固定 3·dt）")
+    parser.add_argument("--tau_max", type=float, default=2.0,
+                        help="[hereditary] Maxwell 时间常数网格上界秒（下界固定 3·dt）。"
+                             "F2: 默认 2.0 把全部元素收进 episode 时域内可辨识带"
+                             "（40 步 x dt=4s 时 tau=2s 在 episode 内已基本弛豫）;"
+                             "配合 F1 equilibrium 烧入消除慢模态伪静态 aliasing")
+    parser.add_argument("--burnin_mode", choices=["equilibrium", "rest"], default="equilibrium",
+                        help="[hereditary] 冷启动烧入方式: equilibrium=窗口首动作平衡态起烧"
+                             "（F1 修复，消除慢 Maxwell 模态伪静态 aliasing）; rest=旧行为（A/B 对照）")
+    parser.add_argument("--residual_scale_max", type=float, default=0.3,
+                        help="[hereditary] 残差幅度上限（归一化骨架单位）。F5: 修 F1 后重训，"
+                             "若 residual_scale 仍钉在此上限则是真容量信号（可上调做对照实验）")
     return parser
 
 
@@ -141,6 +152,8 @@ def main(argv=None):
             window_size=temp_cfg["window_size"],
             n_play=args.n_play, n_maxwell=args.n_maxwell, dt=args.dt,
             tau_range=(3.0 * args.dt, args.tau_max),
+            burnin_mode=args.burnin_mode,
+            residual_scale_max=args.residual_scale_max,
             episode_len=args.episode_len).to(device)
         spec = model.training_spec
         spec.phases[0].dense_step_weight = args.dense_step_weight
@@ -188,6 +201,8 @@ def main(argv=None):
         config["n_play"] = args.n_play
         config["n_maxwell"] = args.n_maxwell
         config["tau_max"] = args.tau_max
+        config["burnin_mode"] = args.burnin_mode
+        config["residual_scale_max"] = args.residual_scale_max
 
     # ── 归一化（episode 模式数据集，与训练一致）──
     from src.data.dataset_spatial import StateTransitionDataset
