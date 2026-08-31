@@ -45,6 +45,7 @@ from src.config.args import (  # noqa: E402
     add_common_args, resolve_training_config, build_common_overrides)
 from src.utils.data_detect import detect_n_nodes  # noqa: E402
 from src.data.action_view import resolve_action_contract  # noqa: E402
+from src.registry.paths import ProjectPaths  # noqa: E402
 from src.training.trainer_unified import UnifiedTrainer  # noqa: E402
 
 
@@ -77,7 +78,7 @@ def build_parser():
     # ── open_loop 专属（gt 模式忽略）──
     parser.add_argument("--init_from", type=str, default=None,
                         help="[open_loop] 热启动 checkpoint（默认自动找最新 "
-                             "train_log/gt_transition/*/phase_gt_transition/model/best_model.pt）")
+                             "workspace 和历史 train_log 中的 gt_transition）")
     parser.add_argument("--tf_ratio", type=float, default=0.0,
                         help="[open_loop] 稳态/退火起始 teacher forcing (0.0=纯闭环)")
     parser.add_argument("--tf_anneal_epochs", type=int, default=0,
@@ -254,9 +255,7 @@ def _warm_start_open_loop(model, init_from, device, action_dim=None):
        上 → state_mlp size mismatch 崩溃。传 action_dim 后只挑匹配的 checkpoint。
     """
     if init_from is None:
-        cands = glob.glob(os.path.join(
-            "train_log", "gt_transition", "*", "phase_gt_transition", "model",
-            "best_model.pt"))
+        cands = _default_gt_checkpoint_candidates()
         if action_dim is not None and cands:
             cands = [c for c in cands if _ckpt_action_dim(c) == action_dim]
         if cands:
@@ -301,6 +300,29 @@ def _warm_start_open_loop(model, init_from, device, action_dim=None):
     print(f"[warm-start] loaded {init_from}")
     print(f"  missing(应仅 mode buffer)={incompatible.missing_keys}")
     print(f"  unexpected(应仅 gt_observed_mode)={incompatible.unexpected_keys}")
+
+
+def _default_gt_checkpoint_candidates(paths=None):
+    """按“统一 workspace + 历史只读根”收集 GT 热启动候选。
+
+    路径由 ``ProjectPaths`` 解析，因此调用者的当前工作目录不会改变搜索范围。
+    返回字符串是为了保持下游 ``os.path``/``torch.load`` 的现有接口不变。
+    """
+    paths = paths or ProjectPaths.load()
+    study_roots = [paths.training_study("gt_transition")]
+    study_roots.extend(
+        paths.legacy_candidates("training", "gt_transition"))
+
+    candidates = []
+    seen = set()
+    pattern = "*/phase_gt_transition/model/best_model.pt"
+    for study_root in study_roots:
+        for candidate in study_root.glob(pattern):
+            resolved = candidate.resolve(strict=False)
+            if resolved not in seen:
+                seen.add(resolved)
+                candidates.append(str(candidate))
+    return candidates
 
 
 if __name__ == "__main__":

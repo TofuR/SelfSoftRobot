@@ -26,6 +26,7 @@ from tqdm import tqdm
 from src.training.phase_strategy import PhaseStrategy
 from src.rendering.view_strategy import ViewStrategy
 from src.training.dataset_factory import create_dataset, get_collate_fn
+from src.registry.paths import ProjectPaths
 from src.utils.experiment import create_experiment, save_config
 from src.evaluation.shape_evaluation import evaluate_shape_during_training, evaluate_skeleton_during_training, evaluate_transition_during_training
 from config.params import load_config
@@ -444,7 +445,8 @@ class UnifiedTrainer:
 
         exp_config = self._build_exp_config(data_dirs, n_epochs_per_phase)
         if exp_dir is None:
-            exp_dir = create_experiment(f"train_log/{self.model_tag}", exp_config)
+            study_dir = ProjectPaths.load().training_study(self.model_tag)
+            exp_dir = create_experiment(study_dir, exp_config)
         else:
             exp_dir = os.path.normpath(exp_dir)
             os.makedirs(exp_dir, exist_ok=True)

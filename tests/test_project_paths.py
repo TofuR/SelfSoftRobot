@@ -111,6 +111,7 @@ class TestProjectPaths(unittest.TestCase):
         created = paths.create_workspace_layout()
         self.assertTrue(all(path.is_dir() for path in created))
         run = paths.training_run("study_a", "run_001")
+        self.assertEqual(paths.training_study("study_a"), run.parent)
         self.assertEqual(paths.create_new_directory(run), run)
         with self.assertRaises(FileExistsError):
             paths.create_new_directory(run)

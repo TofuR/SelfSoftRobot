@@ -189,6 +189,11 @@ class ProjectPaths:
         study_id, run_id = _validate_parts((study_id, run_id))
         return self.runs_root / "training" / study_id / run_id
 
+    def training_study(self, study_id: str) -> Path:
+        """返回模型/研究级训练根，新试次应在此目录下原子编号。"""
+        (study_id,) = _validate_parts((study_id,))
+        return self.runs_root / "training" / study_id
+
     def validation_run(self, run_id: str) -> Path:
         (run_id,) = _validate_parts((run_id,))
         return self.runs_root / "validation" / run_id
