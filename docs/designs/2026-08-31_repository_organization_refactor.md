@@ -1,9 +1,23 @@
 # SelfSoftRobot 仓库整理与重构设计
 
-> 状态：Proposal（仅设计，不代表已经迁移）
+> 状态：Active migration（目标设计；实际落地范围以“实施状态”表为准）
 > 日期：2026-08-31
 > 范围：仓库结构、数据谱系、训练共识、实验产物和文档治理
 > 非目标：本阶段不删除、不移动现有数据，不覆盖历史训练，不改变模型科学结论
+
+## 实施状态（2026-08-31）
+
+| 阶段 | 状态 | 已落地 | 尚未完成 |
+|---|---|---|---|
+| Phase 0 清单 | 完成 | 历史 raw/intermediate/processed/training/analysis 只读 inventory | 定期刷新策略 |
+| Phase 1 路径与 manifest | 完成 | `ProjectPaths`、URI、schema、原子写入、路径配置模板 | 历史 manifest 批量升级 |
+| Phase 2 数据双读单写 | 部分完成 | `real_capture` 新 raw、`preprocess_capture` 全阶段与 dataset v2 已迁移；历史 raw/mask 可读 | `real_validation` dataset/fixture selector、组合/清洗等次级脚本 |
+| Phase 3 训练合同 | 部分完成 | 直接训练和完整真实流水线的新 run 根已迁移；旧 checkpoint 双读 | 公共 engine 原生 validation/selection/early-stop、正式 run manifest |
+| Phase 4 历史导入 | 起步 | inventory 可读登记，不移动、不 hash 大文件 | 数据集到 run 的反向引用、抽样完整性审计 |
+| Phase 5 文档治理 | 部分完成 | 唯一导航及数据划分、训练评价、试次、证据标准 | workflow 合并、旧文档逐份裁决、front matter lint |
+| Phase 6 物理清理 | 未开始 | 无 | 必须另行审批并完成 hash、引用和回滚验证 |
+
+本表是实现状态，不替代下文的目标设计。提交历史按功能分层保存；任何尚未完成项都不能从目标描述推断为已实现。
 
 ## 0. 结论先行
 
