@@ -31,6 +31,8 @@ class TestProjectPaths(unittest.TestCase):
         self.assertEqual(
             paths.processed_dataset("real", "dataset_a"),
             self.root / "workspace/data/processed/real/dataset_a")
+        self.assertEqual(paths.raw_domain_root("real"),
+                         self.root / "workspace/data/raw/real")
 
     def test_precedence_explicit_then_env_then_config(self):
         config = self.write_config(

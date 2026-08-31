@@ -170,6 +170,10 @@ class ProjectPaths:
         domain, sequence_id = _validate_parts((domain, sequence_id))
         return self.data_root / "raw" / domain / sequence_id
 
+    def raw_domain_root(self, domain: str) -> Path:
+        (domain,) = _validate_parts((domain,))
+        return self.data_root / "raw" / domain
+
     def intermediate_sequence(
             self, domain: str, sequence_id: str, recipe_id: str) -> Path:
         domain, sequence_id, recipe_id = _validate_parts(
