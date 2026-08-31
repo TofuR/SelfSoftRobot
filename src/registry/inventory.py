@@ -66,6 +66,12 @@ def _source_sequence_ids(manifest: Mapping) -> list[str]:
         for item in datasets:
             if isinstance(item, dict) and isinstance(item.get("sequence"), str):
                 values.append(item["sequence"])
+    sources = manifest.get("sources", [])
+    if isinstance(sources, list):
+        for item in sources:
+            if isinstance(item, dict) and isinstance(
+                    item.get("sequence_id"), str):
+                values.append(item["sequence_id"])
     return sorted(set(values))
 
 

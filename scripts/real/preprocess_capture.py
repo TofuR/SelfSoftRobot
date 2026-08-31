@@ -34,6 +34,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.registry.manifests import (
+    ManifestStore,
+    atomic_write_json,
+    build_file_record,
+)
 from src.registry.paths import ProjectPaths
 
 
@@ -227,6 +232,8 @@ def resolve_preprocess_layout(args, paths=None):
                     else paths.repo_root / requested).resolve(strict=False)
     else:
         out_root = paths.processed_dataset("real", dataset_id)
+    # 显式路径可以改写 workspace 内的布局，但不能重新启用历史写入根。
+    paths.artifact_uri(out_root)
     return {
         "seq": seq,
         "sequence_id": seq_name,
@@ -358,7 +365,7 @@ def summarize_npz(path):
         camera_positions = (np.asarray(data["positions_camera_px"])
                             if "positions_camera_px" in data else None)
         return {
-            "path": os.path.abspath(path),
+            "path": str(Path(path).resolve(strict=False)),
             "frames": int(positions.shape[0]),
             "positions_shape": list(positions.shape),
             "actions_shape": list(actions.shape),
@@ -407,8 +414,51 @@ def _check(name, passed, detail, *, required=True):
     }
 
 
+def _portable_ref(paths, value):
+    """把项目内路径写成可移植 URI；外部显式输入保留为 opaque 标识。"""
+    path = Path(value).expanduser().resolve(strict=False)
+    try:
+        return paths.artifact_uri(path)
+    except ValueError:
+        try:
+            return paths.repo_uri(path)
+        except ValueError:
+            return f"external://{path.name}"
+
+
+def _portable_commands(commands, paths):
+    workspace = str(paths.workspace_root)
+    repo = str(paths.repo_root)
+    return [command.replace(workspace, "${SSR_WORKSPACE_ROOT}").replace(
+        repo, ".") for command in commands]
+
+
+def _portable_config(value, paths):
+    if isinstance(value, dict):
+        return {key: _portable_config(item, paths)
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [_portable_config(item, paths) for item in value]
+    if isinstance(value, tuple):
+        return [_portable_config(item, paths) for item in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, str) and Path(value).expanduser().is_absolute():
+        return _portable_ref(paths, value)
+    return value
+
+
+def _git_commit(project_root):
+    value = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=project_root, text=True).strip()
+    if not value or any(character not in "0123456789abcdef" for character in value):
+        raise RuntimeError(f"无法确定预处理代码 commit: {value!r}")
+    return value
+
+
 def build_dataset_manifest(*, seq, camera, derived, crop_root, mask_dir,
-                           out_root, resolved_config, commands, sam2_summary):
+                           out_root, resolved_config, commands, sam2_summary,
+                           paths, git_commit):
     """汇总机器可判定的合同与统计，并写出训练入口使用的数据清单。"""
     capture_audit_path = os.path.join(derived, "qc_capture", "capture_audit.json")
     legacy_audit_path = os.path.join(derived, "audit", "capture_audit.json")
@@ -507,17 +557,85 @@ def build_dataset_manifest(*, seq, camera, derived, crop_root, mask_dir,
                 "median_hz": float(1.0 / np.median(delta)),
             }
     first = splits[0] if splits else {}
+    file_records = []
+    portable_splits = {"train": [], "val": [], "test": []}
+    for role, summaries in (("train", train), ("val", val)):
+        for summary in summaries:
+            record = build_file_record(paths, summary["path"])
+            file_records.append(record)
+            portable_splits[role].append({
+                "uri": record["uri"],
+                "sha256": record["sha256"],
+                "frames": summary["frames"],
+                "positions_shape": summary["positions_shape"],
+                "actions_shape": summary["actions_shape"],
+            })
+
+    sequence_id = os.path.basename(seq.rstrip("/"))
+    portable_commands = _portable_commands(commands, paths)
     manifest = {
         "schema_version": 2,
+        "kind": "dataset",
         "dataset_id": os.path.basename(out_root.rstrip("/")),
         "created_at": dt.datetime.now().astimezone().isoformat(),
+        # 历史 raw 尚未具有完整不可变 manifest；不能伪造 released 证据。
+        "status": "draft",
+        "sources": [{"sequence_id": sequence_id,
+                     "raw_manifest_sha256": None}],
+        "recipe": {
+            "name": "real_sam2_to_transition",
+            "version": 1,
+            "git_commit": git_commit,
+            "parameters": _portable_config(resolved_config, paths),
+            "commands": portable_commands,
+        },
+        "contracts": {
+            "state": {
+                "coordinate_frame": first.get("state_coordinate_frame"),
+                "length_unit": first.get("state_length_unit"),
+                "n_nodes": first.get("n_points"),
+                "node_order": first.get("node_order"),
+                "segment_lengths": first.get("segment_lengths"),
+                "segment_intervals": first.get("segment_intervals"),
+                "joint_node_indices": first.get("joint_node_indices"),
+                "skeleton_frame_transform": first.get(
+                    "skeleton_frame_transform"),
+            },
+            "action": {
+                "raw_action_dim": first.get("raw_action_dim"),
+                "model_action_dim": first.get("model_action_dim"),
+                "model_action_channels": first.get("model_action_channels"),
+                "channel_source6": first.get("channel_source6"),
+                "action_expansion6": first.get("action_expansion6"),
+                "raw_action_scale6_kpa": first.get("raw_action_scale6_kpa"),
+                "action_scale_kpa": first.get("action_scale_kpa"),
+            },
+            "timing": timing,
+            "observation": {
+                "camera": camera,
+                "image_crop_xywh": first.get("image_crop_xywh"),
+                "source_image_size_wh": first.get("source_image_size_wh"),
+                "processed_image_size_wh": first.get(
+                    "processed_image_size_wh"),
+            },
+        },
+        "split_policy": {
+            "name": "chronological_tail_v1",
+            "group_key": "sequence_id",
+            "seed": None,
+            "embargo_frames": 0,
+            "evidence_level": "within_sequence",
+        },
+        "splits": portable_splits,
+        "files": file_records,
+        # 兼容迁移期读取器；新代码应使用 sources/contracts。
         "source": {
-            "sequence": os.path.basename(seq.rstrip("/")),
-            "sequence_path": os.path.abspath(seq),
+            "sequence": sequence_id,
+            "sequence_uri": _portable_ref(paths, seq),
             "camera": camera,
         },
         "preprocessing": {
-            "resolved_config": resolved_config,
+            "resolved_config": _portable_config(resolved_config, paths),
             "crop_meta": crop_meta,
             "candidate_segmentation": candidate,
             "sam2": sam2_summary,
@@ -546,22 +664,21 @@ def build_dataset_manifest(*, seq, camera, derived, crop_root, mask_dir,
             "action_scale_kpa": first.get("action_scale_kpa"),
         },
         "timing": timing,
-        "splits": {"train": train, "val": val},
         "quality_control": {
-            "capture_audit": os.path.abspath(capture_audit_path),
-            "skeleton_metrics": os.path.abspath(skeleton_metrics_path),
+            "capture_audit": _portable_ref(paths, capture_audit_path),
+            "skeleton_metrics": _portable_ref(paths, skeleton_metrics_path),
             "checks": checks,
             "automated_checks_passed": training_ready,
             "training_ready": training_ready,
             "qc_review": "optional",
         },
         "reproducibility": {
-            "commands": commands,
-            "preprocess_manifest": os.path.abspath(os.path.join(
-                derived, "preprocess_manifest.json")),
+            "commands": portable_commands,
+            "preprocess_manifest": _portable_ref(
+                paths, os.path.join(derived, "preprocess_manifest.json")),
         },
     }
-    return manifest
+    return _portable_config(manifest, paths)
 
 
 def build_parser():
@@ -599,7 +716,7 @@ def build_parser():
     parser.add_argument("--reset-sam2", action="store_true",
                         help="显式删除本序列已有SAM2 mask后重算")
     parser.add_argument("--out-root", default=None,
-                        help="显式兼容输出；默认写workspace processed dataset")
+                        help="显式workspace内输出；历史数据根保持只读")
     return parser
 
 
@@ -616,6 +733,10 @@ def main(argv=None):
     crop_camera = os.path.join(crop_root, args.camera)
     mask_dir = str(layout["mask_dir"])
     out_root = str(layout["out_root"])
+    dataset_manifest_path = os.path.join(out_root, "dataset_manifest.json")
+    if os.path.exists(dataset_manifest_path):
+        raise FileExistsError(
+            f"拒绝覆盖已发布的数据集清单: {dataset_manifest_path}")
     python = sys.executable
     commands = []
     common_env = {"MPLCONFIGDIR": "/tmp/selfsoftrobot-mpl"}
@@ -752,16 +873,17 @@ def main(argv=None):
         seq=seq, camera=args.camera, derived=derived, crop_root=crop_root,
         mask_dir=mask_dir, out_root=out_root,
         resolved_config=args.resolved_config, commands=commands,
-        sam2_summary=sam2_summary)
-    dataset_manifest_path = os.path.join(out_root, "dataset_manifest.json")
+        sam2_summary=sam2_summary, paths=paths,
+        git_commit=_git_commit(project_root))
     os.makedirs(out_root, exist_ok=True)
-    with open(dataset_manifest_path, "w", encoding="utf-8") as stream:
-        json.dump(dataset_manifest, stream, indent=2, ensure_ascii=False)
     training_ready = bool(dataset_manifest["quality_control"]["training_ready"])
+    if training_ready:
+        ManifestStore(paths).write_dataset(
+            dataset_manifest, target=dataset_manifest_path)
     manifest = {
         "schema_version": 1,
         "created_at": dt.datetime.now().astimezone().isoformat(),
-        "sequence": seq,
+        "sequence": dataset_manifest["source"]["sequence_uri"],
         "camera": args.camera,
         "crop_xywh": list(args.roi),
         "processed_image_size_wh": [args.roi[2], args.roi[3]],
@@ -773,11 +895,12 @@ def main(argv=None):
             [float(value) for value in args.base_anchor.split(",")]
             if args.base_anchor else None),
         "mask_close_kernel": args.mask_close_k,
-        "npz_out_root": out_root,
-        "dataset_manifest": dataset_manifest_path,
-        "config_source": args.config_source,
-        "resolved_config": args.resolved_config,
-        "commands": commands,
+        "npz_out_root": _portable_ref(paths, out_root),
+        "dataset_manifest": _portable_ref(paths, dataset_manifest_path),
+        "config_source": (_portable_ref(paths, args.config_source)
+                          if args.config_source else None),
+        "resolved_config": _portable_config(args.resolved_config, paths),
+        "commands": _portable_commands(commands, paths),
         "automated_checks": dataset_manifest["quality_control"]["checks"],
         "automated_checks_passed": training_ready,
         "training_ready": training_ready,
@@ -785,29 +908,40 @@ def main(argv=None):
         "training_started": False,
     }
     manifest_path = os.path.join(derived, "preprocess_manifest.json")
-    with open(manifest_path, "w", encoding="utf-8") as stream:
-        json.dump(manifest, stream, indent=2, ensure_ascii=False)
+    # intermediate 是可重建工作产物；失败后的同 recipe 重跑允许刷新此记录。
+    atomic_write_json(Path(manifest_path), manifest, overwrite=True)
     report_path = os.path.join(derived, "PREPROCESS_REPORT.md")
     with open(report_path, "w", encoding="utf-8") as stream:
         stream.write(f"# {seq_name} 训练前处理报告\n\n")
         stream.write("状态：自动合同检查通过，数据已可用于训练。\n\n" if training_ready
                      else "状态：自动合同检查发现未满足的训练条件。\n\n")
-        stream.write(f"- 原始序列：`{seq}`\n- ROI：`{args.roi}`\n")
+        stream.write("- 原始序列："
+                     f"`{dataset_manifest['source']['sequence_uri']}`\n"
+                     f"- ROI：`{args.roi}`\n")
         if sam2_summary:
             stream.write(
-                f"- SAM2 mask：`{mask_dir}`（{sam2_summary['mask_count']}帧）\n")
-        stream.write(f"- {args.n_points}节点数据：`{out_root}`\n")
-        stream.write(f"- 数据清单：`{dataset_manifest_path}`\n\n")
+                "- SAM2 mask："
+                f"`{_portable_ref(paths, mask_dir)}`"
+                f"（{sam2_summary['mask_count']}帧）\n")
+        stream.write(f"- {args.n_points}节点数据："
+                     f"`{_portable_ref(paths, out_root)}`\n")
+        stream.write("- 数据清单："
+                     f"`{_portable_ref(paths, dataset_manifest_path)}`\n\n")
         stream.write("## 自动检查\n\n")
         for item in dataset_manifest["quality_control"]["checks"]:
             stream.write(f"- {'PASS' if item['passed'] else 'FAIL'} "
                          f"`{item['name']}`\n")
         stream.write("\n## 复现命令\n\n```bash\n")
-        stream.write("\n".join(commands)); stream.write("\n```\n\n")
+        stream.write("\n".join(_portable_commands(commands, paths)))
+        stream.write("\n```\n\n")
         stream.write("## 抽样 QC（按需查看）\n\n")
-        stream.write(f"- `{crop_root}/qc/`\n- `{derived}/qc_candidate/`\n")
-        stream.write(f"- `{mask_dir}/qc/`\n- `{out_root}/qc_skeleton/`\n")
-        stream.write(f"- `{derived}/qc_pipeline_example/`\n")
+        for qc_path in (
+                os.path.join(crop_root, "qc"),
+                os.path.join(derived, "qc_candidate"),
+                os.path.join(mask_dir, "qc"),
+                os.path.join(out_root, "qc_skeleton"),
+                os.path.join(derived, "qc_pipeline_example")):
+            stream.write(f"- `{_portable_ref(paths, qc_path)}/`\n")
     if not training_ready:
         failed = [item["name"] for item in
                   dataset_manifest["quality_control"]["checks"]

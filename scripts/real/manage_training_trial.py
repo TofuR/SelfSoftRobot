@@ -92,6 +92,12 @@ def infer_sequence_tag(train_dir, dataset_manifest=None):
         sequence = source.get("sequence")
         if isinstance(sequence, str) and sequence:
             return validate_sequence_tag(sequence)
+        sources = manifest.get("sources", [])
+        if (isinstance(sources, list) and len(sources) == 1 and
+                isinstance(sources[0], dict)):
+            sequence = sources[0].get("sequence_id")
+            if isinstance(sequence, str) and sequence:
+                return validate_sequence_tag(sequence)
         dataset_id = manifest.get("dataset_id")
         if isinstance(dataset_id, str) and dataset_id:
             concise = PROCESSING_SUFFIX_PATTERN.sub("", dataset_id)

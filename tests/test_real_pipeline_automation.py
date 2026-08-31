@@ -8,17 +8,22 @@ import cv2
 import numpy as np
 
 from scripts.real.manage_training_trial import (
+    infer_sequence_tag,
     prepare_trial_layout,
     validate_dataset_manifest,
     validate_open_loop_start,
 )
 from scripts.real.masks_to_transition_npz import save_npz
 from scripts.real.preprocess_capture import (
+    build_dataset_manifest,
     build_parser,
     resolve_capture_sequence,
     resolve_preprocess_layout,
     resolve_pipeline_args,
     validate_stage_dependencies,
+)
+from src.registry.manifests import (
+    validate_dataset_manifest as validate_registry_dataset_manifest,
 )
 from src.registry.paths import ProjectPaths
 from scripts.real.save_preprocess_stage_example import save_stage_example
@@ -75,6 +80,104 @@ class RealPipelineAutomationTest(unittest.TestCase):
                 resolve_capture_sequence("seq_demo", "cam0", paths), canonical)
             self.assertEqual(
                 resolve_capture_sequence(str(legacy), "cam0", paths), legacy)
+
+    def test_preprocess_rejects_new_processed_output_in_legacy_root(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo = Path(root) / "repo"
+            (repo / "raw/seq_demo/cam0").mkdir(parents=True)
+            paths = ProjectPaths.load(repo_root=repo, environ={})
+            args = resolve_pipeline_args(build_parser().parse_args([
+                "--seq", str(repo / "raw/seq_demo"),
+                "--roi", "0,0,10,10",
+                "--out-root", "data/real_seq/legacy_write",
+            ]))
+            with self.assertRaisesRegex(ValueError, "workspace"):
+                resolve_preprocess_layout(args, paths)
+
+    def test_dataset_manifest_is_portable_and_registry_valid(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo = Path(root) / "repo"
+            repo.mkdir()
+            paths = ProjectPaths.load(repo_root=repo, environ={})
+            seq = repo / "legacy_raw/seq_demo"
+            derived = paths.intermediate_sequence(
+                "real", "seq_demo", "recipe_001")
+            crop_root = derived / "crop"
+            mask_dir = derived / "sam2_masks"
+            out_root = paths.processed_dataset("real", "dataset_demo")
+            for directory in (
+                    seq / "cam0", crop_root / "cam0", mask_dir,
+                    derived / "qc_capture", out_root / "train",
+                    out_root / "val", out_root / "qc_skeleton"):
+                directory.mkdir(parents=True)
+
+            (derived / "qc_capture/capture_audit.json").write_text(
+                json.dumps({"ready_for_image_preprocessing": True,
+                            "issues": [], "counts": {"images": 2}}))
+            (crop_root / "crop_meta.json").write_text(json.dumps({
+                "complete": True, "n_output_frames": 2,
+                "n_source_frames": 2,
+            }))
+            (derived / "candidate_summary.json").write_text(json.dumps({
+                "n_frames": 2, "n_empty": 0, "n_selected_anchors": 1,
+            }))
+            (out_root / "qc_skeleton/skeleton_metrics.csv").write_text(
+                "success,hard_invalid,interpolated,suspicious,explicit_repair\n"
+                "True,False,False,False,False\n"
+                "True,False,False,False,False\n")
+            np.savetxt(seq / "frame_times.txt", np.asarray((0.0, 0.2)))
+            image = np.zeros((4, 4, 3), np.uint8)
+            mask = np.zeros((4, 4), np.uint8)
+            for frame in range(2):
+                cv2.imwrite(str(crop_root / "cam0" / f"{frame:05d}.png"), image)
+                cv2.imwrite(str(mask_dir / f"{frame:05d}.png"), mask)
+
+            common = {
+                "positions": np.zeros((1, 3, 15), np.float32),
+                "positions_camera_px": np.zeros((1, 3, 15), np.float32),
+                "actions": np.zeros((1, 6), np.float32),
+                "node_order": np.array("base_to_tip"),
+                "n_points": np.array(15),
+                "state_coordinate_frame": np.array("robot_planar_mm_v1"),
+                "state_length_unit": np.array("mm"),
+                "raw_action_dim": np.array(6),
+                "model_action_dim": np.array(6),
+            }
+            np.savez_compressed(out_root / "train/train.npz", **common)
+            np.savez_compressed(out_root / "val/val.npz", **common)
+            config = {
+                "n_points": 15, "state_frame": "robot_planar_mm",
+                "max_interpolated_fraction": 0.05,
+                "seq": str(seq), "out_root": str(out_root),
+            }
+            manifest = build_dataset_manifest(
+                seq=str(seq), camera="cam0", derived=str(derived),
+                crop_root=str(crop_root), mask_dir=str(mask_dir),
+                out_root=str(out_root), resolved_config=config,
+                commands=[f"python {repo}/scripts/run.py --seq {seq}"],
+                sam2_summary={
+                    "frame_ids_match": True, "failures_empty": True,
+                    "mask_count": 2,
+                }, paths=paths, git_commit="f06c8c9")
+
+            validate_registry_dataset_manifest(manifest)
+            serialized = json.dumps(
+                manifest, ensure_ascii=False, allow_nan=False)
+            self.assertNotIn(str(repo), serialized)
+            self.assertIn("artifact://data/processed/real/dataset_demo", serialized)
+            self.assertEqual(manifest["status"], "draft")
+            self.assertTrue(manifest["quality_control"]["training_ready"])
+
+    def test_training_tag_reads_registry_sources_contract(self):
+        with tempfile.TemporaryDirectory() as root:
+            manifest_path = Path(root) / "dataset_manifest.json"
+            manifest_path.write_text(json.dumps({
+                "dataset_id": "dataset_demo",
+                "sources": [{"sequence_id": "seq_20260819_172644"}],
+            }))
+            self.assertEqual(
+                infer_sequence_tag(root, str(manifest_path)),
+                "seq_20260819_172644")
 
     def test_json_config_and_cli_override(self):
         with tempfile.TemporaryDirectory() as root:
