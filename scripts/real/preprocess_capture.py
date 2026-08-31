@@ -5,8 +5,11 @@
 
 示例：
   python scripts/real/preprocess_capture.py \
-    --seq real_capture/data/raw/seq_20260819_172644 \
+    --seq seq_20260819_172644 \
     --roi 220,68,300,300 --gpus 1,3
+
+未显式指定输出时，新 intermediate 与 processed 数据只写入统一 workspace；
+``--seq`` 可读取 workspace raw、历史 raw 根或显式目录。
 """
 from __future__ import annotations
 
@@ -22,9 +25,16 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.registry.paths import ProjectPaths
 
 
 STAGES = ("audit", "crop", "anchors", "sam2", "skeleton")
@@ -175,6 +185,58 @@ def validate_stage_dependencies(stages):
         if stage in selected and not required.issubset(selected):
             raise ValueError(
                 f"重建 {stage} 时必须同步执行下游阶段: {sorted(required)}")
+
+
+def resolve_capture_sequence(value, camera, paths=None):
+    """解析显式采集目录或 sequence ID；统一路径优先、历史根只读回退。"""
+    paths = paths or ProjectPaths.load()
+    raw_value = str(value).rstrip("/")
+    requested = Path(raw_value).expanduser()
+    is_explicit_path = requested.is_absolute() or len(requested.parts) > 1
+    if is_explicit_path:
+        candidate = requested if requested.is_absolute() else (
+            paths.repo_root / requested)
+        candidates = (candidate.resolve(strict=False),)
+    else:
+        sequence_id = requested.name
+        candidates = (paths.raw_sequence("real", sequence_id), *
+                      paths.legacy_candidates("raw", sequence_id))
+
+    for candidate in candidates:
+        if (candidate / camera).is_dir():
+            return candidate.resolve(strict=False)
+    searched = ", ".join(str(candidate) for candidate in candidates)
+    raise FileNotFoundError(
+        f"找不到采集视角目录 {camera}；已搜索: {searched}")
+
+
+def resolve_preprocess_layout(args, paths=None):
+    """返回本次 recipe 的 raw、intermediate、mask 与 processed 根。"""
+    paths = paths or ProjectPaths.load()
+    seq = resolve_capture_sequence(args.seq, args.camera, paths)
+    seq_name = seq.name
+    state_suffix = ("robot_mm" if args.state_frame == "robot_planar_mm"
+                    else "camera_px")
+    dataset_id = f"{seq_name}_n{args.n_points}_sam2_{state_suffix}"
+    recipe_id = dataset_id
+    derived = paths.intermediate_sequence("real", seq_name, recipe_id)
+    mask_dir = derived / "sam2_masks"
+    if args.out_root:
+        requested = Path(args.out_root).expanduser()
+        out_root = (requested if requested.is_absolute()
+                    else paths.repo_root / requested).resolve(strict=False)
+    else:
+        out_root = paths.processed_dataset("real", dataset_id)
+    return {
+        "seq": seq,
+        "sequence_id": seq_name,
+        "dataset_id": dataset_id,
+        "recipe_id": recipe_id,
+        "derived": derived,
+        "crop_root": derived / "crop",
+        "mask_dir": mask_dir,
+        "out_root": out_root,
+    }
 
 
 def display_command(command, env_update=None):
@@ -508,7 +570,7 @@ def build_parser():
     parser.add_argument("--config", default=None,
                         help="单序列JSON配置；显式CLI参数覆盖同名配置")
     parser.add_argument("--seq", default=None,
-                        help="原始seq目录，或real_capture/data/raw下的序列名")
+                        help="原始seq目录或序列ID；默认先查workspace再查历史raw根")
     parser.add_argument("--camera", default=None)
     parser.add_argument("--roi", default=None, type=parse_roi,
                         help="固定源图像ROI：x,y,w,h")
@@ -537,40 +599,30 @@ def build_parser():
     parser.add_argument("--reset-sam2", action="store_true",
                         help="显式删除本序列已有SAM2 mask后重算")
     parser.add_argument("--out-root", default=None,
-                        help="骨架NPZ输出；默认按 state-frame 使用 _robot_mm/_camera_px 后缀")
+                        help="显式兼容输出；默认写workspace processed dataset")
     return parser
 
 
 def main(argv=None):
     args = resolve_pipeline_args(build_parser().parse_args(argv))
     validate_stage_dependencies(args.stages)
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))))
-    seq = os.path.abspath(args.seq)
-    if not os.path.isdir(os.path.join(seq, args.camera)):
-        seq = os.path.join(project_root, "real_capture", "data", "raw",
-                           os.path.basename(args.seq.rstrip("/")))
-    if not os.path.isdir(os.path.join(seq, args.camera)):
-        raise FileNotFoundError(f"找不到采集视角目录: {seq}/{args.camera}")
-    seq_name = os.path.basename(seq.rstrip("/"))
-    derived = os.path.join(project_root, "real_capture", "data", "derived",
-                           seq_name)
+    paths = ProjectPaths.load()
+    project_root = str(paths.repo_root)
+    layout = resolve_preprocess_layout(args, paths)
+    seq = str(layout["seq"])
+    seq_name = layout["sequence_id"]
+    derived = str(layout["derived"])
     crop_root = os.path.join(derived, "crop")
     crop_camera = os.path.join(crop_root, args.camera)
-    mask_dir = os.path.join(project_root, "sam2", "masks",
-                            f"{seq_name}_full")
-    out_root = (os.path.abspath(args.out_root) if args.out_root else
-                os.path.join(project_root, "data", "real_seq",
-                             f"{seq_name}_n{args.n_points}_sam2" +
-                             ("_robot_mm" if args.state_frame == "robot_planar_mm"
-                              else "_camera_px")))
+    mask_dir = str(layout["mask_dir"])
+    out_root = str(layout["out_root"])
     python = sys.executable
     commands = []
     common_env = {"MPLCONFIGDIR": "/tmp/selfsoftrobot-mpl"}
     os.makedirs(derived, exist_ok=True)
 
     if args.reset_sam2 and os.path.isdir(mask_dir):
-        allowed_parent = os.path.realpath(os.path.join(project_root, "sam2", "masks"))
+        allowed_parent = os.path.realpath(derived)
         if os.path.dirname(os.path.realpath(mask_dir)) != allowed_parent:
             raise RuntimeError(f"拒绝删除非标准SAM2目录: {mask_dir}")
         shutil.rmtree(mask_dir)
@@ -580,7 +632,9 @@ def main(argv=None):
 
     if "audit" in args.stages:
         run([python, "scripts/real/audit_capture.py", "--seq", seq,
-             "--camera", args.camera], project_root, commands, common_env)
+             "--camera", args.camera, "--out",
+             os.path.join(derived, "qc_capture")],
+            project_root, commands, common_env)
         audit_path = os.path.join(derived, "qc_capture", "capture_audit.json")
         audit = _read_json(audit_path, {})
         if audit.get("ready_for_image_preprocessing") is not True:
@@ -590,7 +644,8 @@ def main(argv=None):
                 f"采集关键合同检查失败: {critical}; audit={audit_path}")
     if "crop" in args.stages:
         command = [python, "scripts/real/crop_capture.py", "--seq", seq,
-                   "--camera", args.camera, "--roi", ",".join(map(str, args.roi))]
+                   "--camera", args.camera, "--roi", ",".join(map(str, args.roi)),
+                   "--out-root", crop_root]
         if args.overwrite_crop:
             command.append("--overwrite")
         run(command, project_root, commands)

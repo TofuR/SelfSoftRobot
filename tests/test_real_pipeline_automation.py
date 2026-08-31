@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -14,13 +15,67 @@ from scripts.real.manage_training_trial import (
 from scripts.real.masks_to_transition_npz import save_npz
 from scripts.real.preprocess_capture import (
     build_parser,
+    resolve_capture_sequence,
+    resolve_preprocess_layout,
     resolve_pipeline_args,
     validate_stage_dependencies,
 )
+from src.registry.paths import ProjectPaths
 from scripts.real.save_preprocess_stage_example import save_stage_example
 
 
 class RealPipelineAutomationTest(unittest.TestCase):
+    def test_preprocess_reads_legacy_raw_and_writes_workspace(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo = Path(root) / "repo"
+            (repo / "config").mkdir(parents=True)
+            (repo / "config/paths.local.toml").write_text(
+                "schema_version = 1\n"
+                "[paths]\nworkspace_root = '../large_workspace'\n"
+                "[compat]\nraw_roots = ['old_raw']\n",
+                encoding="utf-8")
+            legacy = repo / "old_raw/seq_demo/cam0"
+            legacy.mkdir(parents=True)
+            paths = ProjectPaths.load(repo_root=repo, environ={})
+            args = build_parser().parse_args([
+                "--seq", "seq_demo", "--roi", "0,0,10,10"])
+            resolved = resolve_pipeline_args(args)
+
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                layout = resolve_preprocess_layout(resolved, paths)
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertEqual(layout["seq"], legacy.parent)
+            expected_workspace = Path(root) / "large_workspace"
+            self.assertEqual(
+                layout["derived"],
+                expected_workspace /
+                "data/intermediate/real/seq_demo/seq_demo_n15_sam2_robot_mm")
+            self.assertEqual(
+                layout["out_root"],
+                expected_workspace /
+                "data/processed/real/seq_demo_n15_sam2_robot_mm")
+            self.assertEqual(layout["mask_dir"],
+                             layout["derived"] / "sam2_masks")
+
+    def test_preprocess_prefers_canonical_raw_and_accepts_explicit_legacy(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo = Path(root) / "repo"
+            repo.mkdir()
+            paths = ProjectPaths.load(repo_root=repo, environ={})
+            canonical = paths.raw_sequence("real", "seq_demo")
+            legacy = repo / "real_capture/data/raw/seq_demo"
+            for sequence in (canonical, legacy):
+                (sequence / "cam0").mkdir(parents=True)
+
+            self.assertEqual(
+                resolve_capture_sequence("seq_demo", "cam0", paths), canonical)
+            self.assertEqual(
+                resolve_capture_sequence(str(legacy), "cam0", paths), legacy)
+
     def test_json_config_and_cli_override(self):
         with tempfile.TemporaryDirectory() as root:
             path = os.path.join(root, "sequence.json")
