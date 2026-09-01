@@ -15,6 +15,7 @@ Loss 分两层:
 """
 
 import csv
+from dataclasses import asdict
 import glob
 import os
 import random
@@ -237,6 +238,8 @@ class UnifiedTrainer:
                 p_info["save_modules"] = p.save_modules
             if p.load_modules:
                 p_info["load_modules"] = p.load_modules
+            if p.validation is not None:
+                p_info["validation"] = asdict(p.validation)
             phases_info.append(p_info)
 
         config = {

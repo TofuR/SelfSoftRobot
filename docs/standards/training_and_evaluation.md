@@ -2,7 +2,7 @@
 title: 训练、验证、早停与 checkpoint 规范
 kind: standard
 status: active
-updated: 2026-08-31
+updated: 2026-09-01
 scope: model training, validation selection, early stopping, final evaluation
 supersedes: []
 superseded_by: null
@@ -73,4 +73,8 @@ sources:
 
 ## 6. 当前实现与待迁移项
 
-`UnifiedTrainer` 已把未指定目录的直接训练写入 workspace；完整真实流水线已统一试次根，并保存阶段、评价、配置和命令。公共 engine 尚未原生拥有 validation/selection/early-stop 字段，当前验证 watcher 属迁移期实现；在其收进 `PhaseSpec` 前，不得删除流水线的选择与归档逻辑。
+`UnifiedTrainer` 已把未指定目录的直接训练写入 workspace；完整真实流水线已统一试次根，并保存阶段、评价、配置和命令。
+
+`PhaseSpec` 现可选声明 `ValidationSpec`，统一记录 val role、选择 metric/方向、验证频率、`min_delta`、warmup、early-stop patience、scheduler metric 和 best 恢复策略。公共 `SelectionState` 已实现按“验证次数”计数的选择/早停状态，并支持 OpenLoop teacher-forcing 退火门控；未声明 validation 的历史模型行为不变。
+
+当前 engine 仍未调用模型专属 validator，也未用 `SelectionState` 驱动 checkpoint、scheduler 和停止循环；验证 watcher 仍是完整真实流水线的迁移期实现。在 evaluator adapter 和 engine 集成完成前，不得删除 watcher 的选择与归档逻辑。
