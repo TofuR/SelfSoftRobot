@@ -159,6 +159,8 @@ class RealPipelineAutomationTest(unittest.TestCase):
                 "quantitative": f"evaluations/test/{stage}/quantitative",
                 "overlay": f"evaluations/test/{stage}/overlay",
             } for stage in ("gt", "open_loop")]
+            artifacts["offline_fixture"] = "evaluations/test/offline_fixture.json"
+            artifacts["deploy_manifest"] = "stages/open_loop/deploy_manifest.json"
 
             manifest = build_formal_run_manifest(
                 trial, config, artifacts, paths=paths)
@@ -174,6 +176,8 @@ class RealPipelineAutomationTest(unittest.TestCase):
             self.assertTrue(all(
                 item["dataset_role"] == "test"
                 for item in manifest["final_evaluations"]))
+            self.assertTrue(manifest["offline_fixture_uri"].endswith(
+                "/evaluations/test/offline_fixture.json"))
 
     def test_real_training_pipeline_uses_engine_validation_without_watcher(self):
         script = (Path(__file__).resolve().parents[1] /

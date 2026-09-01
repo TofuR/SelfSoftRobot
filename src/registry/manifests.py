@@ -338,6 +338,9 @@ def _validate_run_manifest_v2(value: Mapping[str, Any]) -> None:
         _artifact_uri(
             evaluation.get("overlay_uri"),
             f"final_evaluations[{index}].overlay_uri")
+    if final_evaluations:
+        _artifact_uri(value.get("offline_fixture_uri"), "offline_fixture_uri")
+        _artifact_uri(value.get("deploy_manifest_uri"), "deploy_manifest_uri")
 
 
 def sha256_file(path: str | os.PathLike[str], chunk_size: int = 1024 * 1024) -> str:

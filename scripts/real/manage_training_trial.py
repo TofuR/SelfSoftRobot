@@ -481,6 +481,10 @@ def build_formal_run_manifest(trial_dir, config, artifacts, paths=None):
                 "overlay_uri": paths.artifact_uri(os.path.join(
                     trial, item["overlay"], "summary.txt")),
             })
+        manifest["offline_fixture_uri"] = paths.artifact_uri(os.path.join(
+            trial, artifacts["offline_fixture"]))
+        manifest["deploy_manifest_uri"] = paths.artifact_uri(os.path.join(
+            trial, artifacts["deploy_manifest"]))
     validate_run_manifest(manifest)
     return manifest
 
@@ -532,6 +536,10 @@ def finalize_trial(trial_dir):
                 ("overlay", "summary.txt"),
                 ("overlay", "montage.png"),
             )
+        ])
+        required.extend([
+            "evaluations/test/offline_fixture.json",
+            "stages/open_loop/deploy_manifest.json",
         ])
         _require_files(trial_dir, required)
     def selected_checkpoint(stage):
@@ -588,6 +596,8 @@ def finalize_trial(trial_dir):
             }
             for stage in ("gt", "open_loop")
         ]
+        artifacts["offline_fixture"] = "evaluations/test/offline_fixture.json"
+        artifacts["deploy_manifest"] = "stages/open_loop/deploy_manifest.json"
     artifacts_path = os.path.join(trial_dir, "artifacts.json")
     _write_json(artifacts_path, artifacts)
     if config.get("run", {}).get("kind") == "formal":

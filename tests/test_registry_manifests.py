@@ -131,6 +131,8 @@ def run_manifest_v2():
             "quantitative_uri": root + "/evaluations/test/gt/quantitative/summary.txt",
             "overlay_uri": root + "/evaluations/test/gt/overlay/summary.txt",
         }],
+        "offline_fixture_uri": root + "/evaluations/test/offline_fixture.json",
+        "deploy_manifest_uri": root + "/stages/open_loop/deploy_manifest.json",
     }
 
 

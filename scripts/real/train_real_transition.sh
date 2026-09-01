@@ -99,6 +99,7 @@ resolve_real_path() {
 }
 CAM0_DIR="${CAM0_DIR:-$(resolve_real_path camera_dir)}"
 MASKS_DIR="${MASKS_DIR:-$(resolve_real_path masks_dir)}"
+RAW_SEQUENCE="${RAW_SEQUENCE:-$(resolve_real_path raw_sequence)}"
 TRIAL_BASE="${TRIAL_BASE:-$(resolve_real_path trial_base)}"
 NDI_CSV="${NDI_CSV:-$(resolve_real_path ndi_csv)}"
 FRAME_TIMES_FILE="${FRAME_TIMES_FILE:-$(resolve_real_path frame_times)}"
@@ -260,6 +261,8 @@ GT_TEST_QUANT_DIR="$RUN_DIR/evaluations/test/gt/quantitative"
 GT_TEST_OVERLAY_DIR="$RUN_DIR/evaluations/test/gt/overlay"
 OPEN_LOOP_TEST_QUANT_DIR="$RUN_DIR/evaluations/test/open_loop/quantitative"
 OPEN_LOOP_TEST_OVERLAY_DIR="$RUN_DIR/evaluations/test/open_loop/overlay"
+DEPLOY_MANIFEST="$OPEN_LOOP_EXP_DIR/deploy_manifest.json"
+OFFLINE_FIXTURE="$RUN_DIR/evaluations/test/offline_fixture.json"
 CALIBRATION_FILE="${CALIBRATION_FILE:-$RUN_DIR/diagnostics/state_to_ndi_same_sequence.npz}"
 STATUS_FILE="$RUN_DIR/status.txt"
 COMMAND_FILE="$RUN_DIR/commands.sh"
@@ -404,6 +407,12 @@ CUDA_VISIBLE_DEVICES="$EVAL_GPU_ID" MPLCONFIGDIR=/tmp/selfsoftrobot-mpl \
   PYTHONUNBUFFERED=1 "${OPEN_LOOP_OVERLAY_CMD[@]}" 2>&1 | tee "$OPEN_LOOP_BEST_OVERLAY_DIR/run.log"
 
 if (( HAS_FROZEN_TEST )); then
+  DEPLOY_CMD=(python scripts/utils/build_deploy_manifest.py
+    --exp-dir "$OPEN_LOOP_EXP_DIR" --checkpoint "$OPEN_LOOP_CKPT"
+    --raw-seq "$RAW_SEQUENCE" --out "$DEPLOY_MANIFEST")
+  record_command "$EVAL_GPU_ID" "${DEPLOY_CMD[@]}"
+  "${DEPLOY_CMD[@]}"
+
   printf 'RUNNING frozen_test started=%s dataset_role=test sequence=%s\n' \
     "$(date --iso-8601=seconds)" "$TEST_SEQUENCE" >> "$STATUS_FILE"
 
@@ -452,6 +461,12 @@ if (( HAS_FROZEN_TEST )); then
   record_command "$EVAL_GPU_ID" "${OPEN_LOOP_TEST_OVERLAY_CMD[@]}"
   CUDA_VISIBLE_DEVICES="$EVAL_GPU_ID" MPLCONFIGDIR=/tmp/selfsoftrobot-mpl \
     PYTHONUNBUFFERED=1 "${OPEN_LOOP_TEST_OVERLAY_CMD[@]}" 2>&1 | tee "$OPEN_LOOP_TEST_OVERLAY_DIR/run.log"
+
+  OFFLINE_FIXTURE_CMD=(python scripts/real/validate_offline_fixture.py
+    --dataset-id "$DATASET_ID" --role test --checkpoint "$OPEN_LOOP_CKPT"
+    --frame-index "$((WINDOW_SIZE - 1))" --device cpu --out "$OFFLINE_FIXTURE")
+  record_command "$EVAL_GPU_ID" "${OFFLINE_FIXTURE_CMD[@]}"
+  "${OFFLINE_FIXTURE_CMD[@]}"
 fi
 
 FINALIZE_CMD=(python scripts/real/manage_training_trial.py finalize --trial-dir "$RUN_DIR")
