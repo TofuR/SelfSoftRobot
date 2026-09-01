@@ -72,12 +72,12 @@ sources: []
 |---|---|
 | [`background/literature.md`](background/literature.md) | 相关工作综述(NeRF系/自建模/迟滞/视觉控制) + 本项目创新点 |
 
-## 论文笔记 (`papers/`)
-| 子目录/文件 | 说明 |
+## 论文与文献
+
+| 入口 | 说明 |
 |---|---|
-| `papers/notes/` | 10 篇短笔记(3DGS/flow_matching/hysteresis/koopman/jacobian/pinn/shape_node/ssl/tang/yu) |
-| `papers/understanding/` | 深读: hu2025(FBV-SM)/chen2022/shan2024(SoftNeRF) + brainstorm + depth_supervision_innovation |
-| `papers/*.pdf` `*.jpg` | 论文原文 |
+| [`paper/README.md`](paper/README.md) | 唯一活跃 manuscript 树；方法、实验、outline 和正文草稿在这里维护 |
+| [`papers/README.md`](papers/README.md) | 文献证据、66 篇单篇笔记、深读材料、原文副本和旧阶段草稿的边界 |
 
 ## 实验 (`experiments/`)
 | 文档 | 说明 |

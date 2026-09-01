@@ -29,8 +29,9 @@ sources:
 
 治理角色已经固定：`CLAUDE.md` 是约束面、`docs/README.md` 是地图、本页是当前
 状态、`docs/maintenance/README.md` 是重要历史。旧 `docs/HANDOFF.md` 是
-2026-07-28 快照，不再拥有当前状态。仍待处理的是通用/单序列 workflow 分离、
-`paper/` 与 `papers/` 边界补齐，以及旧文档逐份 keep/merge/supersede/archive 裁决。
+2026-07-28 快照，不再拥有当前状态。`paper/` 已固定为唯一活跃 manuscript，
+`papers/` 只保存文献证据和阶段草稿输入。仍待处理的是通用/单序列 workflow
+分离，以及旧文档逐份 keep/merge/supersede/archive 裁决。
 
 以下路径或概念属于删除区；除非 replacement 合同发生经记录的变更，否则不要重建：
 

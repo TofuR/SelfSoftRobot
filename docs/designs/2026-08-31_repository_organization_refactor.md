@@ -538,9 +538,9 @@ docs/
 | `overview/status.md` | 成为唯一当前状态；避免复制完整教程和论文论证 |
 | `real_data/workflow.md`、`general_6ch_postprocess.md` | 合并出一个通用 preprocessing workflow；旧单通道内容归档 |
 | `seq_*.md` | 移到 `experiments/records/<sequence_id>/`，只描述该次处理证据 |
-| `paper/` | 作为唯一活跃 manuscript，重命名到 `research/paper/` |
-| `papers/notes`、综述 | 移到 `research/literature/`；不要与论文草稿同名 |
-| `papers/*_draft.md` | 明确并入 active paper 或标为 superseded/archive |
+| `paper/` | 2026-09-01 固定为唯一活跃 manuscript；为避免大规模断链，暂不重命名 |
+| `papers/notes`、综述 | 保留为文献证据区，由 `papers/README.md` 约束，不拥有当前论文 |
+| `papers/*_draft.md` | 作为阶段输入保留；只有被 `paper/` 明确引用的部分进入 active manuscript |
 | `directions/` | 移到 `research/directions/`，overview 标记 active/parked/rejected |
 | `superpowers/specs/plans` | 已落地者转 ADR/归档，未落地者进入 designs，不以工具名分类 |
 | `docs/ref` | 2026-09-01 决定保留为本机 ignored 参考区；根 README 记录硬件用途及嵌套项目来源/commit/license 边界 |
