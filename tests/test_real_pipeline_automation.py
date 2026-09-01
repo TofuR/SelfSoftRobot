@@ -27,6 +27,7 @@ from src.registry.manifests import (
     validate_dataset_manifest as validate_registry_dataset_manifest,
 )
 from src.registry.paths import ProjectPaths
+from src.registry.real_assets import SAM2_VIDEO_RECIPE
 from scripts.real.save_preprocess_stage_example import save_stage_example
 
 
@@ -206,7 +207,7 @@ class RealPipelineAutomationTest(unittest.TestCase):
 
             canonical_raw = paths.raw_sequence("real", "seq_demo")
             canonical_masks = paths.intermediate_sequence(
-                "real", "seq_demo", "dataset_demo") / "sam2_masks"
+                "real", "seq_demo", SAM2_VIDEO_RECIPE)
             canonical_raw.mkdir(parents=True)
             canonical_masks.mkdir(parents=True)
             resolved = resolve_real_pipeline_paths(

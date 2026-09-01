@@ -20,6 +20,7 @@ if PROJECT_ROOT not in sys.path:
 
 from src.utils.experiment import create_experiment, save_config  # noqa: E402
 from src.registry.paths import ProjectPaths  # noqa: E402
+from src.registry.real_assets import resolve_sam2_masks  # noqa: E402
 
 
 LAYOUT = {
@@ -129,12 +130,11 @@ def resolve_real_pipeline_paths(
     raw = next((candidate for candidate in raw_candidates
                 if candidate.is_dir()), canonical_raw)
 
-    canonical_masks = paths.intermediate_sequence(
-        "real", sequence_id, dataset_id) / "sam2_masks"
-    mask_candidates = (canonical_masks, *paths.legacy_candidates(
-        "intermediate", f"{sequence_id}_full"))
-    masks = next((candidate for candidate in mask_candidates
-                  if candidate.is_dir()), canonical_masks)
+    try:
+        masks = resolve_sam2_masks(paths, sequence_id)
+    except FileNotFoundError:
+        masks = paths.intermediate_sequence(
+            "real", sequence_id, dataset_id) / "sam2_masks"
 
     return {
         "trial_base": paths.training_study("real_pipeline") / sequence_tag,
