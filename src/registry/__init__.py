@@ -24,6 +24,11 @@ from .real_assets import (
     resolve_repaired_masks,
     resolve_sam2_masks,
 )
+from .workspace_index import (
+    WorkspaceIndexBuilder,
+    write_mainline_legacy_manifests,
+    write_workspace_index,
+)
 
 __all__ = [
     "DATASET_ROLES",
@@ -36,6 +41,7 @@ __all__ = [
     "ManifestStore",
     "ProjectPaths",
     "SAM2_VIDEO_RECIPE",
+    "WorkspaceIndexBuilder",
     "atomic_write_json",
     "build_file_record",
     "canonical_intermediate",
@@ -48,4 +54,6 @@ __all__ = [
     "sha256_file",
     "validate_dataset_manifest",
     "validate_run_manifest",
+    "write_mainline_legacy_manifests",
+    "write_workspace_index",
 ]

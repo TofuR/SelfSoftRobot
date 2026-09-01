@@ -13,7 +13,7 @@
 | Phase 1 路径与 manifest | 完成 | `ProjectPaths`、URI、schema、原子写入、路径配置模板 | 历史 manifest 批量升级 |
 | Phase 2 数据双读单写 | 完成 | `real_capture`、预处理、dataset/fixture selector、组合/清洗、SAM2 与 QC 均统一读写 workspace | 后续新增脚本持续遵守同一合同 |
 | Phase 3 训练合同 | 部分完成 | 直接训练和完整真实流水线的新 run 根已迁移；旧 checkpoint 双读 | 公共 engine 原生 validation/selection/early-stop、正式 run manifest |
-| Phase 4 历史导入 | 部分完成 | 67 项 raw/intermediate/processed/training/analysis/model 资产已原子迁入 workspace，并由 ledger 登记 | 历史 manifest 批量升级与 dataset→run 反向引用 |
+| Phase 4 历史导入 | 部分完成 | 67 项资产已原子迁入 workspace；轻量索引已登记 14 个 dataset、104 个训练 run，并为 4 个真实主线试次补 `legacy_run_manifest.json` | 10 个旧 dataset 仍缺 manifest；归档 run 的缺失数据引用和 manifest 继续审计 |
 | Phase 5 文档治理 | 部分完成 | 唯一导航及数据划分、训练评价、试次、证据标准 | workflow 合并、旧文档逐份裁决、front matter lint |
 | Phase 6 物理清理 | 部分完成 | 经授权并完成 GT/OpenLoop 2+2 epoch 主线短跑后，67 个旧兼容链接及空旧根已移除 | 缓存、测试展示产物和废弃工作树另行逐类清理 |
 
@@ -634,6 +634,11 @@ sources: []
 > `docs/maintenance/2026-09-01_legacy_asset_migration.json` 登记并原子迁移
 > 67 项历史资产。按本次轻量迁移决策，不对同文件系统 rename 重复计算逐文件
 > SHA-256；ledger 记录 source/target 与状态，目标存在时拒绝覆盖。
+>
+> 同日新增 `workspace/registry/workspace_asset_index.json`：只读取目录、小型 JSON
+> 和完成标记，不 hash NPZ/checkpoint 等 payload。它提供 dataset→run 反向查询，
+> 但不能替代严格不可变 manifest。4 个已有 `real_pipeline` 试次已补非覆盖的
+> `legacy_run_manifest.json`，并明确记录 validation 选择或训练 loss/未知语义。
 
 - 登记 source/target、资产类型和迁移状态；跨文件系统复制时再增加内容 hash；
 - 在 registry 登记旧路径，不强制重命名；
