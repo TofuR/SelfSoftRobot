@@ -12,7 +12,7 @@
 | Phase 0 清单 | 完成 | 历史 raw/intermediate/processed/training/analysis 只读 inventory | 定期刷新策略 |
 | Phase 1 路径与 manifest | 完成 | `ProjectPaths`、URI、schema、原子写入、路径配置模板 | 历史 manifest 批量升级 |
 | Phase 2 数据双读单写 | 完成 | `real_capture`、预处理、dataset/fixture selector、组合/清洗、SAM2 与 QC 均统一读写 workspace | 后续新增脚本持续遵守同一合同 |
-| Phase 3 训练合同 | 部分完成 | 新 run 根、旧 checkpoint 双读、engine 验证/选择/早停循环及 transition adapter 已落地；GT/OpenLoop 排序等价、真实流水线切换及切换后完整短跑已通过 | 正式 run manifest |
+| Phase 3 训练合同 | 部分完成 | 新 run 根、轻量 run manifest v2、旧 checkpoint 双读、engine 验证/选择/早停循环及 transition adapter 已落地；GT/OpenLoop 排序等价、真实流水线切换及切换后完整短跑已通过 | 用 canonical dataset 完成首个 formal run 验收 |
 | Phase 4 历史导入 | 部分完成 | 67 项资产已原子迁入 workspace；14 个 dataset 均有历史/观察型 manifest，104 个训练 run 已索引，4 个真实主线试次已有 `legacy_run_manifest.json` | 严格 v2 升级、归档 run manifest 和 15 条缺失数据引用继续审计 |
 | Phase 5 文档治理 | 部分完成 | 唯一导航及数据划分、训练评价、试次、证据标准 | workflow 合并、旧文档逐份裁决、front matter lint |
 | Phase 6 物理清理 | 部分完成 | 经授权并完成 GT/OpenLoop 2+2 epoch 主线短跑后，67 个旧兼容链接及空旧根已移除 | 缓存、测试展示产物和废弃工作树另行逐类清理 |

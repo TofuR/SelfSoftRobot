@@ -95,6 +95,39 @@ def run_manifest():
     }
 
 
+def run_manifest_v2():
+    root = "artifact://runs/training/real_pipeline.seq_a/run_001"
+    return {
+        "schema_version": 2,
+        "kind": "training_run",
+        "run_id": "run_001",
+        "study_id": "real_pipeline.seq_a",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "status": "complete",
+        "run_kind": "formal",
+        "dataset": {
+            "dataset_id": "dataset_a",
+            "manifest_uri": "artifact://data/processed/real/dataset_a/manifest.json",
+        },
+        "source": {"git_commit": "3157b12", "dirty": True},
+        "commands_uri": root + "/commands.sh",
+        "resolved_config_uri": root + "/config.json",
+        "seed": 42,
+        "stages": [{
+            "name": "gt",
+            "selection": {
+                "metric": "validation.node_mean_mm",
+                "mode": "min",
+                "dataset_role": "val",
+                "checkpoint_uri": root + "/stages/gt/model/best_eval_model.pt",
+            },
+        }],
+        "expected_artifacts": [
+            root + "/stages/gt/model/best_eval_model.pt"],
+        "complete_marker_uri": root + "/COMPLETE",
+    }
+
+
 class TestDatasetManifest(unittest.TestCase):
     def test_valid_contract(self):
         validate_dataset_manifest(dataset_manifest())
@@ -147,6 +180,15 @@ class TestRunManifest(unittest.TestCase):
         complete["status"] = "complete"
         with self.assertRaisesRegex(ManifestError, "complete_marker_uri"):
             validate_run_manifest(complete)
+
+    def test_lightweight_v2_accepts_dirty_source_without_payload_hashes(self):
+        validate_run_manifest(run_manifest_v2())
+
+    def test_v2_keeps_selection_on_validation(self):
+        selected_on_test = run_manifest_v2()
+        selected_on_test["stages"][0]["selection"]["dataset_role"] = "test"
+        with self.assertRaisesRegex(ManifestError, "dataset_role"):
+            validate_run_manifest(selected_on_test)
 
 
 class TestManifestStore(unittest.TestCase):

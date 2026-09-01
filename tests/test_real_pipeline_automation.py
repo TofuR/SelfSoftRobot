@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 
 from scripts.real.manage_training_trial import (
+    build_formal_run_manifest,
     infer_sequence_tag,
     prepare_trial_layout,
     resolve_real_pipeline_paths,
@@ -32,6 +33,92 @@ from scripts.real.save_preprocess_stage_example import save_stage_example
 
 
 class RealPipelineAutomationTest(unittest.TestCase):
+    def test_builds_lightweight_stage_aware_run_manifest(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo = Path(root) / "repo"
+            repo.mkdir()
+            paths = ProjectPaths.load(repo_root=repo, environ={})
+            dataset = paths.processed_dataset("real", "dataset_a")
+            dataset.mkdir(parents=True)
+            dataset_manifest = dataset / "dataset_manifest.json"
+            dataset_manifest.write_text(json.dumps({
+                "schema_version": 2,
+                "kind": "dataset",
+                "dataset_id": "dataset_a",
+                "created_at": "2026-09-01T12:00:00+08:00",
+                "status": "released",
+                "sources": [{
+                    "sequence_id": "seq_a",
+                    "raw_manifest_sha256": "a" * 64,
+                }],
+                "recipe": {
+                    "name": "reference-release",
+                    "version": 1,
+                    "git_commit": "3157b12",
+                    "parameters": {},
+                    "commands": ["prepare reference release"],
+                },
+                "contracts": {
+                    "state": {}, "action": {}, "timing": {},
+                    "observation": {},
+                },
+                "split_policy": {
+                    "name": "cross_sequence",
+                    "group_key": "sequence_id",
+                    "embargo_frames": 0,
+                    "seed": None,
+                    "evidence_level": "cross_sequence",
+                },
+                "files": [],
+                "splits": {"train": [], "val": [], "test": []},
+                "quality_control": {"training_ready": True},
+            }), encoding="utf-8")
+            trial = paths.training_study("real_pipeline") / "seq_a/run_001"
+            for stage, phase in (("gt", "gt_transition"),
+                                 ("open_loop", "open_loop_transition")):
+                stage_dir = trial / f"stages/{stage}"
+                stage_dir.mkdir(parents=True, exist_ok=True)
+                (stage_dir / "config.json").write_text(json.dumps({
+                    "phases": [{
+                        "name": phase,
+                        "validation": {"selection_metric": "validation.node_mean_mm"},
+                        "validation_selection": {
+                            "metric": "validation.node_mean_mm",
+                            "mode": "min",
+                            "dataset_role": "val",
+                            "best_value": 1.0,
+                            "best_epoch": 1,
+                        },
+                    }],
+                }), encoding="utf-8")
+            config = {
+                "run": {"kind": "formal", "source": {
+                    "git_commit": "3157b12", "dirty": True}},
+                "trial": {"id": "run_001", "sequence_tag": "seq_a",
+                          "created_at": "2026-09-01T12:00:00+08:00"},
+                "data": {"dataset_manifest": str(dataset_manifest)},
+                "training": {"seed": 42},
+            }
+            artifacts = {"stages": {}}
+            for stage, phase in (("gt", "gt_transition"),
+                                 ("open_loop", "open_loop_transition")):
+                artifacts["stages"][stage] = {
+                    "config": f"stages/{stage}/config.json",
+                    "best_checkpoint": (
+                        f"stages/{stage}/phase_{phase}/model/best_eval_model.pt"),
+                    "best_quantitative": f"evaluations/{stage}/best/quantitative",
+                    "best_overlay": f"evaluations/{stage}/best/overlay",
+                }
+
+            manifest = build_formal_run_manifest(
+                trial, config, artifacts, paths=paths)
+
+            self.assertEqual(manifest["schema_version"], 2)
+            self.assertEqual(manifest["dataset"]["dataset_id"], "dataset_a")
+            self.assertEqual([stage["name"] for stage in manifest["stages"]],
+                             ["gt", "open_loop"])
+            self.assertNotIn("manifest_sha256", manifest["dataset"])
+
     def test_real_training_pipeline_uses_engine_validation_without_watcher(self):
         script = (Path(__file__).resolve().parents[1] /
                   "scripts/real/train_real_transition.sh").read_text(

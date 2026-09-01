@@ -188,10 +188,20 @@ def validate_dataset_manifest(manifest: Mapping[str, Any]) -> None:
 
 
 def validate_run_manifest(manifest: Mapping[str, Any]) -> None:
-    """Validate a reproducible training-run manifest (schema v1)."""
+    """Validate a reproducible training-run manifest (schema v1 or v2)."""
     value = _mapping(manifest, "manifest")
-    if value.get("schema_version") != 1:
-        _fail("run manifest schema_version 必须为 1")
+    schema_version = value.get("schema_version")
+    if schema_version == 1:
+        _validate_run_manifest_v1(value)
+        return
+    if schema_version == 2:
+        _validate_run_manifest_v2(value)
+        return
+    _fail("run manifest schema_version 必须为 1 或 2")
+
+
+def _validate_run_manifest_v1(value: Mapping[str, Any]) -> None:
+    """Validate the original strict run contract kept for compatibility."""
     if value.get("kind") != "training_run":
         _fail("run manifest kind 必须为 'training_run'")
     _identifier(value.get("run_id"), "run_id")
@@ -244,6 +254,67 @@ def validate_run_manifest(manifest: Mapping[str, Any]) -> None:
     if selection.get("dataset_role") != "val":
         _fail("selection.dataset_role 必须为 'val'")
     _artifact_uri(selection.get("checkpoint_uri"), "selection.checkpoint_uri")
+
+    expected = _string_list(
+        value.get("expected_artifacts"), "expected_artifacts", nonempty=True)
+    for index, uri in enumerate(expected):
+        _artifact_uri(uri, f"expected_artifacts[{index}]")
+    if status == "complete":
+        _artifact_uri(value.get("complete_marker_uri"), "complete_marker_uri")
+
+
+def _validate_run_manifest_v2(value: Mapping[str, Any]) -> None:
+    """Validate the lightweight stage-aware run contract used by new trials."""
+    if value.get("kind") != "training_run":
+        _fail("run manifest kind 必须为 'training_run'")
+    _identifier(value.get("run_id"), "run_id")
+    _identifier(value.get("study_id"), "study_id")
+    _iso_datetime(value.get("created_at"), "created_at")
+    status = _choice(
+        value.get("status"), "status",
+        {"planned", "running", "complete", "failed"})
+    _choice(value.get("run_kind"), "run_kind", {"exploratory", "formal"})
+
+    dataset = _mapping(value.get("dataset"), "dataset")
+    _identifier(dataset.get("dataset_id"), "dataset.dataset_id")
+    _artifact_uri(dataset.get("manifest_uri"), "dataset.manifest_uri")
+
+    source = _mapping(value.get("source"), "source")
+    commit = source.get("git_commit")
+    if not isinstance(commit, str) or not _GIT_COMMIT.fullmatch(commit):
+        _fail("source.git_commit 必须是 7-40 位小写十六进制 commit")
+    if not isinstance(source.get("dirty"), bool):
+        _fail("source.dirty 必须是 bool")
+
+    _artifact_uri(value.get("commands_uri"), "commands_uri")
+    _artifact_uri(value.get("resolved_config_uri"), "resolved_config_uri")
+    seed = value.get("seed")
+    if not isinstance(seed, int) or isinstance(seed, bool):
+        _fail("seed 必须是 int")
+
+    stages = _list(value.get("stages"), "stages")
+    if not stages:
+        _fail("stages 不能为空")
+    stage_names = set()
+    for index, stage_value in enumerate(stages):
+        stage = _mapping(stage_value, f"stages[{index}]")
+        name = _identifier(stage.get("name"), f"stages[{index}].name")
+        if name in stage_names:
+            _fail(f"stages 含重复 name: {name}")
+        stage_names.add(name)
+        selection = _mapping(
+            stage.get("selection"), f"stages[{index}].selection")
+        metric = selection.get("metric")
+        if not isinstance(metric, str) or not metric:
+            _fail(f"stages[{index}].selection.metric 必须是非空字符串")
+        _choice(
+            selection.get("mode"), f"stages[{index}].selection.mode",
+            {"min", "max"})
+        if selection.get("dataset_role") != "val":
+            _fail(f"stages[{index}].selection.dataset_role 必须为 'val'")
+        _artifact_uri(
+            selection.get("checkpoint_uri"),
+            f"stages[{index}].selection.checkpoint_uri")
 
     expected = _string_list(
         value.get("expected_artifacts"), "expected_artifacts", nonempty=True)

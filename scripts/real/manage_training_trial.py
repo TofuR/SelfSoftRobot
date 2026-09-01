@@ -10,8 +10,10 @@ import glob
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime
+from pathlib import Path
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
@@ -21,6 +23,11 @@ if PROJECT_ROOT not in sys.path:
 from src.utils.experiment import create_experiment, save_config  # noqa: E402
 from src.registry.paths import ProjectPaths  # noqa: E402
 from src.registry.real_assets import resolve_sam2_masks  # noqa: E402
+from src.registry.manifests import (  # noqa: E402
+    atomic_write_json,
+    validate_dataset_manifest as validate_registry_dataset_manifest,
+    validate_run_manifest,
+)
 
 
 LAYOUT = {
@@ -48,6 +55,29 @@ PROCESSING_SUFFIX_PATTERN = re.compile(
 
 def _timestamp():
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _git_source_state():
+    """Capture lightweight source identity without hashing run payloads."""
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT,
+        check=True, capture_output=True, text=True).stdout.strip()
+    dirty = bool(subprocess.run(
+        ["git", "status", "--porcelain"], cwd=PROJECT_ROOT,
+        check=True, capture_output=True, text=True).stdout.strip())
+    return {"git_commit": commit, "dirty": dirty}
+
+
+def _run_kind_for_dataset_manifest(path):
+    """Only canonical schema-v2 datasets qualify a new trial as formal."""
+    if not path or not os.path.isfile(path):
+        return "exploratory"
+    try:
+        with open(path, encoding="utf-8") as stream:
+            validate_registry_dataset_manifest(json.load(stream))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return "exploratory"
+    return "formal"
 
 
 def _write_json(path, payload):
@@ -159,6 +189,11 @@ def build_trial_config(args, trial_dir):
     val_npz_files = sorted(glob.glob(os.path.join(args.val_dir, "*.npz")))
     return {
         "schema_version": 1,
+        "run": {
+            "kind": _run_kind_for_dataset_manifest(
+                getattr(args, "dataset_manifest", None)),
+            "source": _git_source_state(),
+        },
         "trial": {
             "id": os.path.basename(trial_dir),
             "created_at": _timestamp(),
@@ -315,6 +350,108 @@ def _require_files(trial_dir, paths):
             "试次归档缺少必要产物: " + ", ".join(missing))
 
 
+def build_formal_run_manifest(trial_dir, config, artifacts, paths=None):
+    """Build the lightweight v2 manifest for a completed formal trial."""
+    paths = paths or ProjectPaths.load()
+    trial = os.path.abspath(trial_dir)
+    dataset_manifest_path = config["data"].get("dataset_manifest")
+    if not dataset_manifest_path or not os.path.isfile(dataset_manifest_path):
+        raise FileNotFoundError(
+            f"正式试次缺少 dataset manifest: {dataset_manifest_path}")
+    with open(dataset_manifest_path, encoding="utf-8") as stream:
+        dataset_manifest = json.load(stream)
+    validate_registry_dataset_manifest(dataset_manifest)
+
+    source = config.get("run", {}).get("source")
+    if not isinstance(source, dict):
+        raise ValueError("正式试次缺少创建时 source 状态")
+
+    stages = []
+    expected_artifacts = []
+    for stage_name, phase_name in (
+            ("gt", "gt_transition"),
+            ("open_loop", "open_loop_transition")):
+        stage_config_path = os.path.join(
+            trial, artifacts["stages"][stage_name]["config"])
+        with open(stage_config_path, encoding="utf-8") as stream:
+            stage_config = json.load(stream)
+        phase = next(
+            item for item in stage_config["phases"]
+            if item["name"] == phase_name)
+        selection = phase.get("validation_selection")
+        validation = phase.get("validation")
+        if not isinstance(selection, dict) or not isinstance(validation, dict):
+            raise ValueError(f"{stage_name} 缺少 validation selection")
+        checkpoint = os.path.join(
+            trial, artifacts["stages"][stage_name]["best_checkpoint"])
+        checkpoint_uri = paths.artifact_uri(checkpoint)
+        stages.append({
+            "name": stage_name,
+            "selection": {
+                "metric": selection["metric"],
+                "mode": selection["mode"],
+                "dataset_role": selection["dataset_role"],
+                "best_value": selection["best_value"],
+                "best_epoch": selection["best_epoch"],
+                "checkpoint_uri": checkpoint_uri,
+            },
+        })
+        expected_artifacts.extend((
+            checkpoint_uri,
+            paths.artifact_uri(os.path.join(
+                trial, artifacts["stages"][stage_name]["best_quantitative"],
+                "summary.txt")),
+            paths.artifact_uri(os.path.join(
+                trial, artifacts["stages"][stage_name]["best_overlay"],
+                "summary.txt")),
+        ))
+
+    manifest = {
+        "schema_version": 2,
+        "kind": "training_run",
+        "run_id": config["trial"]["id"],
+        "study_id": f"real_pipeline.{config['trial']['sequence_tag']}",
+        "created_at": config["trial"]["created_at"],
+        "status": "complete",
+        "run_kind": "formal",
+        "dataset": {
+            "dataset_id": dataset_manifest["dataset_id"],
+            "manifest_uri": paths.artifact_uri(dataset_manifest_path),
+        },
+        "source": {
+            "git_commit": source["git_commit"],
+            "dirty": bool(source["dirty"]),
+        },
+        "commands_uri": paths.artifact_uri(os.path.join(trial, "commands.sh")),
+        "resolved_config_uri": paths.artifact_uri(
+            os.path.join(trial, "config.json")),
+        "seed": config["training"]["seed"],
+        "stages": stages,
+        "expected_artifacts": expected_artifacts,
+        "complete_marker_uri": paths.artifact_uri(os.path.join(trial, "COMPLETE")),
+    }
+    validate_run_manifest(manifest)
+    return manifest
+
+
+def write_formal_run_manifest(trial_dir, config, artifacts, paths=None):
+    """Write COMPLETE and run_manifest.json without overwriting either."""
+    manifest = build_formal_run_manifest(
+        trial_dir, config, artifacts, paths=paths)
+    trial = os.path.abspath(trial_dir)
+    complete = os.path.join(trial, "COMPLETE")
+    if os.path.exists(complete):
+        raise FileExistsError(f"拒绝覆盖完成标记: {complete}")
+    with open(complete, "x", encoding="utf-8") as stream:
+        stream.write(f"complete_at={_timestamp()}\n")
+    try:
+        return atomic_write_json(
+            Path(trial) / "run_manifest.json", manifest, overwrite=False)
+    except BaseException:
+        os.unlink(complete)
+        raise
+
+
 def finalize_trial(trial_dir):
     trial_dir = os.path.normpath(trial_dir)
     required = [
@@ -380,6 +517,8 @@ def finalize_trial(trial_dir):
     }
     artifacts_path = os.path.join(trial_dir, "artifacts.json")
     _write_json(artifacts_path, artifacts)
+    if config.get("run", {}).get("kind") == "formal":
+        write_formal_run_manifest(trial_dir, config, artifacts)
     return artifacts_path
 
 
