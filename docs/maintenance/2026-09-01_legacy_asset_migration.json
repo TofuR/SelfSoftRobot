@@ -1,0 +1,546 @@
+{
+  "created_at": "2026-09-01T08:29:06.758591+00:00",
+  "entries": [
+    {
+      "asset_id": "raw:seq_20260627_163921",
+      "identity": "seq_20260627_163921",
+      "kind": "raw",
+      "source_uri": "repo://real_capture/data/raw/seq_20260627_163921",
+      "status": "planned",
+      "target_uri": "artifact://data/raw/real/seq_20260627_163921"
+    },
+    {
+      "asset_id": "raw:seq_20260627_172916",
+      "identity": "seq_20260627_172916",
+      "kind": "raw",
+      "source_uri": "repo://real_capture/data/raw/seq_20260627_172916",
+      "status": "planned",
+      "target_uri": "artifact://data/raw/real/seq_20260627_172916"
+    },
+    {
+      "asset_id": "raw:seq_20260627_173114",
+      "identity": "seq_20260627_173114",
+      "kind": "raw",
+      "source_uri": "repo://real_capture/data/raw/seq_20260627_173114",
+      "status": "planned",
+      "target_uri": "artifact://data/raw/real/seq_20260627_173114"
+    },
+    {
+      "asset_id": "raw:seq_20260819_172644",
+      "identity": "seq_20260819_172644",
+      "kind": "raw",
+      "source_uri": "repo://real_capture/data/raw/seq_20260819_172644",
+      "status": "planned",
+      "target_uri": "artifact://data/raw/real/seq_20260819_172644"
+    },
+    {
+      "asset_id": "raw:seq_20260819_181044",
+      "identity": "seq_20260819_181044",
+      "kind": "raw",
+      "source_uri": "repo://real_capture/data/raw/seq_20260819_181044",
+      "status": "planned",
+      "target_uri": "artifact://data/raw/real/seq_20260819_181044"
+    },
+    {
+      "asset_id": "raw:seq_20260819_181548",
+      "identity": "seq_20260819_181548",
+      "kind": "raw",
+      "source_uri": "repo://real_capture/data/raw/seq_20260819_181548",
+      "status": "planned",
+      "target_uri": "artifact://data/raw/real/seq_20260819_181548"
+    },
+    {
+      "asset_id": "raw:seq_20260819_182253",
+      "identity": "seq_20260819_182253",
+      "kind": "raw",
+      "source_uri": "repo://real_capture/data/raw/seq_20260819_182253",
+      "status": "planned",
+      "target_uri": "artifact://data/raw/real/seq_20260819_182253"
+    },
+    {
+      "asset_id": "raw:seq_20260819_182519",
+      "identity": "seq_20260819_182519",
+      "kind": "raw",
+      "source_uri": "repo://real_capture/data/raw/seq_20260819_182519",
+      "status": "planned",
+      "target_uri": "artifact://data/raw/real/seq_20260819_182519"
+    },
+    {
+      "asset_id": "raw:seq_20260819_183351",
+      "identity": "seq_20260819_183351",
+      "kind": "raw",
+      "source_uri": "repo://real_capture/data/raw/seq_20260819_183351",
+      "status": "planned",
+      "target_uri": "artifact://data/raw/real/seq_20260819_183351"
+    },
+    {
+      "asset_id": "raw:seq_20260819_183526",
+      "identity": "seq_20260819_183526",
+      "kind": "raw",
+      "source_uri": "repo://real_capture/data/raw/seq_20260819_183526",
+      "status": "planned",
+      "target_uri": "artifact://data/raw/real/seq_20260819_183526"
+    },
+    {
+      "asset_id": "raw:seq_20260819_183547",
+      "identity": "seq_20260819_183547",
+      "kind": "raw",
+      "source_uri": "repo://real_capture/data/raw/seq_20260819_183547",
+      "status": "planned",
+      "target_uri": "artifact://data/raw/real/seq_20260819_183547"
+    },
+    {
+      "asset_id": "raw:seq_20260819_183740",
+      "identity": "seq_20260819_183740",
+      "kind": "raw",
+      "source_uri": "repo://real_capture/data/raw/seq_20260819_183740",
+      "status": "planned",
+      "target_uri": "artifact://data/raw/real/seq_20260819_183740"
+    },
+    {
+      "asset_id": "raw:seq_20260819_184036",
+      "identity": "seq_20260819_184036",
+      "kind": "raw",
+      "source_uri": "repo://real_capture/data/raw/seq_20260819_184036",
+      "status": "planned",
+      "target_uri": "artifact://data/raw/real/seq_20260819_184036"
+    },
+    {
+      "asset_id": "intermediate:seq_20260627_163921",
+      "identity": "seq_20260627_163921",
+      "kind": "intermediate",
+      "source_uri": "repo://real_capture/data/derived/seq_20260627_163921",
+      "status": "planned",
+      "target_uri": "artifact://data/intermediate/real/seq_20260627_163921/legacy-derived"
+    },
+    {
+      "asset_id": "intermediate:seq_20260819_172644",
+      "identity": "seq_20260819_172644",
+      "kind": "intermediate",
+      "source_uri": "repo://real_capture/data/derived/seq_20260819_172644",
+      "status": "planned",
+      "target_uri": "artifact://data/intermediate/real/seq_20260819_172644/legacy-derived"
+    },
+    {
+      "asset_id": "intermediate:seq_20260819_182253",
+      "identity": "seq_20260819_182253",
+      "kind": "intermediate",
+      "source_uri": "repo://real_capture/data/derived/seq_20260819_182253",
+      "status": "planned",
+      "target_uri": "artifact://data/intermediate/real/seq_20260819_182253/legacy-derived"
+    },
+    {
+      "asset_id": "intermediate:seq_20260819_182519",
+      "identity": "seq_20260819_182519",
+      "kind": "intermediate",
+      "source_uri": "repo://real_capture/data/derived/seq_20260819_182519",
+      "status": "planned",
+      "target_uri": "artifact://data/intermediate/real/seq_20260819_182519/legacy-derived"
+    },
+    {
+      "asset_id": "intermediate:obsolete",
+      "identity": "obsolete",
+      "kind": "intermediate",
+      "source_uri": "repo://sam2/masks/obsolete",
+      "status": "planned",
+      "target_uri": "artifact://data/intermediate/real/legacy-unassigned/sam2-obsolete"
+    },
+    {
+      "asset_id": "intermediate:seq_20260627_163921_full",
+      "identity": "seq_20260627_163921_full",
+      "kind": "intermediate",
+      "source_uri": "repo://sam2/masks/seq_20260627_163921_full",
+      "status": "planned",
+      "target_uri": "artifact://data/intermediate/real/seq_20260627_163921/sam2-video-v1"
+    },
+    {
+      "asset_id": "intermediate:seq_20260819_172644_full",
+      "identity": "seq_20260819_172644_full",
+      "kind": "intermediate",
+      "source_uri": "repo://sam2/masks/seq_20260819_172644_full",
+      "status": "planned",
+      "target_uri": "artifact://data/intermediate/real/seq_20260819_172644/sam2-video-v1"
+    },
+    {
+      "asset_id": "intermediate:seq_20260819_172644_full_roi200_48_320_backup",
+      "identity": "seq_20260819_172644_full_roi200_48_320_backup",
+      "kind": "intermediate",
+      "source_uri": "repo://sam2/masks/seq_20260819_172644_full_roi200_48_320_backup",
+      "status": "planned",
+      "target_uri": "artifact://data/intermediate/real/seq_20260819_172644/legacy-sam2-roi200_48_320_backup"
+    },
+    {
+      "asset_id": "intermediate:seq_20260819_182253_full",
+      "identity": "seq_20260819_182253_full",
+      "kind": "intermediate",
+      "source_uri": "repo://sam2/masks/seq_20260819_182253_full",
+      "status": "planned",
+      "target_uri": "artifact://data/intermediate/real/seq_20260819_182253/sam2-video-v1"
+    },
+    {
+      "asset_id": "intermediate:seq_20260819_182519_full",
+      "identity": "seq_20260819_182519_full",
+      "kind": "intermediate",
+      "source_uri": "repo://sam2/masks/seq_20260819_182519_full",
+      "status": "planned",
+      "target_uri": "artifact://data/intermediate/real/seq_20260819_182519/sam2-video-v1"
+    },
+    {
+      "asset_id": "processed-index:README.md",
+      "identity": "README.md",
+      "kind": "processed-index",
+      "source_uri": "repo://data/real_seq/README.md",
+      "status": "planned",
+      "target_uri": "artifact://data/processed/real/legacy_README.md"
+    },
+    {
+      "asset_id": "processed:seq_20260627_163921",
+      "identity": "seq_20260627_163921",
+      "kind": "processed",
+      "source_uri": "repo://data/real_seq/seq_20260627_163921",
+      "status": "planned",
+      "target_uri": "artifact://data/processed/real/seq_20260627_163921"
+    },
+    {
+      "asset_id": "processed:seq_20260627_163921_clean",
+      "identity": "seq_20260627_163921_clean",
+      "kind": "processed",
+      "source_uri": "repo://data/real_seq/seq_20260627_163921_clean",
+      "status": "planned",
+      "target_uri": "artifact://data/processed/real/seq_20260627_163921_clean"
+    },
+    {
+      "asset_id": "processed:seq_20260627_163921_n15",
+      "identity": "seq_20260627_163921_n15",
+      "kind": "processed",
+      "source_uri": "repo://data/real_seq/seq_20260627_163921_n15",
+      "status": "planned",
+      "target_uri": "artifact://data/processed/real/seq_20260627_163921_n15"
+    },
+    {
+      "asset_id": "processed:seq_20260627_163921_n15_clean",
+      "identity": "seq_20260627_163921_n15_clean",
+      "kind": "processed",
+      "source_uri": "repo://data/real_seq/seq_20260627_163921_n15_clean",
+      "status": "planned",
+      "target_uri": "artifact://data/processed/real/seq_20260627_163921_n15_clean"
+    },
+    {
+      "asset_id": "processed:seq_20260627_163921_n15_rep",
+      "identity": "seq_20260627_163921_n15_rep",
+      "kind": "processed",
+      "source_uri": "repo://data/real_seq/seq_20260627_163921_n15_rep",
+      "status": "planned",
+      "target_uri": "artifact://data/processed/real/seq_20260627_163921_n15_rep"
+    },
+    {
+      "asset_id": "processed:seq_20260627_163921_n15_rep_clean",
+      "identity": "seq_20260627_163921_n15_rep_clean",
+      "kind": "processed",
+      "source_uri": "repo://data/real_seq/seq_20260627_163921_n15_rep_clean",
+      "status": "planned",
+      "target_uri": "artifact://data/processed/real/seq_20260627_163921_n15_rep_clean"
+    },
+    {
+      "asset_id": "processed:seq_20260627_163921_n15_sam2",
+      "identity": "seq_20260627_163921_n15_sam2",
+      "kind": "processed",
+      "source_uri": "repo://data/real_seq/seq_20260627_163921_n15_sam2",
+      "status": "planned",
+      "target_uri": "artifact://data/processed/real/seq_20260627_163921_n15_sam2"
+    },
+    {
+      "asset_id": "processed:seq_20260627_163921_n15_sam2_clean",
+      "identity": "seq_20260627_163921_n15_sam2_clean",
+      "kind": "processed",
+      "source_uri": "repo://data/real_seq/seq_20260627_163921_n15_sam2_clean",
+      "status": "planned",
+      "target_uri": "artifact://data/processed/real/seq_20260627_163921_n15_sam2_clean"
+    },
+    {
+      "asset_id": "processed:seq_20260627_163921_rep",
+      "identity": "seq_20260627_163921_rep",
+      "kind": "processed",
+      "source_uri": "repo://data/real_seq/seq_20260627_163921_rep",
+      "status": "planned",
+      "target_uri": "artifact://data/processed/real/seq_20260627_163921_rep"
+    },
+    {
+      "asset_id": "processed:seq_20260627_163921_rep_clean",
+      "identity": "seq_20260627_163921_rep_clean",
+      "kind": "processed",
+      "source_uri": "repo://data/real_seq/seq_20260627_163921_rep_clean",
+      "status": "planned",
+      "target_uri": "artifact://data/processed/real/seq_20260627_163921_rep_clean"
+    },
+    {
+      "asset_id": "processed:seq_20260819_10hz_n15_sam2_robot_mm",
+      "identity": "seq_20260819_10hz_n15_sam2_robot_mm",
+      "kind": "processed",
+      "source_uri": "repo://data/real_seq/seq_20260819_10hz_n15_sam2_robot_mm",
+      "status": "planned",
+      "target_uri": "artifact://data/processed/real/seq_20260819_10hz_n15_sam2_robot_mm"
+    },
+    {
+      "asset_id": "processed:seq_20260819_172644_n15_sam2_robot_mm",
+      "identity": "seq_20260819_172644_n15_sam2_robot_mm",
+      "kind": "processed",
+      "source_uri": "repo://data/real_seq/seq_20260819_172644_n15_sam2_robot_mm",
+      "status": "planned",
+      "target_uri": "artifact://data/processed/real/seq_20260819_172644_n15_sam2_robot_mm"
+    },
+    {
+      "asset_id": "processed:seq_20260819_182253_n15_sam2_robot_mm",
+      "identity": "seq_20260819_182253_n15_sam2_robot_mm",
+      "kind": "processed",
+      "source_uri": "repo://data/real_seq/seq_20260819_182253_n15_sam2_robot_mm",
+      "status": "planned",
+      "target_uri": "artifact://data/processed/real/seq_20260819_182253_n15_sam2_robot_mm"
+    },
+    {
+      "asset_id": "processed:seq_20260819_182519_n15_sam2_robot_mm",
+      "identity": "seq_20260819_182519_n15_sam2_robot_mm",
+      "kind": "processed",
+      "source_uri": "repo://data/real_seq/seq_20260819_182519_n15_sam2_robot_mm",
+      "status": "planned",
+      "target_uri": "artifact://data/processed/real/seq_20260819_182519_n15_sam2_robot_mm"
+    },
+    {
+      "asset_id": "training:_archive",
+      "identity": "_archive",
+      "kind": "training",
+      "source_uri": "repo://train_log/_archive",
+      "status": "planned",
+      "target_uri": "artifact://runs/training/_archive"
+    },
+    {
+      "asset_id": "training:gt_transition",
+      "identity": "gt_transition",
+      "kind": "training",
+      "source_uri": "repo://train_log/gt_transition",
+      "status": "planned",
+      "target_uri": "artifact://runs/training/gt_transition"
+    },
+    {
+      "asset_id": "training:hereditary",
+      "identity": "hereditary",
+      "kind": "training",
+      "source_uri": "repo://train_log/hereditary",
+      "status": "planned",
+      "target_uri": "artifact://runs/training/hereditary"
+    },
+    {
+      "asset_id": "training:hereditary_console.log",
+      "identity": "hereditary_console.log",
+      "kind": "training",
+      "source_uri": "repo://train_log/hereditary_console.log",
+      "status": "planned",
+      "target_uri": "artifact://runs/training/hereditary_console.log"
+    },
+    {
+      "asset_id": "training:open_loop_transition",
+      "identity": "open_loop_transition",
+      "kind": "training",
+      "source_uri": "repo://train_log/open_loop_transition",
+      "status": "planned",
+      "target_uri": "artifact://runs/training/open_loop_transition"
+    },
+    {
+      "asset_id": "training:real_pipeline",
+      "identity": "real_pipeline",
+      "kind": "training",
+      "source_uri": "repo://train_log/real_pipeline",
+      "status": "planned",
+      "target_uri": "artifact://runs/training/real_pipeline"
+    },
+    {
+      "asset_id": "analysis:evaluation",
+      "identity": "evaluation",
+      "kind": "analysis",
+      "source_uri": "repo://output/evaluation",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/evaluation/legacy-import"
+    },
+    {
+      "asset_id": "analysis:exp5b_hysteresis_loop",
+      "identity": "exp5b_hysteresis_loop",
+      "kind": "analysis",
+      "source_uri": "repo://output/exp5b_hysteresis_loop",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/exp5b_hysteresis_loop/legacy-import"
+    },
+    {
+      "asset_id": "analysis:exp6_report",
+      "identity": "exp6_report",
+      "kind": "analysis",
+      "source_uri": "repo://output/exp6_report",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/exp6_report/legacy-import"
+    },
+    {
+      "asset_id": "analysis:exp7_3d_occupancy",
+      "identity": "exp7_3d_occupancy",
+      "kind": "analysis",
+      "source_uri": "repo://output/exp7_3d_occupancy",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/exp7_3d_occupancy/legacy-import"
+    },
+    {
+      "asset_id": "analysis:exp7_multiview_2d",
+      "identity": "exp7_multiview_2d",
+      "kind": "analysis",
+      "source_uri": "repo://output/exp7_multiview_2d",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/exp7_multiview_2d/legacy-import"
+    },
+    {
+      "asset_id": "analysis:hereditary_analysis",
+      "identity": "hereditary_analysis",
+      "kind": "analysis",
+      "source_uri": "repo://output/hereditary_analysis",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/hereditary_analysis/legacy-import"
+    },
+    {
+      "asset_id": "analysis:horizon",
+      "identity": "horizon",
+      "kind": "analysis",
+      "source_uri": "repo://output/horizon",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/horizon/legacy-import"
+    },
+    {
+      "asset_id": "analysis:inspect_real",
+      "identity": "inspect_real",
+      "kind": "analysis",
+      "source_uri": "repo://output/inspect_real",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/inspect_real/legacy-import"
+    },
+    {
+      "asset_id": "analysis:online_segmentation_benchmark",
+      "identity": "online_segmentation_benchmark",
+      "kind": "analysis",
+      "source_uri": "repo://output/online_segmentation_benchmark",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/online_segmentation_benchmark/legacy-import"
+    },
+    {
+      "asset_id": "analysis:openloop_window_compare",
+      "identity": "openloop_window_compare",
+      "kind": "analysis",
+      "source_uri": "repo://output/openloop_window_compare",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/openloop_window_compare/legacy-import"
+    },
+    {
+      "asset_id": "analysis:perception_probe",
+      "identity": "perception_probe",
+      "kind": "analysis",
+      "source_uri": "repo://output/perception_probe",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/perception_probe/legacy-import"
+    },
+    {
+      "asset_id": "analysis:raw_data_overview",
+      "identity": "raw_data_overview",
+      "kind": "analysis",
+      "source_uri": "repo://output/raw_data_overview",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/raw_data_overview/legacy-import"
+    },
+    {
+      "asset_id": "analysis:real_control_demo",
+      "identity": "real_control_demo",
+      "kind": "analysis",
+      "source_uri": "repo://output/real_control_demo",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/real_control_demo/legacy-import"
+    },
+    {
+      "asset_id": "analysis:real_overlay",
+      "identity": "real_overlay",
+      "kind": "analysis",
+      "source_uri": "repo://output/real_overlay",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/real_overlay/legacy-import"
+    },
+    {
+      "asset_id": "analysis:real_quant",
+      "identity": "real_quant",
+      "kind": "analysis",
+      "source_uri": "repo://output/real_quant",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/real_quant/legacy-import"
+    },
+    {
+      "asset_id": "analysis:skeleton_method_cmp",
+      "identity": "skeleton_method_cmp",
+      "kind": "analysis",
+      "source_uri": "repo://output/skeleton_method_cmp",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/skeleton_method_cmp/legacy-import"
+    },
+    {
+      "asset_id": "analysis:skeleton_method_cmp_sam2",
+      "identity": "skeleton_method_cmp_sam2",
+      "kind": "analysis",
+      "source_uri": "repo://output/skeleton_method_cmp_sam2",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/skeleton_method_cmp_sam2/legacy-import"
+    },
+    {
+      "asset_id": "analysis:skeleton_to_shape",
+      "identity": "skeleton_to_shape",
+      "kind": "analysis",
+      "source_uri": "repo://output/skeleton_to_shape",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/skeleton_to_shape/legacy-import"
+    },
+    {
+      "asset_id": "analysis:test_vis",
+      "identity": "test_vis",
+      "kind": "analysis",
+      "source_uri": "repo://output/test_vis",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/test_vis/legacy-import"
+    },
+    {
+      "asset_id": "analysis:visualize",
+      "identity": "visualize",
+      "kind": "analysis",
+      "source_uri": "repo://output/visualize",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/visualize/legacy-import"
+    },
+    {
+      "asset_id": "analysis:viz",
+      "identity": "viz",
+      "kind": "analysis",
+      "source_uri": "repo://output/viz",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/viz/legacy-import"
+    },
+    {
+      "asset_id": "analysis:window_ablation",
+      "identity": "window_ablation",
+      "kind": "analysis",
+      "source_uri": "repo://output/window_ablation",
+      "status": "planned",
+      "target_uri": "artifact://runs/analysis/window_ablation/legacy-import"
+    },
+    {
+      "asset_id": "pretrained-model:sam2",
+      "identity": "sam2",
+      "kind": "pretrained-model",
+      "source_uri": "repo://sam2/checkpoints",
+      "status": "planned",
+      "target_uri": "artifact://models/pretrained/sam2"
+    }
+  ],
+  "git_commit": "6824504216d7d2cd9441430722790494280177e2",
+  "kind": "legacy_asset_migration",
+  "method": "same_filesystem_atomic_rename_with_relative_compat_symlink",
+  "schema_version": 2,
+  "workspace_uri": "artifact://"
+}
