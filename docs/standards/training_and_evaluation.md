@@ -79,8 +79,8 @@ sources:
 
 公共 engine 现支持显式 `validation_data_dirs + validation_adapters`：声明 validation 的 phase 缺少任一输入会拒绝训练；adapter 返回合同 metric 后，engine 写 `validation_metrics.jsonl`、生成 `best_eval_model.pt`、以声明 metric 驱动 scheduler、按验证次数早停、保留 `final_model.pt`，并按配置恢复 validation-best 供后续 phase 使用。未声明 validation 的历史训练仍按训练 loss 生成 `best_model.pt`。
 
-状态转移主线已有显式 `transition_validation_adapter`，`train_transition.py --val_dir ...` 才会启用；未传 `--val_dir` 时不改变历史行为。它与 `eval_real_quant.py` 共用逐帧 GTObserved/OpenLoop rollout，并以数据声明的原生单位生成 `validation.node_mean_<unit>`。2026-09-01 的 1 epoch GT smoke 在 20 个 val 帧上得到 `1.176337 mm`，随后由原评价 CLI 生成 `per_frame.csv` 并按 watcher 口径聚合为 `1.176450 mm`（差值 `0.000113 mm`，来自 CSV 小数格式化）。该 smoke 只证明接线和指标口径，不是模型效果结论。
+状态转移主线已有显式 `transition_validation_adapter`，`train_transition.py --val_dir ...` 才会启用；未传 `--val_dir` 时不改变历史行为。它与 `eval_real_quant.py` 共用逐帧 GTObserved/OpenLoop rollout，并以数据声明的原生单位生成 `validation.node_mean_<unit>`。2026-09-01 的 GT 1 epoch 及 OpenLoop 3 epoch smoke 均与旧 CLI/watcher 聚合得到相同 checkpoint 排序；OpenLoop 两条路径均选择 epoch 2，最大数值差 `0.000116 mm`，来自 CSV 小数格式化。详见 [`../maintenance/2026-09-01_transition_validation_equivalence.md`](../maintenance/2026-09-01_transition_validation_equivalence.md)。这些 smoke 只证明接线和指标口径，不是模型效果结论。
 
 训练内旧 `transition_metrics` 的 rollout 诊断现按 NPZ `state_length_unit` 显式把 `m/mm/px` 转为米后再汇总毫米指标，避免 robot-mm 数据被重复乘 1000。归一化空间的 rollout/onestep 漂移比不受此修正影响。
 
-完整真实 GT/OpenLoop 流水线仍使用验证 watcher。还需完成多 epoch GT/OpenLoop checkpoint 排序等价测试，才能让流水线切换到 engine adapter；在此之前不得删除 watcher。
+GT/OpenLoop 排序等价门槛已经满足。下一步是让完整真实流水线切换到 engine adapter，并确保 watcher 不与 engine 并行写同一 `best_eval_model.pt`；watcher 文件须在切换验证通过后另行审查，不能随调用切换一起删除。
