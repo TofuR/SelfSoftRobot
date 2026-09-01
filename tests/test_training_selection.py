@@ -1,9 +1,12 @@
+import json
+from pathlib import Path
+import tempfile
 import unittest
 
 import torch
 
 from src.training.selection import SelectionState
-from src.training.spec import PhaseSpec, ValidationSpec
+from src.training.spec import PhaseSpec, TrainingSpec, ValidationSpec
 from src.training.trainer_unified import UnifiedTrainer
 
 
@@ -92,6 +95,113 @@ class TrainingSelectionTest(unittest.TestCase):
         self.assertEqual(recorded["lr_scheduler_metric"],
                          recorded["selection_metric"])
         self.assertEqual(recorded["early_stopping_patience_evaluations"], 4)
+
+    def _tiny_trainer(self, validation):
+        class TinyModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.tensor([1.0]))
+                self.training_spec = TrainingSpec(phases=[PhaseSpec(
+                    "tiny", supervision_mode="skeleton",
+                    validation=validation)])
+
+            def forward(self, value):
+                return value * self.weight
+
+        trainer = UnifiedTrainer(
+            TinyModel(), config={
+                "optimization": {
+                    "lr": 0.1,
+                    "batch_size": 1,
+                    "num_workers": 0,
+                    "n_epochs": 10,
+                    "scheduler_patience": 2,
+                    "seed": 42,
+                },
+                "logging": {"checkpoint_interval": 0},
+                "evaluation": {"eval_interval": 0},
+            }, model_tag="tiny")
+        trainer._create_loader = lambda *_: ([{}], object())
+        trainer._compute_losses = lambda *_: {
+            "total": trainer.model.weight.square().sum(),
+        }
+        trainer._write_model_card = lambda *_: None
+        return trainer
+
+    def test_declared_validation_fails_closed_without_val_or_adapter(self):
+        trainer = self._tiny_trainer(ValidationSpec(
+            selection_metric="validation.score"))
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(ValueError, "val 数据目录"):
+                trainer.train(
+                    {"sequence": root}, exp_dir=str(Path(root) / "run"))
+            val = Path(root) / "val"
+            val.mkdir()
+            trainer = self._tiny_trainer(ValidationSpec(
+                selection_metric="validation.score"))
+            with self.assertRaisesRegex(ValueError, "evaluator adapter"):
+                trainer.train(
+                    {"sequence": root}, exp_dir=str(Path(root) / "run2"),
+                    validation_data_dirs={"tiny": str(val)})
+
+    def test_engine_selects_validation_checkpoint_stops_and_restores_best(self):
+        validation = ValidationSpec(
+            selection_metric="validation.score",
+            early_stopping_patience_evaluations=2,
+        )
+        trainer = self._tiny_trainer(validation)
+        scores = iter((3.0, 2.0, 2.1, 2.2))
+        epochs = []
+
+        def validator(**kwargs):
+            epochs.append(kwargs["epoch"])
+            self.assertFalse(kwargs["model"].training)
+            return {"validation.score": next(scores)}
+
+        with tempfile.TemporaryDirectory() as root:
+            run = Path(root) / "run"
+            val = Path(root) / "val"
+            val.mkdir()
+            trainer.train(
+                {"sequence": root}, exp_dir=str(run),
+                validation_data_dirs={"tiny": str(val)},
+                validation_adapters={"tiny": validator},
+            )
+
+            phase = run / "phase_tiny"
+            best = torch.load(
+                phase / "model/best_eval_model.pt",
+                map_location="cpu", weights_only=True)
+            final = torch.load(
+                phase / "model/final_model.pt",
+                map_location="cpu", weights_only=True)
+            self.assertEqual(epochs, [1, 2, 3, 4])
+            self.assertTrue(torch.equal(
+                trainer.model.state_dict()["weight"], best["weight"]))
+            self.assertFalse(torch.equal(best["weight"], final["weight"]))
+            records = [json.loads(line) for line in
+                       (phase / "validation_metrics.jsonl").read_text().splitlines()]
+            self.assertEqual(len(records), 4)
+            resolved = json.loads((run / "config.json").read_text())
+            selection = resolved["phases"][0]["validation_selection"]
+            self.assertEqual(selection["best_epoch"], 2)
+            self.assertTrue(selection["stopped_early"])
+            self.assertTrue((phase / "checkpoints/model_epoch_0004.pt").is_file())
+
+    def test_phase_without_validation_keeps_training_loss_behavior(self):
+        trainer = self._tiny_trainer(None)
+        with tempfile.TemporaryDirectory() as root:
+            run = Path(root) / "run"
+            trainer.train(
+                {"sequence": root}, exp_dir=str(run),
+                n_epochs_per_phase={"tiny": 2})
+            model_dir = run / "phase_tiny/model"
+            self.assertTrue((model_dir / "best_model.pt").is_file())
+            self.assertTrue((model_dir / "final_model.pt").is_file())
+            self.assertFalse((model_dir / "best_eval_model.pt").exists())
+            resolved = json.loads((run / "config.json").read_text())
+            self.assertNotIn(
+                "validation_selection", resolved["phases"][0])
 
 
 if __name__ == "__main__":

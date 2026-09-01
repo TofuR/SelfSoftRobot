@@ -77,4 +77,6 @@ sources:
 
 `PhaseSpec` 现可选声明 `ValidationSpec`，统一记录 val role、选择 metric/方向、验证频率、`min_delta`、warmup、early-stop patience、scheduler metric 和 best 恢复策略。公共 `SelectionState` 已实现按“验证次数”计数的选择/早停状态，并支持 OpenLoop teacher-forcing 退火门控；未声明 validation 的历史模型行为不变。
 
-当前 engine 仍未调用模型专属 validator，也未用 `SelectionState` 驱动 checkpoint、scheduler 和停止循环；验证 watcher 仍是完整真实流水线的迁移期实现。在 evaluator adapter 和 engine 集成完成前，不得删除 watcher 的选择与归档逻辑。
+公共 engine 现支持显式 `validation_data_dirs + validation_adapters`：声明 validation 的 phase 缺少任一输入会拒绝训练；adapter 返回合同 metric 后，engine 写 `validation_metrics.jsonl`、生成 `best_eval_model.pt`、以声明 metric 驱动 scheduler、按验证次数早停、保留 `final_model.pt`，并按配置恢复 validation-best 供后续 phase 使用。未声明 validation 的历史训练仍按训练 loss 生成 `best_model.pt`。
+
+当前各模型尚未默认绑定自己的 adapter，完整真实 GT/OpenLoop 流水线仍使用验证 watcher。必须先为主线接入 rollout validator，并对比 watcher 与 engine 的选择结果后，才能删除 watcher。
