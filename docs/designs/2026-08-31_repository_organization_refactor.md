@@ -543,7 +543,7 @@ docs/
 | `papers/*_draft.md` | 明确并入 active paper 或标为 superseded/archive |
 | `directions/` | 移到 `research/directions/`，overview 标记 active/parked/rejected |
 | `superpowers/specs/plans` | 已落地者转 ADR/归档，未落地者进入 designs，不以工具名分类 |
-| `docs/ref` | 移出 docs；在 `external/manifest.toml` 记录来源、commit、license |
+| `docs/ref` | 2026-09-01 决定保留为本机 ignored 参考区；根 README 记录硬件用途及嵌套项目来源/commit/license 边界 |
 | HTML 报告和大型图 | 正式发布放 reports，运行生成物留 workspace run |
 
 ### 7.3 文档 front matter

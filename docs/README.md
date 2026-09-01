@@ -95,7 +95,7 @@ sources: []
 |---|---|
 | [`encoders.md`](encoders.md) | 时序编码器(EMA/Fractional/Gamma/GRU/Transformer/TCN) |
 | `superpowers/` | 设计规格与计划(specs/ + plans/, 工具生成) |
-| `ref/` | 外部参考(SelfSimRobot 旧刚臂代码 / TwinCAT Project8 / Main UI-plc / visual-selfmodeling) |
+| [`ref/README.md`](ref/README.md) | 本机硬件实验资料与外部参考项目边界；内容默认 ignored，不是当前项目事实来源 |
 
 ## 归档 (`archived/`)
 被合并或取代的旧文档(完整内容在 git 历史 + 新文档里):

@@ -79,7 +79,17 @@ workspace/
 Python 可执行字符串和 shell 非注释行；现存兼容读取使用非递增 baseline，迁移一个
 consumer 就同步降低对应计数，禁止用扩大 baseline 的方式接纳新业务写入。
 
-## 6. 变更验收
+## 6. 第三方源码与本地参考资产
+
+- `sam2/sam2_src/` 是带独立 `.git`、remote 和许可证的上游 SAM2 checkout；
+  外层仓库不拥有、不逐文件跟踪它，项目集成边界见 [`../../sam2/README.md`](../../sam2/README.md)；
+- `docs/ref/` 保存硬件实验资料和参考项目，内容默认 ignored，边界见
+  [`../ref/README.md`](../ref/README.md)；
+- 第三方或参考代码不能被当作当前项目实现、配置或科学结论的权威来源；
+- 更新嵌套仓库要记录 upstream remote、commit、license 和本地 patch 状态；
+- 不因目录体积大而删除硬件资料或参考仓库，清理需逐项确认用途与恢复方式。
+
+## 7. 变更验收
 
 涉及路径或产物的提交至少验证：
 
