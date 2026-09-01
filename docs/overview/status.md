@@ -20,10 +20,10 @@ sources:
 
 - 部署研究主线是少观测/有遮挡条件下的 windowed OpenLoop；GTObserved 用于上界、诊断和验证，不作为部署主张。
 - HereditaryOperatorModel v2 已实现，用显式 PI/Maxwell 状态研究迟滞份额和可解释性；它是灰盒运动学模型，不等同于材料谱或 Cosserat 材料模型。
-- 仓库分阶段整理已完成历史资产搬迁：67 项 raw/intermediate/processed/training/analysis/model 资产统一位于 workspace；GT/OpenLoop 2+2 epoch 主线短跑及评价通过后，旧兼容入口与空根已移除。训练验证现由公共 engine 选择 `best_eval_model.pt`，切换后的 GT 1 epoch + OpenLoop 2 epoch 完整流水线短跑已通过。
+- 仓库分阶段整理已完成历史资产搬迁：67 项 raw/intermediate/processed/training/analysis/model 资产统一位于 workspace；GT/OpenLoop 2+2 epoch 主线短跑及评价通过后，旧兼容入口与空根已移除。训练验证现由公共 engine 选择 `best_eval_model.pt`；10 Hz canonical release 的首个 formal run 已完成独立 frozen test 和 offline fixture 验收。
 - 数据划分、checkpoint 语义、早停、试次归档和证据表述以 [`../standards/`](../standards/) 为权威规则。
 - `real_capture` 与 `real_validation` 继续分离；NDI 只作独立 endpoint 评价，不能成为模型或 planner 输入。
-- 尚未完成：正式 run manifest、15 条历史 dataset 引用审计、缓存与废弃工作树分组清理、文档逐份归档。
+- 尚未完成：15 条历史 dataset 引用审计、缓存与废弃工作树分组清理、文档逐份归档。
 
 下文保留仿真与早期实物路线的历史基线；其中带“当前默认”“最好”的旧表述若与本节或具体 run 记录冲突，以本节和带日期证据为准。
 
