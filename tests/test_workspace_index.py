@@ -7,6 +7,7 @@ import unittest
 from src.registry.paths import ProjectPaths
 from src.registry.workspace_index import (
     WorkspaceIndexBuilder,
+    write_missing_legacy_dataset_manifests,
     write_mainline_legacy_manifests,
     write_workspace_index,
 )
@@ -29,7 +30,10 @@ class WorkspaceIndexTest(unittest.TestCase):
             "dataset_id": "dataset_a",
             "source": {"sequence": "seq_a"},
         }), encoding="utf-8")
-        self.paths.processed_dataset("real", "dataset_without_manifest").mkdir()
+        missing = self.paths.processed_dataset("real", "dataset_without_manifest")
+        (missing / "train").mkdir(parents=True)
+        (missing / "train/seq_20260819_182253_train.npz").write_bytes(
+            b"legacy fixture")
 
         self.run = (self.paths.runs_root / "training/real_pipeline/seq_a/"
                     "trial_20260901_000")
@@ -90,6 +94,26 @@ class WorkspaceIndexTest(unittest.TestCase):
         self.assertEqual(manifest["stages"][0]["selection_basis"], "validation")
         self.assertEqual(
             write_mainline_legacy_manifests(self.paths, self.index), [])
+
+    def test_backfills_observational_dataset_manifest_without_payload_hash(self):
+        written = write_missing_legacy_dataset_manifests(self.paths, self.index)
+        self.assertEqual(len(written), 1)
+        manifest = json.loads(written[0].read_text())
+        self.assertEqual(manifest["kind"], "legacy_processed_dataset")
+        self.assertEqual(
+            manifest["source_sequence_ids"], ["seq_20260819_182253"])
+        self.assertFalse(manifest["provenance"]["hash_payload_files"])
+        self.assertFalse(manifest["provenance"]["open_payload_files"])
+        self.assertNotIn("sha256", json.dumps(manifest))
+
+        refreshed = WorkspaceIndexBuilder(self.paths).build()
+        dataset = next(item for item in refreshed["datasets"]
+                       if item["dataset_id"] == "dataset_without_manifest")
+        self.assertEqual(dataset["manifest_contract"], "historical")
+        self.assertTrue(dataset["manifest_uri"].endswith(
+            "/legacy_dataset_manifest.json"))
+        self.assertEqual(
+            write_missing_legacy_dataset_manifests(self.paths, refreshed), [])
 
 
 if __name__ == "__main__":

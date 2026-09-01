@@ -26,6 +26,7 @@ from .real_assets import (
 )
 from .workspace_index import (
     WorkspaceIndexBuilder,
+    write_missing_legacy_dataset_manifests,
     write_mainline_legacy_manifests,
     write_workspace_index,
 )
@@ -54,6 +55,7 @@ __all__ = [
     "sha256_file",
     "validate_dataset_manifest",
     "validate_run_manifest",
+    "write_missing_legacy_dataset_manifests",
     "write_mainline_legacy_manifests",
     "write_workspace_index",
 ]

@@ -22,6 +22,7 @@ _DATASET_PATH_PATTERNS = (
     re.compile(r"(?:^|/)data/real_seq/([^/]+)"),
     re.compile(r"(?:^|/)data/processed/real/([^/]+)"),
 )
+_SEQUENCE_FILENAME = re.compile(r"^(seq_\d{8}_\d{6})(?:_|\.)")
 
 
 def _read_json(path: Path) -> tuple[Optional[dict], Optional[str]]:
@@ -151,7 +152,9 @@ class WorkspaceIndexBuilder:
                 (item for item in root.iterdir() if item.is_dir()),
                 key=lambda item: item.name):
             manifest_path = next(
-                (dataset / name for name in ("manifest.json", "dataset_manifest.json")
+                (dataset / name for name in (
+                    "manifest.json", "dataset_manifest.json",
+                    "legacy_dataset_manifest.json")
                  if (dataset / name).is_file()),
                 dataset / "dataset_manifest.json",
             )
@@ -256,6 +259,65 @@ def _legacy_stage_records(paths: ProjectPaths, run: Path, config: dict) -> list[
                 else "training_loss_or_unknown"),
         })
     return result
+
+
+def _observed_sequence_ids(dataset: Path) -> list[str]:
+    result = set()
+    for role in ("train", "val", "test"):
+        split = dataset / role
+        if not split.is_dir():
+            continue
+        for path in split.glob("*.npz"):
+            match = _SEQUENCE_FILENAME.match(path.name)
+            if match:
+                result.add(match.group(1))
+    return sorted(result)
+
+
+def write_missing_legacy_dataset_manifests(
+    paths: ProjectPaths,
+    index: Mapping[str, Any],
+) -> list[Path]:
+    """Describe manifest-less datasets from filenames without reading payloads."""
+    written = []
+    for item in index.get("datasets", []):
+        if item.get("manifest_uri") is not None:
+            continue
+        dataset = paths.resolve_artifact_uri(item["uri"])
+        target = dataset / "legacy_dataset_manifest.json"
+        if target.exists():
+            continue
+        sequence_ids = _observed_sequence_ids(dataset)
+        splits = {
+            role: [
+                {"uri": paths.artifact_uri(path)}
+                for path in sorted((dataset / role).glob("*.npz"))
+            ] if (dataset / role).is_dir() else []
+            for role in ("train", "val", "test")
+        }
+        readme = dataset / "README.md"
+        value = {
+            "schema_version": 1,
+            "kind": "legacy_processed_dataset",
+            "dataset_id": item["dataset_id"],
+            "provenance": {
+                "mode": "observed_existing_files",
+                "hash_payload_files": False,
+                "open_payload_files": False,
+            },
+            "source_sequence_ids": sequence_ids,
+            "lineage_basis": "npz_filename" if sequence_ids else "unknown",
+            "splits": splits,
+            "evidence": {
+                "readme_uri": _artifact_uri_if_file(paths, readme),
+            },
+            "lifecycle": {
+                "training_ready": "unknown",
+                "immutable_contract": "unverified",
+            },
+        }
+        written.append(atomic_write_json(target, value, overwrite=False))
+    return written
 
 
 def write_mainline_legacy_manifests(

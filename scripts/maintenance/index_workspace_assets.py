@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.registry.paths import ProjectPaths  # noqa: E402
 from src.registry.workspace_index import (  # noqa: E402
     WorkspaceIndexBuilder,
+    write_missing_legacy_dataset_manifests,
     write_mainline_legacy_manifests,
     write_workspace_index,
 )
@@ -33,6 +34,9 @@ def build_parser():
     parser.add_argument(
         "--backfill-mainline-manifests", action="store_true",
         help="为已有 real_pipeline 试次补非覆盖 legacy_run_manifest.json")
+    parser.add_argument(
+        "--backfill-dataset-manifests", action="store_true",
+        help="为缺清单的 processed dataset 补观察型 legacy manifest")
     return parser
 
 
@@ -50,8 +54,11 @@ def main(argv=None):
         return 0
     paths.create_workspace_layout()
     written = []
+    if args.backfill_dataset_manifests:
+        written.extend(write_missing_legacy_dataset_manifests(paths, index))
     if args.backfill_mainline_manifests:
-        written = write_mainline_legacy_manifests(paths, index)
+        written.extend(write_mainline_legacy_manifests(paths, index))
+    if args.backfill_dataset_manifests or args.backfill_mainline_manifests:
         index = WorkspaceIndexBuilder(paths).build()
     target = write_workspace_index(paths, index, target=args.out)
     print(target)
