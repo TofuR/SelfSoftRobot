@@ -10,6 +10,7 @@ import torch
 from scripts.evaluation.watch_best_checkpoint import validation_node_mean
 from scripts.training.train_transition import configure_transition_validation
 from src.evaluation.real_transition_validation import evaluate_native_node_metrics
+from src.evaluation.transition_metrics import evaluate_transition_rollout
 from src.training.spec import PhaseSpec
 from src.training.validation_adapters import transition_validation_adapter
 
@@ -38,9 +39,10 @@ class TransitionValidationAdapterTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.data_dir = Path(self.temp.name) / "val"
         self.data_dir.mkdir()
-        positions = np.zeros((6, 3, 2), np.float32)
+        positions = np.zeros((6, 3, 3), np.float32)
         positions[:, 0, 0] = np.arange(6)
         positions[:, 0, 1] = 2 * np.arange(6)
+        positions[:, 0, 2] = 3 * np.arange(6)
         np.savez(
             self.data_dir / "seq_20260901_000000_val.npz",
             actions=np.zeros((6, 1), np.float32),
@@ -78,7 +80,7 @@ class TransitionValidationAdapterTest(unittest.TestCase):
         self.assertEqual(unit, "mm")
         self.assertAlmostEqual(
             metrics["validation.node_mean_mm"], watcher_score)
-        self.assertAlmostEqual(watcher_score, 1.25)
+        self.assertAlmostEqual(watcher_score, 5.0 / 3.0)
 
     def test_adapter_uses_openloop_semantics_from_phase_name(self):
         phase = PhaseSpec("open_loop_transition", episode_len=2)
@@ -126,6 +128,26 @@ class TransitionValidationAdapterTest(unittest.TestCase):
         self.assertIsNone(data_dirs)
         self.assertIsNone(adapters)
         self.assertIsNone(phase.validation)
+
+    def test_rollout_diagnostic_does_not_scale_mm_state_twice(self):
+        result = evaluate_transition_rollout(
+            self.model,
+            self.data_dir,
+            self.config,
+            torch.device("cpu"),
+            n_seqs=1,
+            windows_per_seq=1,
+            K=2,
+        )
+
+        self.assertAlmostEqual(
+            result["summary"]["mean_node_mm"], 3.0, places=5)
+        self.assertEqual(
+            result["summary"]["physical_scales"], [{
+                "state_unit": "mm",
+                "source": "state_length_unit:mm",
+                "state_to_m": 0.001,
+            }])
 
 
 if __name__ == "__main__":
