@@ -14,6 +14,7 @@ from .manifests import (
 from .paths import LegacyRoots, ProjectPaths
 from .real_assets import (
     LEGACY_DERIVED_RECIPE,
+    LEGACY_MASK_REPAIR_RECIPE,
     SAM2_VIDEO_RECIPE,
     canonical_intermediate,
     canonical_output,
@@ -30,6 +31,7 @@ __all__ = [
     "DatasetSelector",
     "LegacyRoots",
     "LEGACY_DERIVED_RECIPE",
+    "LEGACY_MASK_REPAIR_RECIPE",
     "ManifestError",
     "ManifestStore",
     "ProjectPaths",

@@ -30,6 +30,12 @@ import numpy as np
 from scipy.ndimage import binary_fill_holes
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, PROJECT_ROOT)
+
+from src.registry import (  # noqa: E402
+    ProjectPaths, canonical_intermediate, canonical_output,
+    resolve_candidate_masks,
+)
 
 
 def load_masks(masks_dir):
@@ -347,6 +353,9 @@ def main(argv=None):
     pa.add_argument("--seq", required=True, help="序列名(derived/<seq>/masks)")
     pa.add_argument("--masks-dir", default=None, help="mask 目录(默认 derived/<seq>/masks)")
     pa.add_argument("--out-dir", default=None, help="输出(默认 derived/<seq>/masks_repaired)")
+    pa.add_argument("--workspace-root", default=None)
+    pa.add_argument("--overwrite", action="store_true",
+                    help="显式允许重建已有 recipe；默认拒绝覆盖 PNG")
     pa.add_argument("--joint-row", type=int, default=None, help="手动指定关节行(默认自动检测)")
     pa.add_argument("--allow-legacy-static-proximal", action="store_true",
                     help="确认输入是近端段静止的旧实验")
@@ -360,10 +369,14 @@ def main(argv=None):
         pa.error("这是静态近端段LEGACY脚本；旧实验必须显式传 "
                  "--allow-legacy-static-proximal，新流程请用prepare_sam2_anchors.py")
 
-    masks_dir = args.masks_dir or os.path.join(
-        PROJECT_ROOT, "real_capture", "data", "derived", args.seq, "masks")
-    out_dir = args.out_dir or os.path.join(
-        PROJECT_ROOT, "real_capture", "data", "derived", args.seq, "masks_repaired")
+    paths = ProjectPaths.load(workspace_root=args.workspace_root)
+    masks_dir = args.masks_dir or str(resolve_candidate_masks(paths, args.seq))
+    out_dir = str(canonical_output(paths, args.out_dir or
+                  canonical_intermediate(
+                      paths, args.seq, "legacy-mask-repair-v1")))
+    if glob.glob(os.path.join(out_dir, "*.png")) and not args.overwrite:
+        raise FileExistsError(
+            f"拒绝覆盖已有 repaired masks: {out_dir}; 重建需显式 --overwrite")
     masks, fs = load_masks(masks_dir)
     if args.limit:
         masks = masks[:args.limit]

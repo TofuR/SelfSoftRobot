@@ -10,8 +10,18 @@ import csv
 import glob
 import json
 import os
+import sys
 
 import numpy as np
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))
+sys.path.insert(0, PROJECT_ROOT)
+
+from src.registry import (  # noqa: E402
+    ProjectPaths, canonical_intermediate, canonical_output,
+    resolve_raw_sequence,
+)
 
 
 def read_csv(path):
@@ -57,18 +67,19 @@ def build_parser():
     parser.add_argument("--seq", required=True)
     parser.add_argument("--camera", default="cam0")
     parser.add_argument("--out", default=None,
-                        help="默认 real_capture/data/derived/<seq>/qc_capture")
+                        help="显式输出目录；必须位于 workspace")
+    parser.add_argument("--workspace-root", default=None)
     return parser
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    seq = os.path.abspath(args.seq.rstrip("/"))
+    paths = ProjectPaths.load(workspace_root=args.workspace_root)
+    seq = str(resolve_raw_sequence(paths, args.seq, camera=args.camera))
     seq_name = os.path.basename(seq)
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))))
-    out = args.out or os.path.join(project_root, "real_capture", "data",
-                                   "derived", seq_name, "qc_capture")
+    out = str(canonical_output(paths, args.out or (
+        canonical_intermediate(paths, seq_name, "capture-audit-v1") /
+        "qc_capture")))
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(seq, "meta.json"), encoding="utf-8") as stream:
         meta = json.load(stream)

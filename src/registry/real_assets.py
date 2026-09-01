@@ -9,6 +9,7 @@ from .paths import ProjectPaths
 
 
 LEGACY_DERIVED_RECIPE = "legacy-derived"
+LEGACY_MASK_REPAIR_RECIPE = "legacy-mask-repair-v1"
 SAM2_VIDEO_RECIPE = "sam2-video-v1"
 
 
@@ -98,10 +99,12 @@ def resolve_candidate_masks(paths: ProjectPaths, sequence_id: str) -> Path:
 
 
 def resolve_repaired_masks(paths: ProjectPaths, sequence_id: str) -> Path:
-    canonical = [
+    canonical_sequence = (
+        paths.data_root / "intermediate" / "real" / sequence_id)
+    canonical = [canonical_sequence / LEGACY_MASK_REPAIR_RECIPE]
+    canonical.extend(
         recipe / "masks_repaired"
-        for recipe in _canonical_recipe_roots(paths, sequence_id)
-    ]
+        for recipe in _canonical_recipe_roots(paths, sequence_id))
     legacy = [
         root / sequence_id / "masks_repaired"
         for root in paths.legacy.roots_for("intermediate")

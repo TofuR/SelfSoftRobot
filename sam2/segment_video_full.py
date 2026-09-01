@@ -29,6 +29,7 @@ import csv
 import glob
 import json
 import os
+from pathlib import Path
 import shutil
 import sys
 import traceback
@@ -43,6 +44,14 @@ import cv2
 import numpy as np
 
 PROJECT_ROOT = os.path.dirname(HERE)
+sys.path.insert(0, PROJECT_ROOT)
+
+from src.registry import (  # noqa: E402
+    ProjectPaths, SAM2_VIDEO_RECIPE, canonical_intermediate,
+    canonical_output, resolve_candidate_masks, resolve_raw_sequence,
+    resolve_repaired_masks,
+)
+
 CKPT = os.path.join(HERE, "checkpoints", "sam2.1_hiera_tiny.pt")
 CONFIG_DIR = os.path.join(SAM2_SRC, "sam2", "configs")
 CONFIG_FILE = "sam2.1/sam2.1_hiera_t.yaml"
@@ -269,6 +278,7 @@ def process_chunk(predictor, cam0, anchor_mask_dir, out_dir, jpeg_root, c_start,
 
 
 def main():
+    global CKPT
     pa = argparse.ArgumentParser(description="SAM2 视频分割全序列(分块双向, 多 GPU 分片, 断点续跑)")
     pa.add_argument("--seq", required=True)
     pa.add_argument("--camera", default="cam0", help="输入视角目录名，默认cam0")
@@ -276,7 +286,10 @@ def main():
                     help="候选锚帧mask目录；默认优先masks_candidate，旧序列回退masks_repaired")
     pa.add_argument("--anchor-manifest", default=None,
                     help="prepare_sam2_anchors.py输出；默认derived/<seq>/anchor_manifest.csv")
-    pa.add_argument("--out", default=None, help="输出目录(默认 sam2/masks/<seq>_full)")
+    pa.add_argument("--out", default=None, help="显式输出目录；必须位于 workspace")
+    pa.add_argument("--workspace-root", default=None)
+    pa.add_argument("--checkpoint", default=None,
+                    help="SAM2 checkpoint；默认 workspace 模型根，兼容读取旧位置")
     pa.add_argument("--chunk-size", type=int, default=200, help="块大小(默认 200; 锚居中, 前/反各 100)")
     pa.add_argument("--shards", type=int, default=1, help="分片总数(多 GPU 并行)")
     pa.add_argument("--shard", type=int, default=0, help="本进程处理第几片(chunk_idx %% shards == shard)")
@@ -285,20 +298,29 @@ def main():
     pa.add_argument("--device", default="cuda:0")
     args = pa.parse_args()
 
-    seq = args.seq.rstrip("/")
-    seq_name = os.path.basename(seq)
-    raw_seq_dir = (os.path.abspath(seq) if os.path.isdir(os.path.join(seq, args.camera))
-                   else os.path.join(PROJECT_ROOT, "real_capture", "data", "raw", seq_name))
+    paths = ProjectPaths.load(workspace_root=args.workspace_root)
+    raw_seq_dir = str(resolve_raw_sequence(paths, args.seq, camera=args.camera))
+    seq_name = os.path.basename(raw_seq_dir)
     cam0 = os.path.join(raw_seq_dir, args.camera)
-    derived_dir = os.path.join(PROJECT_ROOT, "real_capture", "data", "derived", seq_name)
-    candidate_dir = os.path.join(derived_dir, "masks_candidate")
-    legacy_dir = os.path.join(derived_dir, "masks_repaired")
-    anchor_dir = args.anchor_mask_dir or (
-        candidate_dir if os.path.isdir(candidate_dir) else legacy_dir)
-    manifest_path = args.anchor_manifest or os.path.join(derived_dir, "anchor_manifest.csv")
+    if args.anchor_mask_dir:
+        anchor_dir = os.path.abspath(args.anchor_mask_dir)
+    else:
+        try:
+            anchor_dir = str(resolve_candidate_masks(paths, seq_name))
+        except FileNotFoundError:
+            anchor_dir = str(resolve_repaired_masks(paths, seq_name))
+    manifest_path = args.anchor_manifest or os.path.join(
+        os.path.dirname(anchor_dir), "anchor_manifest.csv")
     anchor_manifest = load_anchor_manifest(manifest_path)
-    out_dir = args.out or os.path.join(HERE, "masks", f"{seq_name}_full")
-    jpeg_root = os.path.join(HERE, "_jpeg_tmp", f"{seq_name}_shard{args.shard}")
+    out_dir = str(canonical_output(paths, args.out or canonical_intermediate(
+        paths, seq_name, SAM2_VIDEO_RECIPE)))
+    jpeg_root = str(paths.workspace_root / "cache" / "sam2_jpeg" /
+                    f"{seq_name}_shard{args.shard}")
+    canonical_checkpoint = paths.pretrained_model_dir(
+        "sam2") / "sam2.1_hiera_tiny.pt"
+    CKPT = str(args.checkpoint or (
+        canonical_checkpoint if canonical_checkpoint.is_file()
+        else Path(HERE) / "checkpoints" / "sam2.1_hiera_tiny.pt"))
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(jpeg_root, exist_ok=True)
 

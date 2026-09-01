@@ -15,10 +15,20 @@ import argparse
 import glob
 import json
 import os
+import sys
 import time
 
 import cv2
 import numpy as np
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))
+sys.path.insert(0, PROJECT_ROOT)
+
+from src.registry import (  # noqa: E402
+    ProjectPaths, canonical_intermediate, canonical_output,
+    resolve_raw_sequence,
+)
 
 
 def parse_roi(text: str) -> tuple[int, int, int, int]:
@@ -84,7 +94,8 @@ def build_parser():
     parser.add_argument("--roi", required=True, type=parse_roi,
                         help="源图像坐标 x,y,w,h")
     parser.add_argument("--out-root", default=None,
-                        help="默认 real_capture/data/derived/<seq>/crop")
+                        help="显式输出根；必须位于 workspace")
+    parser.add_argument("--workspace-root", default=None)
     parser.add_argument("--preview-only", action="store_true",
                         help="只保存 ROI 参考/抽样概览，不批量写裁剪帧")
     parser.add_argument("--overwrite", action="store_true",
@@ -94,7 +105,8 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    seq = os.path.abspath(args.seq.rstrip("/"))
+    paths = ProjectPaths.load(workspace_root=args.workspace_root)
+    seq = str(resolve_raw_sequence(paths, args.seq, camera=args.camera))
     seq_name = os.path.basename(seq)
     camera_dir = os.path.join(seq, args.camera)
     frame_paths = sorted(glob.glob(os.path.join(camera_dir, "*.png")))
@@ -109,10 +121,8 @@ def main(argv=None):
         raise ValueError(
             f"ROI {args.roi} 超出源图像 {source_w}x{source_h}")
 
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))))
-    out_root = args.out_root or os.path.join(
-        project_root, "real_capture", "data", "derived", seq_name, "crop")
+    out_root = str(canonical_output(paths, args.out_root or (
+        canonical_intermediate(paths, seq_name, "crop-v1") / "crop")))
     output_camera = os.path.join(out_root, args.camera)
     qc_dir = os.path.join(out_root, "qc")
     meta_path = os.path.join(out_root, "crop_meta.json")

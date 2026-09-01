@@ -9,6 +9,7 @@ from src.registry.real_assets import (
     resolve_candidate_masks,
     resolve_processed_dataset,
     resolve_raw_sequence,
+    resolve_repaired_masks,
     resolve_sam2_masks,
 )
 from scripts.real.combine_transition_datasets import (
@@ -64,6 +65,13 @@ class RealAssetPathTest(unittest.TestCase):
             dataset.resolve())
         self.assertEqual(
             resolve_candidate_masks(self.paths, "seq_a"), masks.resolve())
+
+    def test_canonical_repaired_masks_recipe_is_discoverable(self):
+        repaired = self.paths.intermediate_sequence(
+            "real", "seq_a", "legacy-mask-repair-v1")
+        repaired.mkdir(parents=True)
+        self.assertEqual(
+            resolve_repaired_masks(self.paths, "seq_a"), repaired.resolve())
 
     def test_new_output_must_be_inside_workspace(self):
         target = self.paths.processed_dataset("real", "dataset_a")
