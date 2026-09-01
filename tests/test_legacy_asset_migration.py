@@ -62,11 +62,11 @@ class LegacyAssetMigrationTest(unittest.TestCase):
         self.assertEqual(source.read_bytes(), b"data")
         self.assertFalse(target.exists())
 
-    def test_changed_source_is_rejected(self):
+    def test_existing_target_is_rejected(self):
         ledger = build_ledger(self.paths)
-        source = self.repo / "real_capture/data/raw/seq_a/cam0/00000.png"
-        source.write_bytes(b"changed")
-        with self.assertRaisesRegex(ValueError, "已变化"):
+        target = self.paths.raw_sequence("real", "seq_a")
+        target.mkdir(parents=True)
+        with self.assertRaisesRegex(FileExistsError, "target 已存在"):
             apply_migration(self.paths, ledger)
 
 

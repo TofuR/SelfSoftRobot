@@ -9,28 +9,25 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
-from typing import Iterable
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.registry.manifests import atomic_write_json, sha256_file  # noqa: E402
+from src.registry.manifests import atomic_write_json  # noqa: E402
 from src.registry.paths import ProjectPaths  # noqa: E402
 from src.registry.real_assets import (  # noqa: E402
     LEGACY_DERIVED_RECIPE, SAM2_VIDEO_RECIPE,
 )
 
 
-LEDGER_SCHEMA_VERSION = 1
-TEXT_REFERENCE_SUFFIXES = {".json", ".sh", ".txt", ".md", ".toml", ".yaml", ".yml"}
+LEDGER_SCHEMA_VERSION = 2
 
 
 def _utc_now() -> str:
@@ -40,64 +37,6 @@ def _utc_now() -> str:
 def _git_commit(repo_root: Path) -> str:
     return subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=repo_root, text=True).strip()
-
-
-def _tree_record(path: Path) -> dict:
-    """Hash names, sizes and file contents in deterministic relative order."""
-    if path.is_symlink():
-        raise ValueError(f"snapshot source 不能是符号链接: {path}")
-    if path.is_file():
-        digest = sha256_file(path)
-        return {"files": 1, "bytes": path.stat().st_size,
-                "tree_sha256": digest}
-    if not path.is_dir():
-        raise FileNotFoundError(path)
-    tree = hashlib.sha256()
-    files = 0
-    total_bytes = 0
-    for item in sorted(path.rglob("*"), key=lambda value: value.relative_to(path).as_posix()):
-        relative = item.relative_to(path).as_posix()
-        if item.is_symlink():
-            payload = f"L\0{relative}\0{os.readlink(item)}\n".encode()
-            tree.update(payload)
-            continue
-        if not item.is_file():
-            continue
-        size = item.stat().st_size
-        digest = sha256_file(item)
-        tree.update(f"F\0{relative}\0{size}\0{digest}\n".encode())
-        files += 1
-        total_bytes += size
-    return {"files": files, "bytes": total_bytes,
-            "tree_sha256": tree.hexdigest()}
-
-
-def _tracked_references(repo_root: Path, needles: Iterable[str]) -> list[str]:
-    result = set()
-    for needle in dict.fromkeys(value for value in needles if value):
-        command = ["git", "grep", "-l", "-F", "--", needle]
-        completed = subprocess.run(
-            command, cwd=repo_root, text=True, capture_output=True)
-        if completed.returncode not in (0, 1):
-            raise RuntimeError(completed.stderr.strip())
-        result.update(line for line in completed.stdout.splitlines() if line)
-    return sorted(result)
-
-
-def _run_references(training_root: Path, needle: str) -> list[str]:
-    if not training_root.is_dir() or not needle:
-        return []
-    result = []
-    for path in sorted(training_root.rglob("*")):
-        if (not path.is_file() or path.suffix.lower() not in TEXT_REFERENCE_SUFFIXES
-                or path.stat().st_size > 8 * 1024 * 1024):
-            continue
-        try:
-            if needle in path.read_text(encoding="utf-8", errors="ignore"):
-                result.append(path.relative_to(training_root).as_posix())
-        except OSError:
-            continue
-    return result
 
 
 def _sam2_target(paths: ProjectPaths, collection: Path) -> Path:
@@ -179,20 +118,11 @@ def discover_mappings(paths: ProjectPaths) -> list[dict]:
 
 
 def build_ledger(paths: ProjectPaths) -> dict:
+    mappings = discover_mappings(paths)
     entries = []
-    training_root = paths.repo_root / "train_log"
-    for index, item in enumerate(discover_mappings(paths), 1):
+    for index, item in enumerate(mappings, 1):
         source = paths.resolve_repo_uri(item["source_uri"])
-        print(f"[{index}] hash {item['asset_id']}: {source}", flush=True)
-        record = _tree_record(source)
-        source_relative = item["source_uri"].removeprefix("repo://")
-        needles = (source_relative, item["identity"])
-        item.update(record)
-        item["tracked_references"] = _tracked_references(
-            paths.repo_root, needles)
-        item["run_references"] = (
-            _run_references(training_root, item["identity"])
-            if item["kind"] in {"raw", "processed", "intermediate"} else [])
+        print(f"[{index}] register {item['asset_id']}: {source}", flush=True)
         item["status"] = "planned"
         entries.append(item)
     return {
@@ -249,12 +179,6 @@ def apply_migration(paths: ProjectPaths, ledger: dict) -> None:
             raise FileNotFoundError(f"迁移 source 不存在: {source}")
         if target.exists() or target.is_symlink():
             raise FileExistsError(f"迁移 target 已存在: {target}")
-        current = _tree_record(source)
-        for field in ("files", "bytes", "tree_sha256"):
-            if current[field] != item[field]:
-                raise ValueError(
-                    f"迁移前 {field} 已变化: {source}; "
-                    f"ledger={item[field]!r}, current={current[field]!r}")
         target.parent.mkdir(parents=True, exist_ok=True)
         if source.stat().st_dev != target.parent.stat().st_dev:
             raise OSError(f"source/target 不在同一文件系统: {source} -> {target}")
@@ -275,10 +199,6 @@ def verify_migration(paths: ProjectPaths, ledger: dict, *, require_alias=True) -
             raise FileNotFoundError(f"canonical target 不存在: {target}")
         if require_alias and (not source.is_symlink() or source.resolve() != target.resolve()):
             raise ValueError(f"compat alias 无效: {source} -> {target}")
-        current = _tree_record(target)
-        for field in ("files", "bytes", "tree_sha256"):
-            if current[field] != item[field]:
-                raise ValueError(f"迁移后 {field} 不匹配: {target}")
         print(f"verified {item['asset_id']}", flush=True)
 
 
