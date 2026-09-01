@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 真实序列训练流水线：一个试次目录收纳 GT、OpenLoop、周期评价和最终评价。
+# 真实序列训练流水线：一个试次目录收纳 GT、OpenLoop、内部验证和最终评价。
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -43,12 +43,12 @@ if [[ -z "$TRAIN_NPZ" ]]; then
   echo "训练目录中没有NPZ: $DATA_TRAIN_DIR" >&2
   exit 2
 fi
-
-if [[ -n "$VAL_NPZ" ]]; then
-  DEFAULT_CAPTURE_SEQ="$(basename "$VAL_NPZ" _val.npz)"
-else
-  DEFAULT_CAPTURE_SEQ="$(basename "$TRAIN_NPZ" _train.npz)"
+if [[ -z "$VAL_NPZ" ]]; then
+  echo "验证目录中没有NPZ: $DATA_VAL_DIR" >&2
+  exit 2
 fi
+
+DEFAULT_CAPTURE_SEQ="$(basename "$VAL_NPZ" _val.npz)"
 CAPTURE_SEQ="${CAPTURE_SEQ:-$DEFAULT_CAPTURE_SEQ}"
 CAMERA="${CAMERA:-cam0}"
 if [[ -n "${SEQUENCE_TAG:-}" ]]; then
@@ -78,15 +78,11 @@ if [[ -f "$NDI_CSV" && -f "$FRAME_TIMES_FILE" ]]; then
 fi
 
 if (( SAVE_INTERVAL <= 0 || PERIODIC_EVAL_INTERVAL <= 0 || PERIODIC_MAX_STEPS <= 0 )); then
-  echo "SAVE_INTERVAL、PERIODIC_EVAL_INTERVAL和PERIODIC_MAX_STEPS必须为正数" >&2
+  echo "SAVE_INTERVAL、验证间隔和验证最大步数必须为正数" >&2
   exit 2
 fi
 if [[ "$START_STAGE" != "gt" && "$START_STAGE" != "open_loop" ]]; then
   echo "START_STAGE必须是gt或open_loop" >&2
-  exit 2
-fi
-if (( PERIODIC_EVAL_INTERVAL % SAVE_INTERVAL != 0 )); then
-  echo "PERIODIC_EVAL_INTERVAL必须是SAVE_INTERVAL的整数倍" >&2
   exit 2
 fi
 if [[ "$START_STAGE" == "gt" && -f "$DATASET_MANIFEST" ]]; then
@@ -173,8 +169,6 @@ fi
 
 GT_EXP_DIR="$RUN_DIR/stages/gt"
 OPEN_LOOP_EXP_DIR="$RUN_DIR/stages/open_loop"
-GT_PERIODIC_DIR="$RUN_DIR/evaluations/gt/periodic"
-OPEN_LOOP_PERIODIC_DIR="$RUN_DIR/evaluations/open_loop/periodic"
 GT_BEST_QUANT_DIR="$RUN_DIR/evaluations/gt/best/quantitative"
 GT_BEST_OVERLAY_DIR="$RUN_DIR/evaluations/gt/best/overlay"
 OPEN_LOOP_BEST_QUANT_DIR="$RUN_DIR/evaluations/open_loop/best/quantitative"
@@ -191,9 +185,6 @@ fi
 
 on_exit() {
   code=$?
-  if [[ -n "${ACTIVE_WATCHER_PID:-}" ]]; then
-    kill "$ACTIVE_WATCHER_PID" 2>/dev/null || true
-  fi
   if [[ $code -ne 0 ]]; then
     printf 'FAILED exit=%s at %s\n' "$code" "$(date --iso-8601=seconds)" >> "$STATUS_FILE"
   fi
@@ -202,17 +193,17 @@ trap on_exit EXIT
 
 COMMON_ARGS=(
   --data_dir "$DATA_TRAIN_DIR"
+  --val_dir "$DATA_VAL_DIR"
   --batch_size "$BATCH_SIZE"
   --num_workers "$NUM_WORKERS"
   --window_size "$WINDOW_SIZE"
   --episode_len "$EPISODE_LEN"
   --eval_interval 0
   --save_interval "$SAVE_INTERVAL"
+  --validation_interval "$PERIODIC_EVAL_INTERVAL"
+  --validation_max_steps "$PERIODIC_MAX_STEPS"
   --seed "$SEED"
 )
-OVERLAY_ARGS=(--overlay)
-if [[ -d "$CAM0_DIR" ]]; then OVERLAY_ARGS+=(--cam0 "$CAM0_DIR"); fi
-if [[ -d "$MASKS_DIR" ]]; then OVERLAY_ARGS+=(--masks "$MASKS_DIR"); fi
 
 record_command() {
   local gpu="$1"
@@ -246,24 +237,10 @@ if [[ "$START_STAGE" == "gt" ]]; then
   fi
   record_command "$GPU_ID" "${GT_CMD[@]}"
 
-  printf 'RUNNING gt started=%s train_gpu=%s eval_gpu=%s\n' \
+  printf 'RUNNING gt started=%s train_gpu=%s eval_gpu=%s selection=engine_validation\n' \
     "$(date --iso-8601=seconds)" "$GPU_ID" "$EVAL_GPU_ID" > "$STATUS_FILE"
-  (set -o pipefail; CUDA_VISIBLE_DEVICES="$GPU_ID" MPLCONFIGDIR=/tmp/selfsoftrobot-mpl \
-    PYTHONUNBUFFERED=1 "${GT_CMD[@]}" 2>&1 | tee "$GT_EXP_DIR/train.log") &
-  GT_TRAIN_PID=$!
-  GT_WATCH_CMD=(python scripts/evaluation/watch_best_checkpoint.py
-    --experiment-dir "$GT_EXP_DIR" --mode gt --data-dir "$DATA_VAL_DIR"
-    --out-root "$GT_PERIODIC_DIR" --interval "$PERIODIC_EVAL_INTERVAL"
-    --max-steps "$PERIODIC_MAX_STEPS" --parent-pid "$GT_TRAIN_PID" --no-ndi
-    "${OVERLAY_ARGS[@]}")
-  record_command "$EVAL_GPU_ID" "${GT_WATCH_CMD[@]}"
-  (set -o pipefail; CUDA_VISIBLE_DEVICES="$EVAL_GPU_ID" MPLCONFIGDIR=/tmp/selfsoftrobot-mpl \
-    PYTHONUNBUFFERED=1 "${GT_WATCH_CMD[@]}" 2>&1 | tee "$GT_PERIODIC_DIR/watch.log") &
-  GT_WATCH_PID=$!
-  ACTIVE_WATCHER_PID="$GT_WATCH_PID"
-  wait "$GT_TRAIN_PID"
-  wait "$GT_WATCH_PID"
-  ACTIVE_WATCHER_PID=""
+  CUDA_VISIBLE_DEVICES="$GPU_ID" MPLCONFIGDIR=/tmp/selfsoftrobot-mpl \
+    PYTHONUNBUFFERED=1 "${GT_CMD[@]}" 2>&1 | tee "$GT_EXP_DIR/train.log"
   if [[ -f "$GT_EVAL_CKPT" ]]; then
     GT_CKPT="$GT_EVAL_CKPT"
   fi
@@ -306,30 +283,9 @@ record_command "$GPU_ID" "${OPEN_LOOP_CMD[@]}"
 
 printf 'RUNNING open_loop started=%s initialization=%s\n' \
   "$(date --iso-8601=seconds)" "$GT_CKPT" >> "$STATUS_FILE"
-(set -o pipefail; CUDA_VISIBLE_DEVICES="$GPU_ID" MPLCONFIGDIR=/tmp/selfsoftrobot-mpl \
-  PYTHONUNBUFFERED=1 "${OPEN_LOOP_CMD[@]}" 2>&1 | tee "$OPEN_LOOP_EXP_DIR/train.log") &
-OPEN_LOOP_TRAIN_PID=$!
+CUDA_VISIBLE_DEVICES="$GPU_ID" MPLCONFIGDIR=/tmp/selfsoftrobot-mpl \
+  PYTHONUNBUFFERED=1 "${OPEN_LOOP_CMD[@]}" 2>&1 | tee "$OPEN_LOOP_EXP_DIR/train.log"
 OPEN_LOOP_CKPT="$OPEN_LOOP_EXP_DIR/phase_open_loop_transition/model/best_model.pt"
-OPEN_LOOP_WATCH_CMD=(python scripts/evaluation/watch_best_checkpoint.py
-  --experiment-dir "$OPEN_LOOP_EXP_DIR" --mode open_loop --data-dir "$DATA_VAL_DIR"
-  --out-root "$OPEN_LOOP_PERIODIC_DIR" --interval "$PERIODIC_EVAL_INTERVAL"
-  --max-steps "$PERIODIC_MAX_STEPS" --window-len "$EPISODE_LEN"
-  --parent-pid "$OPEN_LOOP_TRAIN_PID"
-  "${OVERLAY_ARGS[@]}")
-if (( HAS_NDI )); then
-  OPEN_LOOP_WATCH_CMD+=(--calibration-file "$CALIBRATION_FILE")
-else
-  OPEN_LOOP_WATCH_CMD+=(--no-ndi)
-fi
-record_command "$EVAL_GPU_ID" "${OPEN_LOOP_WATCH_CMD[@]}"
-(set -o pipefail; CUDA_VISIBLE_DEVICES="$EVAL_GPU_ID" MPLCONFIGDIR=/tmp/selfsoftrobot-mpl \
-  PYTHONUNBUFFERED=1 "${OPEN_LOOP_WATCH_CMD[@]}" 2>&1 \
-  | tee "$OPEN_LOOP_PERIODIC_DIR/watch.log") &
-OPEN_LOOP_WATCH_PID=$!
-ACTIVE_WATCHER_PID="$OPEN_LOOP_WATCH_PID"
-wait "$OPEN_LOOP_TRAIN_PID"
-wait "$OPEN_LOOP_WATCH_PID"
-ACTIVE_WATCHER_PID=""
 OPEN_LOOP_EVAL_CKPT="$OPEN_LOOP_EXP_DIR/phase_open_loop_transition/model/best_eval_model.pt"
 if [[ -f "$OPEN_LOOP_EVAL_CKPT" ]]; then
   OPEN_LOOP_CKPT="$OPEN_LOOP_EVAL_CKPT"

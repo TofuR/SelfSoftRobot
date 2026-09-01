@@ -41,3 +41,16 @@ OpenLoop 采用 3 epoch 线性 teacher-forcing 退火（`1.0 -> 0.5 -> 0.0`）�
 GT 和 OpenLoop 均满足指标口径与 checkpoint 选择等价门槛，完整真实训练流水线
 可以切换到内部 adapter。切换时不得让 watcher 与 engine 同时写
 `best_eval_model.pt`。watcher 源文件先保留，待流水线切换后的测试与短跑通过后再单独审查。
+
+## 流水线切换验收
+
+切换后运行完整短跑
+`workspace/runs/training/real_pipeline/seq_20260819_182253/trial_20260901_001`：
+
+- GT 1 epoch、OpenLoop 2 epoch，均每 epoch 内部验证 20 帧；
+- 两阶段均生成并在最终评价中使用 `best_eval_model.pt`；
+- OpenLoop 从 GT 的 validation-best checkpoint 热启动；
+- 定量评价、叠图、`commands.sh`、`status.txt` 和 `artifacts.json` 全部完成；
+- `commands.sh` 不含 watcher，未发生双写。
+
+该短跑证明完整调用链可以运行。watcher 已退出主线，但源文件是否删除仍作为独立清理项审查。

@@ -32,6 +32,17 @@ from scripts.real.save_preprocess_stage_example import save_stage_example
 
 
 class RealPipelineAutomationTest(unittest.TestCase):
+    def test_real_training_pipeline_uses_engine_validation_without_watcher(self):
+        script = (Path(__file__).resolve().parents[1] /
+                  "scripts/real/train_real_transition.sh").read_text(
+                      encoding="utf-8")
+        self.assertIn('--val_dir "$DATA_VAL_DIR"', script)
+        self.assertIn(
+            '--validation_interval "$PERIODIC_EVAL_INTERVAL"', script)
+        self.assertIn(
+            '--validation_max_steps "$PERIODIC_MAX_STEPS"', script)
+        self.assertNotIn("watch_best_checkpoint.py", script)
+
     def test_preprocess_reads_legacy_raw_and_writes_workspace(self):
         with tempfile.TemporaryDirectory() as root:
             repo = Path(root) / "repo"

@@ -45,7 +45,7 @@ sources:
 当前迁移期的已知语义：
 
 - `best_model.pt` 通常是训练 loss 最优，不能称为“验证最优”；
-- `best_eval_model.pt` 只有在验证 watcher 实际创建时才表示验证选择结果；
+- `best_eval_model.pt` 只有在 engine adapter 或历史 watcher 实际完成验证选择时才表示验证最优；
 - `current_model.pt`/训练状态用于恢复，不用于报告最好性能；
 - `final_model.pt` 表示预算结束时参数，不自动等于最佳参数。
 
@@ -83,4 +83,4 @@ sources:
 
 训练内旧 `transition_metrics` 的 rollout 诊断现按 NPZ `state_length_unit` 显式把 `m/mm/px` 转为米后再汇总毫米指标，避免 robot-mm 数据被重复乘 1000。归一化空间的 rollout/onestep 漂移比不受此修正影响。
 
-GT/OpenLoop 排序等价门槛已经满足。下一步是让完整真实流水线切换到 engine adapter，并确保 watcher 不与 engine 并行写同一 `best_eval_model.pt`；watcher 文件须在切换验证通过后另行审查，不能随调用切换一起删除。
+GT/OpenLoop 排序等价门槛已经满足，完整真实流水线已切换到 engine adapter，不再并行启动 watcher 写同一 `best_eval_model.pt`。阶段完成后的定量评价和叠图保持不变；切换后的 GT 1 epoch + OpenLoop 2 epoch 完整短跑已通过。watcher 已退出主线，源文件暂时保留并作为下一项独立清理审查。
