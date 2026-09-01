@@ -23,7 +23,8 @@ sources: []
 | Status | [`overview/status.md`](overview/status.md) | 当前主线、阻塞、健康和删除区 |
 | History | [`maintenance/README.md`](maintenance/README.md) | 重要迁移、替换、删除及验收决定 |
 
-旧 [`HANDOFF.md`](HANDOFF.md) 是 2026-07-28 快照，不再作为当前入口。
+[`HANDOFF.md`](HANDOFF.md) 只保留兼容重定向；2026-07-28 完整快照已归档，
+不再作为当前入口。
 
 ## 项目总览 (`overview/`)
 | 文档 | 说明 |
