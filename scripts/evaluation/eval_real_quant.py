@@ -46,6 +46,7 @@ from src.utils.model_loader import load_model  # noqa: E402
 from src.data.action_view import project_actions, resolve_action_contract  # noqa: E402
 from src.evaluation.shape_metrics import chamfer_distance, hausdorff_distance  # noqa: E402
 from src.evaluation.transition_metrics import build_action_window, rollout_one_window  # noqa: E402
+from src.evaluation.real_transition_validation import per_frame_rollout  # noqa: E402
 from src.evaluation.diameter_scale import (  # noqa: E402
     DEFAULT_ROBOT_DIAMETER_MM, resolve_diameter_scale)
 
@@ -73,64 +74,6 @@ def split_frame_offset(data_dir, selected_npz):
         return int(np.load(matching_train)["positions"].shape[0])
     train_files = sorted(glob.glob(os.path.join(base, "train", "*.npz")))
     return int(np.load(train_files[0])["positions"].shape[0]) if train_files else 0
-
-
-# ----------------------------- rollout(归一化→像素) -----------------------------
-def per_frame_rollout(model, mode, actions, positions, window_size, norm_factor,
-                      device, K=40, max_steps=None):
-    """逐帧预测 pred_world (T,N,3) 像素 + (open_loop) k_in_window (T,)。
-
-    gt/onestep: prev 恒取 GT(观测驱动 / teacher-forcing 上界)。
-    open_loop : 每 K 步 GT 重种子, 窗口内喂自身预测(部署开环); 记录每帧在窗口内的位置 k。
-    forward/归一化照 transition_metrics.rollout_one_window(已验证, DRY)。
-    """
-    T = positions.shape[0]
-    if max_steps is not None:
-        T = min(T, max_steps)
-    actions_norm = actions / norm_factor
-    pc_center = model.pc_center.view(3).cpu().numpy()
-    pc_scale = model.pc_scale.view(3).cpu().numpy()
-    N = positions.shape[2]
-
-    def to_norm(pos_3N):
-        s = pos_3N.T.astype(np.float32)
-        s = (s - pc_center) / pc_scale
-        return torch.from_numpy(s).float().unsqueeze(0).to(device)
-
-    def aw(t):
-        return torch.from_numpy(build_action_window(actions_norm, t, window_size)
-                                ).float().unsqueeze(0).to(device)
-
-    pred = np.zeros((T, N, 3), np.float32)
-    kin = np.full(T, -1, np.int32)
-    with torch.no_grad():
-        if mode in ("gt", "onestep"):
-            z_t = model.init_z_from_action(aw(0))
-            for t in range(T):
-                prev = to_norm(positions[max(t - 1, 0)])
-                prev2 = to_norm(positions[max(t - 2, 0)])
-                out = model.forward(aw(t), prev, prev2, z_t)
-                pred[t] = out['skeleton'].squeeze(0).cpu().numpy()
-                z_t = out['latent_z']
-        else:  # open_loop windowed
-            t = 1
-            while t < T:
-                z_t = model.init_z_from_action(aw(t))
-                s_roll = to_norm(positions[t - 1])
-                s_prev = s_roll
-                for k in range(K):
-                    tt = t + k
-                    if tt >= T:
-                        break
-                    out = model.forward(aw(tt), s_roll, s_prev, z_t)
-                    pred[tt] = out['skeleton'].squeeze(0).cpu().numpy()
-                    kin[tt] = k
-                    z_t = out['latent_z']
-                    s_prev = s_roll
-                    s_roll = out['skeleton']
-                t += K
-    pred_world = pred * pc_scale + pc_center
-    return pred_world, kin
 
 
 # ----------------------------- NDI 同步 + 仿射标定 -----------------------------

@@ -79,4 +79,6 @@ sources:
 
 公共 engine 现支持显式 `validation_data_dirs + validation_adapters`：声明 validation 的 phase 缺少任一输入会拒绝训练；adapter 返回合同 metric 后，engine 写 `validation_metrics.jsonl`、生成 `best_eval_model.pt`、以声明 metric 驱动 scheduler、按验证次数早停、保留 `final_model.pt`，并按配置恢复 validation-best 供后续 phase 使用。未声明 validation 的历史训练仍按训练 loss 生成 `best_model.pt`。
 
-当前各模型尚未默认绑定自己的 adapter，完整真实 GT/OpenLoop 流水线仍使用验证 watcher。必须先为主线接入 rollout validator，并对比 watcher 与 engine 的选择结果后，才能删除 watcher。
+状态转移主线已有显式 `transition_validation_adapter`，`train_transition.py --val_dir ...` 才会启用；未传 `--val_dir` 时不改变历史行为。它与 `eval_real_quant.py` 共用逐帧 GTObserved/OpenLoop rollout，并以数据声明的原生单位生成 `validation.node_mean_<unit>`。2026-09-01 的 1 epoch GT smoke 在 20 个 val 帧上得到 `1.176337 mm`，随后由原评价 CLI 生成 `per_frame.csv` 并按 watcher 口径聚合为 `1.176450 mm`（差值 `0.000113 mm`，来自 CSV 小数格式化）。该 smoke 只证明接线和指标口径，不是模型效果结论。
+
+完整真实 GT/OpenLoop 流水线仍使用验证 watcher。还需完成多 epoch GT/OpenLoop checkpoint 排序等价测试，才能让流水线切换到 engine adapter；在此之前不得删除 watcher。
