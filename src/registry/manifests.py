@@ -262,7 +262,6 @@ def _validate_run_manifest_v1(value: Mapping[str, Any]) -> None:
     if status == "complete":
         _artifact_uri(value.get("complete_marker_uri"), "complete_marker_uri")
 
-
 def _validate_run_manifest_v2(value: Mapping[str, Any]) -> None:
     """Validate the lightweight stage-aware run contract used by new trials."""
     if value.get("kind") != "training_run":
@@ -322,6 +321,23 @@ def _validate_run_manifest_v2(value: Mapping[str, Any]) -> None:
         _artifact_uri(uri, f"expected_artifacts[{index}]")
     if status == "complete":
         _artifact_uri(value.get("complete_marker_uri"), "complete_marker_uri")
+
+    final_evaluations = value.get("final_evaluations", [])
+    if not isinstance(final_evaluations, list):
+        _fail("final_evaluations 必须是 array")
+    for index, evaluation_value in enumerate(final_evaluations):
+        evaluation = _mapping(
+            evaluation_value, f"final_evaluations[{index}]")
+        _identifier(evaluation.get("stage"),
+                    f"final_evaluations[{index}].stage")
+        if evaluation.get("dataset_role") != "test":
+            _fail(f"final_evaluations[{index}].dataset_role 必须为 'test'")
+        _artifact_uri(
+            evaluation.get("quantitative_uri"),
+            f"final_evaluations[{index}].quantitative_uri")
+        _artifact_uri(
+            evaluation.get("overlay_uri"),
+            f"final_evaluations[{index}].overlay_uri")
 
 
 def sha256_file(path: str | os.PathLike[str], chunk_size: int = 1024 * 1024) -> str:

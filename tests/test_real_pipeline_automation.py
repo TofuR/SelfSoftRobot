@@ -11,6 +11,7 @@ from scripts.real.manage_training_trial import (
     build_formal_run_manifest,
     infer_sequence_tag,
     prepare_trial_layout,
+    resolve_dataset_role,
     resolve_real_pipeline_paths,
     validate_dataset_manifest,
     validate_open_loop_start,
@@ -33,6 +34,49 @@ from scripts.real.save_preprocess_stage_example import save_stage_example
 
 
 class RealPipelineAutomationTest(unittest.TestCase):
+    def test_resolves_strict_dataset_role_and_sequence(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo = Path(root) / "repo"
+            repo.mkdir()
+            paths = ProjectPaths.load(repo_root=repo, environ={})
+            dataset = paths.processed_dataset("real", "reference_v1")
+            test_npz = dataset / "splits/test/test.npz"
+            test_npz.parent.mkdir(parents=True)
+            test_npz.write_bytes(b"npz")
+            manifest = dataset / "dataset_manifest.json"
+            manifest.write_text(json.dumps({
+                "schema_version": 2,
+                "kind": "dataset",
+                "dataset_id": "reference_v1",
+                "created_at": "2026-09-01T12:00:00+08:00",
+                "status": "released",
+                "sources": [{"sequence_id": "seq_test",
+                             "raw_manifest_sha256": "a" * 64}],
+                "recipe": {"name": "reference", "version": 1,
+                           "git_commit": "3157b12", "parameters": {},
+                           "commands": ["publish"]},
+                "contracts": {
+                    **{name: {} for name in
+                       ("state", "action", "timing", "observation")},
+                    "evaluation": {"test_policy": "frozen_final_only"},
+                },
+                "split_policy": {"name": "reference", "group_key": "sequence_id",
+                                 "embargo_frames": 0, "seed": None,
+                                 "evidence_level": "within_sequence"},
+                "files": [{"uri": paths.artifact_uri(test_npz),
+                           "sha256": "b" * 64, "bytes": 3}],
+                "splits": {"train": [], "val": [], "test": [{
+                    "uri": paths.artifact_uri(test_npz), "sha256": "b" * 64,
+                    "frames": 1, "sequence_id": "seq_test"}]},
+                "quality_control": {},
+            }), encoding="utf-8")
+
+            selected = resolve_dataset_role(manifest, "test", paths=paths)
+
+            self.assertEqual(selected["dataset_id"], "reference_v1")
+            self.assertEqual(selected["sequence_id"], "seq_test")
+            self.assertEqual(Path(selected["dir"]), test_npz.parent)
+
     def test_builds_lightweight_stage_aware_run_manifest(self):
         with tempfile.TemporaryDirectory() as root:
             repo = Path(root) / "repo"
@@ -109,6 +153,12 @@ class RealPipelineAutomationTest(unittest.TestCase):
                     "best_quantitative": f"evaluations/{stage}/best/quantitative",
                     "best_overlay": f"evaluations/{stage}/best/overlay",
                 }
+            artifacts["final_evaluations"] = [{
+                "stage": stage,
+                "dataset_role": "test",
+                "quantitative": f"evaluations/test/{stage}/quantitative",
+                "overlay": f"evaluations/test/{stage}/overlay",
+            } for stage in ("gt", "open_loop")]
 
             manifest = build_formal_run_manifest(
                 trial, config, artifacts, paths=paths)
@@ -118,6 +168,12 @@ class RealPipelineAutomationTest(unittest.TestCase):
             self.assertEqual([stage["name"] for stage in manifest["stages"]],
                              ["gt", "open_loop"])
             self.assertNotIn("manifest_sha256", manifest["dataset"])
+            self.assertEqual(
+                [item["stage"] for item in manifest["final_evaluations"]],
+                ["gt", "open_loop"])
+            self.assertTrue(all(
+                item["dataset_role"] == "test"
+                for item in manifest["final_evaluations"]))
 
     def test_real_training_pipeline_uses_engine_validation_without_watcher(self):
         script = (Path(__file__).resolve().parents[1] /
@@ -129,6 +185,10 @@ class RealPipelineAutomationTest(unittest.TestCase):
         self.assertIn(
             '--validation_max_steps "$PERIODIC_MAX_STEPS"', script)
         self.assertNotIn("watch_best_checkpoint.py", script)
+        self.assertIn("RUNNING frozen_test", script)
+        self.assertIn('--data_dir "$DATA_TEST_DIR"', script)
+        self.assertLess(script.index("OPEN_LOOP_EVAL_CMD="),
+                        script.index("RUNNING frozen_test"))
 
     def test_preprocess_reads_legacy_raw_and_writes_workspace(self):
         with tempfile.TemporaryDirectory() as root:

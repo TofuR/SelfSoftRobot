@@ -45,6 +45,10 @@ FINAL_OUTPUT_DIRS = (
     "evaluations/gt/best/overlay",
     "evaluations/open_loop/best/quantitative",
     "evaluations/open_loop/best/overlay",
+    "evaluations/test/gt/quantitative",
+    "evaluations/test/gt/overlay",
+    "evaluations/test/open_loop/quantitative",
+    "evaluations/test/open_loop/overlay",
 )
 
 SEQUENCE_TAG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -78,6 +82,34 @@ def _run_kind_for_dataset_manifest(path):
     except (OSError, ValueError, json.JSONDecodeError):
         return "exploratory"
     return "formal"
+
+
+def resolve_dataset_role(dataset_manifest, role, paths=None):
+    """Resolve one strict-v2 split entry for shell pipeline orchestration."""
+    paths = paths or ProjectPaths.load()
+    with open(dataset_manifest, encoding="utf-8") as stream:
+        manifest = json.load(stream)
+    validate_registry_dataset_manifest(manifest)
+    if (role == "test" and
+            manifest.get("contracts", {}).get("evaluation", {}).get(
+                "test_policy") != "frozen_final_only"):
+        raise ValueError("test split 缺少 frozen_final_only 合同")
+    entries = manifest["splits"].get(role, [])
+    if len(entries) != 1:
+        raise ValueError(f"dataset split {role!r} 必须恰有一个文件，当前={len(entries)}")
+    entry = entries[0]
+    sequence_id = entry.get("sequence_id")
+    if not isinstance(sequence_id, str) or not sequence_id:
+        raise ValueError(f"dataset split {role!r} 缺少 sequence_id")
+    artifact = paths.resolve_artifact_uri(entry["uri"])
+    if not artifact.is_file():
+        raise FileNotFoundError(artifact)
+    return {
+        "dataset_id": manifest["dataset_id"],
+        "sequence_id": sequence_id,
+        "npz": str(artifact),
+        "dir": str(artifact.parent),
+    }
 
 
 def _write_json(path, payload):
@@ -187,6 +219,9 @@ def prepare_trial_layout(trial_dir):
 def build_trial_config(args, trial_dir):
     train_npz_files = sorted(glob.glob(os.path.join(args.train_dir, "*.npz")))
     val_npz_files = sorted(glob.glob(os.path.join(args.val_dir, "*.npz")))
+    test_dir = getattr(args, "test_dir", None)
+    test_npz_files = (
+        sorted(glob.glob(os.path.join(test_dir, "*.npz"))) if test_dir else [])
     return {
         "schema_version": 1,
         "run": {
@@ -206,6 +241,10 @@ def build_trial_config(args, trial_dir):
             "train_npz": args.train_npz,
             "train_npz_files": train_npz_files,
             "val_npz_files": val_npz_files,
+            "test_dir": test_dir,
+            "test_npz_files": test_npz_files,
+            "test_sequence": getattr(args, "test_sequence", None),
+            "test_policy": "frozen_final_only" if test_npz_files else None,
             "dataset_manifest": getattr(args, "dataset_manifest", None),
             "cam0_dir": args.cam0_dir,
             "masks_dir": args.masks_dir,
@@ -430,6 +469,18 @@ def build_formal_run_manifest(trial_dir, config, artifacts, paths=None):
         "expected_artifacts": expected_artifacts,
         "complete_marker_uri": paths.artifact_uri(os.path.join(trial, "COMPLETE")),
     }
+    test_artifacts = artifacts.get("final_evaluations", [])
+    if test_artifacts:
+        manifest["final_evaluations"] = []
+        for item in test_artifacts:
+            manifest["final_evaluations"].append({
+                "stage": item["stage"],
+                "dataset_role": "test",
+                "quantitative_uri": paths.artifact_uri(os.path.join(
+                    trial, item["quantitative"], "summary.txt")),
+                "overlay_uri": paths.artifact_uri(os.path.join(
+                    trial, item["overlay"], "summary.txt")),
+            })
     validate_run_manifest(manifest)
     return manifest
 
@@ -471,6 +522,18 @@ def finalize_trial(trial_dir):
     _require_files(trial_dir, required)
     with open(os.path.join(trial_dir, "config.json"), encoding="utf-8") as stream:
         config = json.load(stream)
+    has_frozen_test = bool(config.get("data", {}).get("test_npz_files"))
+    if has_frozen_test:
+        required.extend([
+            f"evaluations/test/{stage}/{kind}/{filename}"
+            for stage in ("gt", "open_loop")
+            for kind, filename in (
+                ("quantitative", "summary.txt"),
+                ("overlay", "summary.txt"),
+                ("overlay", "montage.png"),
+            )
+        ])
+        _require_files(trial_dir, required)
     def selected_checkpoint(stage):
         evaluated = (
             f"stages/{stage}/phase_{'gt' if stage == 'gt' else 'open_loop'}_transition/"
@@ -515,6 +578,16 @@ def finalize_trial(trial_dir):
         "commands": "commands.sh",
         "status": "status.txt",
     }
+    if has_frozen_test:
+        artifacts["final_evaluations"] = [
+            {
+                "stage": stage,
+                "dataset_role": "test",
+                "quantitative": f"evaluations/test/{stage}/quantitative",
+                "overlay": f"evaluations/test/{stage}/overlay",
+            }
+            for stage in ("gt", "open_loop")
+        ]
     artifacts_path = os.path.join(trial_dir, "artifacts.json")
     _write_json(artifacts_path, artifacts)
     if config.get("run", {}).get("kind") == "formal":
@@ -553,6 +626,8 @@ def build_parser():
     create.add_argument("--val-dir", required=True)
     create.add_argument("--train-npz", required=True)
     create.add_argument("--dataset-manifest", default=None)
+    create.add_argument("--test-dir", default=None)
+    create.add_argument("--test-sequence", default=None)
     create.add_argument("--cam0-dir", required=True)
     create.add_argument("--masks-dir", required=True)
     create.add_argument("--ndi-csv", default=None)
@@ -626,6 +701,13 @@ def build_parser():
     resolve.add_argument("--field", required=True, choices=(
         "trial_base", "raw_sequence", "camera_dir", "masks_dir",
         "ndi_csv", "frame_times"))
+    dataset_role = subparsers.add_parser(
+        "resolve-dataset-role", help="解析 strict-v2 dataset 的单个 split")
+    dataset_role.add_argument("--dataset-manifest", required=True)
+    dataset_role.add_argument("--role", choices=("train", "val", "test"),
+                              required=True)
+    dataset_role.add_argument("--field", choices=(
+        "dataset_id", "sequence_id", "npz", "dir"), required=True)
     return parser
 
 
@@ -662,10 +744,13 @@ def main(argv=None):
             }), ensure_ascii=False))
     elif args.command == "infer-sequence-tag":
         print(infer_sequence_tag(args.train_dir, args.dataset_manifest))
-    else:
+    elif args.command == "resolve-real-path":
         print(resolve_real_pipeline_paths(
             args.sequence_id, args.dataset_id, args.sequence_tag,
             camera=args.camera)[args.field])
+    else:
+        print(resolve_dataset_role(
+            args.dataset_manifest, args.role)[args.field])
     return 0
 
 

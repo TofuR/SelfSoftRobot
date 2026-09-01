@@ -125,6 +125,12 @@ def run_manifest_v2():
         "expected_artifacts": [
             root + "/stages/gt/model/best_eval_model.pt"],
         "complete_marker_uri": root + "/COMPLETE",
+        "final_evaluations": [{
+            "stage": "gt",
+            "dataset_role": "test",
+            "quantitative_uri": root + "/evaluations/test/gt/quantitative/summary.txt",
+            "overlay_uri": root + "/evaluations/test/gt/overlay/summary.txt",
+        }],
     }
 
 
@@ -189,6 +195,11 @@ class TestRunManifest(unittest.TestCase):
         selected_on_test["stages"][0]["selection"]["dataset_role"] = "test"
         with self.assertRaisesRegex(ManifestError, "dataset_role"):
             validate_run_manifest(selected_on_test)
+
+        evaluated_on_val = run_manifest_v2()
+        evaluated_on_val["final_evaluations"][0]["dataset_role"] = "val"
+        with self.assertRaisesRegex(ManifestError, "dataset_role"):
+            validate_run_manifest(evaluated_on_val)
 
 
 class TestManifestStore(unittest.TestCase):

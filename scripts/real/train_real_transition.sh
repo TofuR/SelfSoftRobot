@@ -21,6 +21,7 @@ NUM_WORKERS="${NUM_WORKERS:-4}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-5}"
 PERIODIC_EVAL_INTERVAL="${PERIODIC_EVAL_INTERVAL:-10}"
 PERIODIC_MAX_STEPS="${PERIODIC_MAX_STEPS:-500}"
+TEST_MAX_STEPS="${TEST_MAX_STEPS:-}"
 SEED="${SEED:-20260821}"
 WINDOW_SIZE="${WINDOW_SIZE:-40}"
 EPISODE_LEN="${EPISODE_LEN:-40}"
@@ -34,10 +35,19 @@ OPEN_LOOP_LR="${OPEN_LOOP_LR:-}"
 GT_SCHEDULER_PATIENCE="${GT_SCHEDULER_PATIENCE:-}"
 OPEN_LOOP_SCHEDULER_PATIENCE="${OPEN_LOOP_SCHEDULER_PATIENCE:-}"
 START_STAGE="${START_STAGE:-gt}"
+PIPELINE_PREFLIGHT_ONLY="${PIPELINE_PREFLIGHT_ONLY:-0}"
 REQUESTED_RUN_DIR="${RUN_DIR:-}"
 TRAIN_NPZ="$(find "$DATA_TRAIN_DIR" -maxdepth 1 -type f -name '*.npz' | sort | head -1)"
 VAL_NPZ="$(find "$DATA_VAL_DIR" -maxdepth 1 -type f -name '*.npz' | sort | head -1)"
-DATASET_MANIFEST="${DATASET_MANIFEST:-$(dirname "$DATA_TRAIN_DIR")/dataset_manifest.json}"
+if [[ -n "${DATASET_MANIFEST:-}" ]]; then
+  DATASET_MANIFEST="$DATASET_MANIFEST"
+elif [[ "$(basename "$(dirname "$DATA_TRAIN_DIR")")" == "splits" ]]; then
+  DATASET_MANIFEST="$(dirname "$(dirname "$DATA_TRAIN_DIR")")/dataset_manifest.json"
+else
+  DATASET_MANIFEST="$(dirname "$DATA_TRAIN_DIR")/dataset_manifest.json"
+fi
+DATA_TEST_DIR="${DATA_TEST_DIR:-}"
+TEST_SEQUENCE="${TEST_SEQUENCE:-}"
 
 if [[ -z "$TRAIN_NPZ" ]]; then
   echo "训练目录中没有NPZ: $DATA_TRAIN_DIR" >&2
@@ -49,7 +59,16 @@ if [[ -z "$VAL_NPZ" ]]; then
 fi
 
 DEFAULT_CAPTURE_SEQ="$(basename "$VAL_NPZ" _val.npz)"
-CAPTURE_SEQ="${CAPTURE_SEQ:-$DEFAULT_CAPTURE_SEQ}"
+if [[ -n "${CAPTURE_SEQ:-}" ]]; then
+  CAPTURE_SEQ="$CAPTURE_SEQ"
+elif [[ -f "$DATASET_MANIFEST" ]] && \
+    RESOLVED_CAPTURE_SEQ="$(python scripts/real/manage_training_trial.py \
+      resolve-dataset-role --dataset-manifest "$DATASET_MANIFEST" \
+      --role val --field sequence_id 2>/dev/null)"; then
+  CAPTURE_SEQ="$RESOLVED_CAPTURE_SEQ"
+else
+  CAPTURE_SEQ="$DEFAULT_CAPTURE_SEQ"
+fi
 CAMERA="${CAMERA:-cam0}"
 if [[ -n "${SEQUENCE_TAG:-}" ]]; then
   SEQ_TAG="$SEQUENCE_TAG"
@@ -62,16 +81,60 @@ else
   SEQ_TAG="$("${INFER_TAG_CMD[@]}")"
 fi
 DATASET_ID="$(basename "$(dirname "$DATA_TRAIN_DIR")")"
-resolve_real_path() {
+if [[ -f "$DATASET_MANIFEST" ]] && \
+    RESOLVED_DATASET_ID="$(python scripts/real/manage_training_trial.py \
+      resolve-dataset-role --dataset-manifest "$DATASET_MANIFEST" \
+      --role train --field dataset_id 2>/dev/null)"; then
+  DATASET_ID="$RESOLVED_DATASET_ID"
+fi
+resolve_real_path_for() {
+  local sequence_id="$1"
+  local field="$2"
   python scripts/real/manage_training_trial.py resolve-real-path \
-    --sequence-id "$CAPTURE_SEQ" --dataset-id "$DATASET_ID" \
-    --sequence-tag "$SEQ_TAG" --camera "$CAMERA" --field "$1"
+    --sequence-id "$sequence_id" --dataset-id "$DATASET_ID" \
+    --sequence-tag "$SEQ_TAG" --camera "$CAMERA" --field "$field"
+}
+resolve_real_path() {
+  resolve_real_path_for "$CAPTURE_SEQ" "$1"
 }
 CAM0_DIR="${CAM0_DIR:-$(resolve_real_path camera_dir)}"
 MASKS_DIR="${MASKS_DIR:-$(resolve_real_path masks_dir)}"
 TRIAL_BASE="${TRIAL_BASE:-$(resolve_real_path trial_base)}"
 NDI_CSV="${NDI_CSV:-$(resolve_real_path ndi_csv)}"
 FRAME_TIMES_FILE="${FRAME_TIMES_FILE:-$(resolve_real_path frame_times)}"
+if [[ -f "$DATASET_MANIFEST" ]]; then
+  if [[ -z "$DATA_TEST_DIR" ]]; then
+    if RESOLVED_TEST_DIR="$(python scripts/real/manage_training_trial.py \
+        resolve-dataset-role --dataset-manifest "$DATASET_MANIFEST" \
+        --role test --field dir 2>/dev/null)"; then
+      DATA_TEST_DIR="$RESOLVED_TEST_DIR"
+    fi
+  fi
+  if [[ -z "$TEST_SEQUENCE" ]]; then
+    if RESOLVED_TEST_SEQUENCE="$(python scripts/real/manage_training_trial.py \
+        resolve-dataset-role --dataset-manifest "$DATASET_MANIFEST" \
+        --role test --field sequence_id 2>/dev/null)"; then
+      TEST_SEQUENCE="$RESOLVED_TEST_SEQUENCE"
+    fi
+  fi
+fi
+HAS_FROZEN_TEST=0
+TEST_CAM0_DIR=""
+TEST_MASKS_DIR=""
+if [[ -n "$DATA_TEST_DIR" || -n "$TEST_SEQUENCE" ]]; then
+  if [[ -z "$DATA_TEST_DIR" || -z "$TEST_SEQUENCE" ]]; then
+    echo "frozen test 需要同时解析 DATA_TEST_DIR 和 TEST_SEQUENCE" >&2
+    exit 2
+  fi
+  TEST_NPZ_COUNT="$(find "$DATA_TEST_DIR" -maxdepth 1 -type f -name '*.npz' | wc -l)"
+  if [[ "$TEST_NPZ_COUNT" -ne 1 ]]; then
+    echo "正式 frozen test 目录必须恰有一个NPZ: $DATA_TEST_DIR count=$TEST_NPZ_COUNT" >&2
+    exit 2
+  fi
+  HAS_FROZEN_TEST=1
+  TEST_CAM0_DIR="$(resolve_real_path_for "$TEST_SEQUENCE" camera_dir)"
+  TEST_MASKS_DIR="$(resolve_real_path_for "$TEST_SEQUENCE" masks_dir)"
+fi
 HAS_NDI=0
 if [[ -f "$NDI_CSV" && -f "$FRAME_TIMES_FILE" ]]; then
   HAS_NDI=1
@@ -81,13 +144,30 @@ if (( SAVE_INTERVAL <= 0 || PERIODIC_EVAL_INTERVAL <= 0 || PERIODIC_MAX_STEPS <=
   echo "SAVE_INTERVAL、验证间隔和验证最大步数必须为正数" >&2
   exit 2
 fi
+if [[ -n "$TEST_MAX_STEPS" ]] && (( TEST_MAX_STEPS <= 0 )); then
+  echo "设置 TEST_MAX_STEPS 时必须为正数；默认空值评价完整 frozen test" >&2
+  exit 2
+fi
 if [[ "$START_STAGE" != "gt" && "$START_STAGE" != "open_loop" ]]; then
   echo "START_STAGE必须是gt或open_loop" >&2
+  exit 2
+fi
+if [[ "$PIPELINE_PREFLIGHT_ONLY" != "0" && "$PIPELINE_PREFLIGHT_ONLY" != "1" ]]; then
+  echo "PIPELINE_PREFLIGHT_ONLY必须是0或1" >&2
   exit 2
 fi
 if [[ "$START_STAGE" == "gt" && -f "$DATASET_MANIFEST" ]]; then
   python scripts/real/manage_training_trial.py validate-dataset \
     --dataset-manifest "$DATASET_MANIFEST"
+fi
+if [[ "$PIPELINE_PREFLIGHT_ONLY" == "1" ]]; then
+  printf 'dataset_id=%s\nsequence_tag=%s\ncapture_sequence=%s\n' \
+    "$DATASET_ID" "$SEQ_TAG" "$CAPTURE_SEQ"
+  printf 'train_dir=%s\nval_dir=%s\ndataset_manifest=%s\n' \
+    "$DATA_TRAIN_DIR" "$DATA_VAL_DIR" "$DATASET_MANIFEST"
+  printf 'frozen_test=%s\ntest_dir=%s\ntest_sequence=%s\n' \
+    "$HAS_FROZEN_TEST" "$DATA_TEST_DIR" "$TEST_SEQUENCE"
+  exit 0
 fi
 
 CREATE_TRIAL_CMD=(python scripts/real/manage_training_trial.py create
@@ -135,6 +215,9 @@ fi
 if [[ -f "$DATASET_MANIFEST" ]]; then
   CREATE_TRIAL_CMD+=(--dataset-manifest "$DATASET_MANIFEST")
 fi
+if (( HAS_FROZEN_TEST )); then
+  CREATE_TRIAL_CMD+=(--test-dir "$DATA_TEST_DIR" --test-sequence "$TEST_SEQUENCE")
+fi
 if [[ "$START_STAGE" == "gt" ]]; then
   if [[ -n "$REQUESTED_RUN_DIR" ]]; then
     CREATE_TRIAL_CMD+=(--trial-dir "$REQUESTED_RUN_DIR")
@@ -173,6 +256,10 @@ GT_BEST_QUANT_DIR="$RUN_DIR/evaluations/gt/best/quantitative"
 GT_BEST_OVERLAY_DIR="$RUN_DIR/evaluations/gt/best/overlay"
 OPEN_LOOP_BEST_QUANT_DIR="$RUN_DIR/evaluations/open_loop/best/quantitative"
 OPEN_LOOP_BEST_OVERLAY_DIR="$RUN_DIR/evaluations/open_loop/best/overlay"
+GT_TEST_QUANT_DIR="$RUN_DIR/evaluations/test/gt/quantitative"
+GT_TEST_OVERLAY_DIR="$RUN_DIR/evaluations/test/gt/overlay"
+OPEN_LOOP_TEST_QUANT_DIR="$RUN_DIR/evaluations/test/open_loop/quantitative"
+OPEN_LOOP_TEST_OVERLAY_DIR="$RUN_DIR/evaluations/test/open_loop/overlay"
 CALIBRATION_FILE="${CALIBRATION_FILE:-$RUN_DIR/diagnostics/state_to_ndi_same_sequence.npz}"
 STATUS_FILE="$RUN_DIR/status.txt"
 COMMAND_FILE="$RUN_DIR/commands.sh"
@@ -315,6 +402,57 @@ if [[ -d "$MASKS_DIR" ]]; then OPEN_LOOP_OVERLAY_CMD+=(--masks "$MASKS_DIR"); fi
 record_command "$EVAL_GPU_ID" "${OPEN_LOOP_OVERLAY_CMD[@]}"
 CUDA_VISIBLE_DEVICES="$EVAL_GPU_ID" MPLCONFIGDIR=/tmp/selfsoftrobot-mpl \
   PYTHONUNBUFFERED=1 "${OPEN_LOOP_OVERLAY_CMD[@]}" 2>&1 | tee "$OPEN_LOOP_BEST_OVERLAY_DIR/run.log"
+
+if (( HAS_FROZEN_TEST )); then
+  printf 'RUNNING frozen_test started=%s dataset_role=test sequence=%s\n' \
+    "$(date --iso-8601=seconds)" "$TEST_SEQUENCE" >> "$STATUS_FILE"
+
+  GT_TEST_QUANT_CMD=(python scripts/evaluation/eval_real_quant.py
+    --checkpoint "$GT_CKPT" --data_dir "$DATA_TEST_DIR" --mode gt
+    --no-ndi --out "$GT_TEST_QUANT_DIR")
+  if [[ -n "$TEST_MAX_STEPS" ]]; then
+    GT_TEST_QUANT_CMD+=(--max-steps "$TEST_MAX_STEPS")
+  fi
+  record_command "$EVAL_GPU_ID" "${GT_TEST_QUANT_CMD[@]}"
+  CUDA_VISIBLE_DEVICES="$EVAL_GPU_ID" MPLCONFIGDIR=/tmp/selfsoftrobot-mpl \
+    PYTHONUNBUFFERED=1 "${GT_TEST_QUANT_CMD[@]}" 2>&1 | tee "$GT_TEST_QUANT_DIR/run.log"
+
+  GT_TEST_OVERLAY_CMD=(python scripts/evaluation/visualize_real_overlay.py
+    --checkpoint "$GT_CKPT" --data_dir "$DATA_TEST_DIR" --mode gt
+    --frame-offset 0
+    --cam0 "$TEST_CAM0_DIR" --masks "$TEST_MASKS_DIR"
+    --out "$GT_TEST_OVERLAY_DIR")
+  if [[ -n "$TEST_MAX_STEPS" ]]; then
+    GT_TEST_OVERLAY_CMD+=(--max-steps "$TEST_MAX_STEPS")
+  fi
+  record_command "$EVAL_GPU_ID" "${GT_TEST_OVERLAY_CMD[@]}"
+  CUDA_VISIBLE_DEVICES="$EVAL_GPU_ID" MPLCONFIGDIR=/tmp/selfsoftrobot-mpl \
+    PYTHONUNBUFFERED=1 "${GT_TEST_OVERLAY_CMD[@]}" 2>&1 | tee "$GT_TEST_OVERLAY_DIR/run.log"
+
+  OPEN_LOOP_TEST_QUANT_CMD=(python scripts/evaluation/eval_real_quant.py
+    --checkpoint "$OPEN_LOOP_CKPT" --data_dir "$DATA_TEST_DIR"
+    --mode open_loop --window-len "$EPISODE_LEN"
+    --no-ndi --out "$OPEN_LOOP_TEST_QUANT_DIR")
+  if [[ -n "$TEST_MAX_STEPS" ]]; then
+    OPEN_LOOP_TEST_QUANT_CMD+=(--max-steps "$TEST_MAX_STEPS")
+  fi
+  record_command "$EVAL_GPU_ID" "${OPEN_LOOP_TEST_QUANT_CMD[@]}"
+  CUDA_VISIBLE_DEVICES="$EVAL_GPU_ID" MPLCONFIGDIR=/tmp/selfsoftrobot-mpl \
+    PYTHONUNBUFFERED=1 "${OPEN_LOOP_TEST_QUANT_CMD[@]}" 2>&1 | tee "$OPEN_LOOP_TEST_QUANT_DIR/run.log"
+
+  OPEN_LOOP_TEST_OVERLAY_CMD=(python scripts/evaluation/visualize_real_overlay.py
+    --checkpoint "$OPEN_LOOP_CKPT" --data_dir "$DATA_TEST_DIR"
+    --mode open_loop --window-len "$EPISODE_LEN" --with-onestep
+    --frame-offset 0
+    --cam0 "$TEST_CAM0_DIR" --masks "$TEST_MASKS_DIR"
+    --out "$OPEN_LOOP_TEST_OVERLAY_DIR")
+  if [[ -n "$TEST_MAX_STEPS" ]]; then
+    OPEN_LOOP_TEST_OVERLAY_CMD+=(--max-steps "$TEST_MAX_STEPS")
+  fi
+  record_command "$EVAL_GPU_ID" "${OPEN_LOOP_TEST_OVERLAY_CMD[@]}"
+  CUDA_VISIBLE_DEVICES="$EVAL_GPU_ID" MPLCONFIGDIR=/tmp/selfsoftrobot-mpl \
+    PYTHONUNBUFFERED=1 "${OPEN_LOOP_TEST_OVERLAY_CMD[@]}" 2>&1 | tee "$OPEN_LOOP_TEST_OVERLAY_DIR/run.log"
+fi
 
 FINALIZE_CMD=(python scripts/real/manage_training_trial.py finalize --trial-dir "$RUN_DIR")
 record_command "$EVAL_GPU_ID" "${FINALIZE_CMD[@]}"
