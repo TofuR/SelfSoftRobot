@@ -75,6 +75,10 @@ workspace/
 - 在未校验文件数、大小、hash、引用和回滚路径前移动或删除历史资产；
 - 让 `real_capture`、`real_validation` 或某个模型脚本拥有独立的正式数据副本。
 
+提交前运行 `python scripts/maintenance/check_legacy_path_literals.py`。守门只扫描
+Python 可执行字符串和 shell 非注释行；现存兼容读取使用非递增 baseline，迁移一个
+consumer 就同步降低对应计数，禁止用扩大 baseline 的方式接纳新业务写入。
+
 ## 6. 变更验收
 
 涉及路径或产物的提交至少验证：

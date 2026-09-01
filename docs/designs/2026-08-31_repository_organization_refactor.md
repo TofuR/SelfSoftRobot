@@ -682,7 +682,7 @@ sources: []
 2. 定稿 dataset/run manifest v2；
 3. 为现有真实 dataset 生成 registry 索引；
 4. 写训练选择合同，明确 `best_model.pt` 和 `best_eval_model.pt` 的现状；
-5. 禁止新增硬编码 `real_capture/data`、`train_log`、`output`。
+5. 禁止新增硬编码 `real_capture/data`、`train_log`、`output`（已由可执行字面量非递增 baseline 守门）。
 
 ### P1：打通一条参考主线
 
