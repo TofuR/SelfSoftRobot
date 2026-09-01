@@ -16,6 +16,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from scripts.real.preprocess_capture import summarize_npz  # noqa: E402
+from src.registry import ProjectPaths, canonical_output  # noqa: E402
 
 
 STATE_KEYS = (
@@ -87,7 +88,8 @@ def _copy_split(paths, out_dir):
 
 
 def combine(args):
-    out_root = os.path.abspath(args.out_root)
+    paths = ProjectPaths.load(workspace_root=args.workspace_root)
+    out_root = str(resolve_output(args, paths))
     if os.path.exists(out_root) and os.listdir(out_root):
         raise FileExistsError(f"输出目录已包含产物: {out_root}")
 
@@ -182,12 +184,25 @@ def combine(args):
 def build_parser():
     parser = argparse.ArgumentParser(
         description="组合多个已通过准入的 transition NPZ 数据集")
-    parser.add_argument("--out-root", required=True)
+    parser.add_argument("--dataset-id",
+                        help="新组合数据集 ID；省略 --out-root 时必填")
+    parser.add_argument("--out-root",
+                        help="显式输出根；必须位于 workspace 内")
+    parser.add_argument("--workspace-root",
+                        help="覆盖 SSR_WORKSPACE_ROOT/config/默认 workspace")
     parser.add_argument("--train", nargs="+", required=True,
                         help="进入组合训练 split 的 NPZ")
     parser.add_argument("--val", nargs="+", required=True,
                         help="进入组合验证 split 的 NPZ")
     return parser
+
+
+def resolve_output(args, paths):
+    if args.out_root:
+        return canonical_output(paths, args.out_root)
+    if not args.dataset_id:
+        raise ValueError("必须提供 --dataset-id 或 workspace 内的 --out-root")
+    return paths.processed_dataset("real", args.dataset_id)
 
 
 if __name__ == "__main__":

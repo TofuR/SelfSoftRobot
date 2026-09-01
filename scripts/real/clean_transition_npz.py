@@ -42,6 +42,10 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from scripts.real.legacy.static_proximal import (  # noqa: E402
     stabilize_static_region, detect_joint_xy)
+from src.registry import (  # noqa: E402
+    ProjectPaths, canonical_output, resolve_candidate_masks,
+    resolve_processed_dataset, resolve_raw_sequence,
+)
 
 
 def interpolate_frames(positions, bad):
@@ -164,6 +168,8 @@ def main(argv=None):
     pa.add_argument('--seq', required=True, help='序列名(如 seq_20260627_163921)')
     pa.add_argument('--in-root', default=None, help='输入根(默认 data/real_seq/<seq>)')
     pa.add_argument('--out-root', default=None, help='输出根(默认 data/real_seq/<seq>_clean)')
+    pa.add_argument('--workspace-root', default=None,
+                    help='覆盖 SSR_WORKSPACE_ROOT/config/默认 workspace')
     pa.add_argument('--act-dev-thresh', type=float, default=60.0,
                     help='动作段残余离群阈值 px(默认 60: 实测真实极端弯曲最大偏离~48px,'
                          '腐败>80px 已被 clean_outlier 处理,故 60 只兜底捕获残留腐败,不误伤真实极端弯曲)')
@@ -180,11 +186,14 @@ def main(argv=None):
         pa.error('这是静态近端段LEGACY脚本；旧实验必须显式传 '
                  '--allow-legacy-static-proximal，六通道通用流程请直接使用masks_to_transition_npz')
 
-    in_root = args.in_root or os.path.join(PROJECT_ROOT, 'data', 'real_seq', args.seq)
-    out_root = args.out_root or os.path.join(PROJECT_ROOT, 'data', 'real_seq', args.seq + '_clean')
-    cam0 = args.cam0 or os.path.join(PROJECT_ROOT, 'real_capture', 'data', 'raw', args.seq, 'cam0')
-    masks_dir = args.masks_dir or os.path.join(
-        PROJECT_ROOT, 'real_capture', 'data', 'derived', args.seq, 'masks')
+    paths = ProjectPaths.load(workspace_root=args.workspace_root)
+    in_root = str(resolve_processed_dataset(paths, args.in_root or args.seq))
+    out_root = str(canonical_output(
+        paths, args.out_root or paths.processed_dataset(
+            'real', args.seq + '_clean')))
+    cam0 = str(args.cam0 or (
+        resolve_raw_sequence(paths, args.seq) / 'cam0'))
+    masks_dir = str(args.masks_dir or resolve_candidate_masks(paths, args.seq))
     qc_dir = os.path.join(out_root, 'qc')
     os.makedirs(qc_dir, exist_ok=True)
     manual_joint = None
