@@ -34,6 +34,8 @@ from src.evaluation.render import (
 from src.evaluation.transition_metrics import (
     rollout_one_window, evaluate_transition_rollout, format_summary_line,
 )
+from src.registry.paths import ProjectPaths
+from src.registry.runs import create_analysis_run
 
 
 # ──────────────────────────── 交互工具 ────────────────────────────
@@ -50,7 +52,7 @@ def select_from_list(items, prompt, allow_custom=False):
     for i, item in enumerate(items):
         rel_path = os.path.relpath(item, PROJECT_ROOT) if item.startswith('/') else item
         # 对于 checkpoint，额外显示 (exp_id, phase) 以便识别
-        if 'train_log' in rel_path and rel_path.endswith('.pt'):
+        if rel_path.endswith('.pt'):
             model_tag, exp_name, phase = parse_checkpoint_path(item)
             print(f"  [{i}] {exp_name} | {phase} → {rel_path}")
         else:
@@ -84,11 +86,13 @@ def input_float(prompt, default):
 
 # ──────────────────────────── 数据工具 ────────────────────────────
 
-def scan_checkpoints():
+def scan_checkpoints(paths=None):
+    paths = paths or ProjectPaths.load()
+    roots = (paths.runs_root / "training", *paths.legacy.roots_for("training"))
     patterns = [
-        os.path.join(PROJECT_ROOT, 'train_log', '**', 'best_model.pt'),
-        os.path.join(PROJECT_ROOT, 'train_log', '**', 'skeleton_best.pt'),
-        os.path.join(PROJECT_ROOT, 'train_log', '**', 'canonical_best.pt'),
+        os.path.join(str(root), '**', name)
+        for root in roots
+        for name in ('best_model.pt', 'skeleton_best.pt', 'canonical_best.pt')
     ]
     ckpts = []
     for pat in patterns:
@@ -110,17 +114,20 @@ def parse_checkpoint_path(ckpt_path):
     """
     parts = Path(ckpt_path).parts
     try:
-        train_log_idx = parts.index('train_log')
-        model_tag = parts[train_log_idx + 1] if train_log_idx + 1 < len(parts) else 'unknown'
-        exp_name = parts[train_log_idx + 2] if train_log_idx + 2 < len(parts) else 'unknown'
-        phase_name = parts[train_log_idx + 3] if train_log_idx + 3 < len(parts) else ''
+        if 'training' in parts:
+            root_idx = parts.index('training')
+        else:
+            root_idx = parts.index('train_log')
+        model_tag = parts[root_idx + 1] if root_idx + 1 < len(parts) else 'unknown'
+        exp_name = parts[root_idx + 2] if root_idx + 2 < len(parts) else 'unknown'
+        phase_name = parts[root_idx + 3] if root_idx + 3 < len(parts) else ''
         phase_name = phase_name.replace('phase_', '') if phase_name.startswith('phase_') else phase_name
         return model_tag, exp_name, phase_name
     except (ValueError, IndexError):
         return 'unknown', 'unknown', ''
 
 
-def scan_data_dirs():
+def scan_data_dirs(paths=None):
     """扫描 data/ 下所有"直接包含 .npz"的目录（兼容任意深度）。
 
     兼容两种数据布局：
@@ -129,11 +136,16 @@ def scan_data_dirs():
 
     返回所有直接含 .npz 的目录（按路径排序），供 select_from_list 选择。
     """
-    data_root = os.path.join(PROJECT_ROOT, 'data')
+    paths = paths or ProjectPaths.load()
+    roots = [paths.repo_root / 'data', paths.data_root / 'processed']
+    roots.extend(paths.legacy.roots_for('processed'))
     dirs = []
-    for dirpath, _dirnames, filenames in os.walk(data_root):
-        if any(f.endswith('.npz') for f in filenames):
-            dirs.append(dirpath)
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for dirpath, _dirnames, filenames in os.walk(root):
+            if any(f.endswith('.npz') for f in filenames):
+                dirs.append(dirpath)
     return sorted(set(dirs))
 
 
@@ -217,7 +229,8 @@ def main():
     default_threshold = args.threshold or eval_cfg.get("density_threshold", 0.01)
 
     device = torch.device(device_str if torch.cuda.is_available() else 'cpu')
-    output_dir = args.output or os.path.join(PROJECT_ROOT, 'output', 'visualize')
+    output_dir = args.output or str(create_analysis_run(
+        ProjectPaths.load(), "visualize_3d_shape"))
     os.makedirs(output_dir, exist_ok=True)
 
     print("\n=== 3D Shape Visualizer ===\n")

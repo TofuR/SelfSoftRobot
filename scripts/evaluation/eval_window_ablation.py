@@ -44,6 +44,8 @@ plt.rcParams["axes.unicode_minus"] = False
 
 from src.utils.model_loader import load_model
 from src.evaluation.transition_metrics import build_action_window
+from src.registry.paths import ProjectPaths
+from src.registry.runs import create_analysis_run
 
 TREND_COLORS = {"load": "#e74c3c", "unload": "#3498db", "hold": "#bbbbbb"}
 LABELS = {"w1": "window=1 (no action history)", "w40": "window=40 (with history)"}
@@ -128,10 +130,13 @@ def main():
     ap.add_argument("--w1", required=True)
     ap.add_argument("--w40", required=True)
     ap.add_argument("--data_dir", required=True)
-    ap.add_argument("--out", default="output/window_ablation")
+    ap.add_argument("--out", default=None,
+                    help="默认分配新的 workspace analysis run")
     ap.add_argument("--trend_thr", type=float, default=0.02,
                     help="动作趋势阈值(归一化 action 单位): |da|>thr=load/unload")
     args = ap.parse_args()
+    if args.out is None:
+        args.out = str(create_analysis_run(ProjectPaths.load(), "window_ablation"))
     os.makedirs(args.out, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

@@ -13,8 +13,8 @@ row 反转→与相机原图一致：固定端 base 在上、tip 在下），并
 注意：原始拍摄帧/mask 不在磁盘上（derived/ 已清），故此处展示"提取出的骨架"本身。
 
 用法:
-  python scripts/evaluation/inspect_real_data.py                 # 自动找 data/real_seq/*/train/*.npz
-  python scripts/evaluation/inspect_real_data.py --npz data/real_seq/seq_20260627_163921/train/xxx.npz
+  python scripts/evaluation/inspect_real_data.py                 # 自动找 workspace processed real 数据
+  python scripts/evaluation/inspect_real_data.py --npz workspace/data/processed/real/<dataset>/train/<file>.npz
   python scripts/evaluation/inspect_real_data.py --n-samples 12
 """
 
@@ -28,12 +28,22 @@ import numpy as np
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
+from src.registry.paths import ProjectPaths  # noqa: E402
+from src.registry.runs import create_analysis_run  # noqa: E402
 
-def auto_find_npz():
+
+def auto_find_npz(paths=None):
     """自动找实物 transition npz（优先 train）。"""
-    cands = sorted(glob.glob(os.path.join(PROJECT_ROOT, 'data', 'real_seq', '*', 'train', '*.npz')))
+    paths = paths or ProjectPaths.load()
+    roots = (paths.data_root / "processed" / "real", *paths.legacy.roots_for("processed"))
+    cands = []
+    for root in roots:
+        cands.extend(glob.glob(os.path.join(str(root), '*', 'train', '*.npz')))
+    cands = sorted(set(cands))
     if not cands:
-        cands = sorted(glob.glob(os.path.join(PROJECT_ROOT, 'data', 'real_seq', '*', '*', '*.npz')))
+        for root in roots:
+            cands.extend(glob.glob(os.path.join(str(root), '*', '*', '*.npz')))
+        cands = sorted(set(cands))
     return cands[0] if cands else None
 
 
@@ -158,17 +168,18 @@ def render_3d_sample(pos, fid, output_html):
 
 def main(argv=None):
     pa = argparse.ArgumentParser(description='实物 transition 数据诊断（免模型）')
-    pa.add_argument('--npz', default=None, help='npz 路径（缺省自动找 data/real_seq/*/train/*.npz）')
+    pa.add_argument('--npz', default=None, help='npz 路径（缺省自动找 workspace processed real 数据）')
     pa.add_argument('--n-samples', type=int, default=9, help='采样帧数')
-    pa.add_argument('--output', default=None, help='输出目录（缺省 output/inspect_real）')
+    pa.add_argument('--output', default=None, help='输出目录（缺省分配新的 workspace analysis run）')
     args = pa.parse_args(argv)
 
     npz = args.npz or auto_find_npz()
     if not npz or not os.path.isfile(npz):
-        print(f"找不到 npz: {npz}\n用 --npz 指定，或确认 data/real_seq/*/train/*.npz 存在。")
+        print(f"找不到 npz: {npz}\n用 --npz 指定，或确认 workspace processed real 数据存在。")
         sys.exit(1)
 
-    out_dir = args.output or os.path.join(PROJECT_ROOT, 'output', 'inspect_real')
+    out_dir = args.output or str(create_analysis_run(
+        ProjectPaths.load(), "inspect_real"))
     os.makedirs(out_dir, exist_ok=True)
 
     print(f"加载: {os.path.relpath(npz)}")

@@ -44,6 +44,8 @@ from src.evaluation.transition_metrics import build_action_window
 from src.data.action_view import project_actions, resolve_action_contract
 from src.evaluation.diameter_scale import (
     DEFAULT_ROBOT_DIAMETER_MM, resolve_diameter_scale)
+from src.registry.paths import ProjectPaths
+from src.registry.runs import create_analysis_run
 
 
 def rollout_horizon(model, actions_norm, positions, t0, max_k, window_size, device):
@@ -277,8 +279,8 @@ def main():
                         help="每个种子最长 rollout 步数")
     parser.add_argument("--n_seeds", type=int, default=8,
                         help="种子数(从 val 不同帧起 rollout 后聚合)")
-    parser.add_argument("--out", type=str, default="output/horizon",
-                        help="输出目录(JSON + PNG)")
+    parser.add_argument("--out", type=str, default=None,
+                        help="输出目录(JSON + PNG)；默认分配新的 workspace analysis run")
     parser.add_argument("--robot-diameter-mm", type=float,
                         default=DEFAULT_ROBOT_DIAMETER_MM)
     parser.add_argument("--robot-diameter-px", type=float, default=None,
@@ -286,6 +288,8 @@ def main():
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if args.out is None:
+        args.out = str(create_analysis_run(ProjectPaths.load(), "horizon"))
     os.makedirs(args.out, exist_ok=True)
 
     all_by_k = {}

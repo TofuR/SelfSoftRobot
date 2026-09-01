@@ -30,6 +30,7 @@ from src.evaluation.shape_metrics import chamfer_distance, f_score, hausdorff_di
 from src.evaluation.surface_sampling import sample_gt_surface, model_output_to_pointcloud
 from src.evaluation.projection_metrics import projection_f1
 from src.utils.camera_system import MultiCameraSystem
+from src.registry.paths import ProjectPaths
 
 
 # ── 交互式选择工具 ──────────────────────────────────────────────
@@ -54,27 +55,31 @@ def select_from_list(items, prompt, allow_custom=False):
         return items[0]
 
 
-def scan_checkpoints():
+def scan_checkpoints(paths=None):
     """扫描所有可用 checkpoint。"""
-    patterns = [
-        os.path.join(PROJECT_ROOT, 'train_log', '**', 'best_model.pt'),
-        os.path.join(PROJECT_ROOT, 'train_log', '**', 'final_model.pt'),
-    ]
+    paths = paths or ProjectPaths.load()
+    roots = (paths.runs_root / "training", *paths.legacy.roots_for("training"))
+    patterns = [os.path.join(str(root), '**', name)
+                for root in roots for name in ('best_model.pt', 'final_model.pt')]
     ckpts = []
     for pat in patterns:
         ckpts.extend(glob.glob(pat, recursive=True))
     return sorted(set(ckpts))
 
 
-def scan_data_dirs():
-    """扫描 data/ 下有 npz 文件的目录。"""
-    data_root = os.path.join(PROJECT_ROOT, 'data')
+def scan_data_dirs(paths=None):
+    """扫描仿真数据与 canonical processed 数据中直接包含 NPZ 的目录。"""
+    paths = paths or ProjectPaths.load()
+    roots = [paths.repo_root / 'data', paths.data_root / 'processed']
+    roots.extend(paths.legacy.roots_for('processed'))
     dirs = []
-    for d in sorted(os.listdir(data_root)):
-        full = os.path.join(data_root, d)
-        if os.path.isdir(full) and glob.glob(os.path.join(full, '*.npz')):
-            dirs.append(full)
-    return dirs
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for dirpath, _dirnames, filenames in os.walk(root):
+            if any(name.endswith('.npz') for name in filenames):
+                dirs.append(dirpath)
+    return sorted(set(dirs))
 
 
 # ── 核心评估逻辑 ──────────────────────────────────────────────────

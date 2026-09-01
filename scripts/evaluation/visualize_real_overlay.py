@@ -41,6 +41,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from src.utils.model_loader import load_model  # noqa: E402
 from src.data.action_view import project_actions, resolve_action_contract  # noqa: E402
+from src.registry.paths import ProjectPaths  # noqa: E402
+from src.registry.real_assets import (  # noqa: E402
+    resolve_candidate_masks, resolve_raw_sequence, resolve_sam2_masks,
+)
+from src.registry.runs import create_analysis_run  # noqa: E402
 from real_validation.perception.coordinates import SkeletonFrameTransform  # noqa: E402
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -190,8 +195,8 @@ def main(argv=None):
     pa = argparse.ArgumentParser(description="实物 transition 预测叠在真实照片上")
     pa.add_argument("--checkpoint", required=True, help="best_model.pt")
     pa.add_argument("--data_dir", required=True, help="npz 目录(train/val)")
-    pa.add_argument("--cam0", default=None, help="原图目录(默认 real_capture/data/raw/<seq>/cam0)")
-    pa.add_argument("--masks", default=None, help="mask 目录(默认 derived/<seq>/masks)")
+    pa.add_argument("--cam0", default=None, help="原图目录(默认解析 canonical raw/<seq>/cam0)")
+    pa.add_argument("--masks", default=None, help="mask 目录(默认优先解析 canonical SAM2 mask)")
     pa.add_argument("--seq_idx", type=int, default=0, help="第几个 npz(sorted)")
     pa.add_argument("--mode", choices=["auto", "gt", "open_loop", "onestep"], default="auto")
     pa.add_argument("--window-len", type=int, default=40, help="[open_loop] 窗口 K(每 K 步重种子)")
@@ -202,7 +207,7 @@ def main(argv=None):
                     help="[open_loop] 额外画单步上界(橙)对比漂移")
     pa.add_argument("--frame-offset", type=int, default=None,
                     help="npz 索引→cam0 帧号偏移(默认自动: train=0, val=len(train))")
-    pa.add_argument("--out", default=None, help="输出目录(默认 output/real_overlay/<ckpt 父目录>)")
+    pa.add_argument("--out", default=None, help="输出目录(默认分配新的 workspace analysis run)")
     args = pa.parse_args(argv)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -276,8 +281,15 @@ def main(argv=None):
                         np.ones(T, dtype=bool))
 
     seq = sequence_from_npz(selected_npz)
-    cam0 = args.cam0 or os.path.join(PROJECT_ROOT, "real_capture", "data", "raw", seq, "cam0")
-    masks_dir = args.masks or os.path.join(PROJECT_ROOT, "real_capture", "data", "derived", seq, "masks")
+    paths = ProjectPaths.load()
+    cam0 = args.cam0 or str(resolve_raw_sequence(paths, seq, camera="cam0") / "cam0")
+    if args.masks:
+        masks_dir = args.masks
+    else:
+        try:
+            masks_dir = str(resolve_sam2_masks(paths, seq))
+        except FileNotFoundError:
+            masks_dir = str(resolve_candidate_masks(paths, seq))
     offset = (args.frame_offset if args.frame_offset is not None else
               auto_offset(args.data_dir, selected_npz))
     print(f"  seq={seq} cam0={'OK' if os.path.isdir(cam0) else 'MISSING'} "
@@ -291,9 +303,9 @@ def main(argv=None):
           f"max={valid_tip.max():.1f}{state_unit} | "
           f"全节点均误: mean={valid_node.mean():.2f}{state_unit}")
 
-    ckpt_tag = os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(args.checkpoint)))) \
-        or os.path.basename(args.checkpoint)
-    out_dir = args.out or os.path.join(PROJECT_ROOT, "output", "real_overlay", ckpt_tag)
+    ckpt_tag = (os.path.basename(os.path.dirname(os.path.dirname(
+        os.path.dirname(args.checkpoint)))) or os.path.basename(args.checkpoint))
+    out_dir = args.out or str(create_analysis_run(paths, "real_overlay"))
     os.makedirs(out_dir, exist_ok=True)
 
     if args.all:
