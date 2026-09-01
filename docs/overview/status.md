@@ -32,6 +32,9 @@ sources:
 2026-07-28 快照，不再拥有当前状态。`paper/` 已固定为唯一活跃 manuscript，
 `papers/` 只保存文献证据和阶段草稿输入。仍待处理的是通用/单序列 workflow
 分离，以及旧文档逐份 keep/merge/supersede/archive 裁决。
+权威入口、standards 和 maintenance 已由
+`scripts/maintenance/check_docs_governance.py` 检查 front matter、四角色映射和
+关键相对链接；历史长尾文档暂不强制批量改写。
 
 以下路径或概念属于删除区；除非 replacement 合同发生经记录的变更，否则不要重建：
 

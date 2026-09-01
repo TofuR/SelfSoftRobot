@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > 再按任务读取 [`docs/maintenance/README.md`](docs/maintenance/README.md) 中的相关历史。
 > 文档是上下文而非可执行真相；路径、命令和状态必须用当前代码、测试、manifest
 > 与 Git 验证。旧 [`docs/HANDOFF.md`](docs/HANDOFF.md) 不再拥有当前状态。
+> 修改权威文档后运行 `python scripts/maintenance/check_docs_governance.py`。
 
 ## Project Overview
 

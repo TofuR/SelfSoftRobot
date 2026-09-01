@@ -26,6 +26,13 @@ sources: []
 [`HANDOFF.md`](HANDOFF.md) 只保留兼容重定向；2026-07-28 完整快照已归档，
 不再作为当前入口。
 
+治理更新规则：结构/所有权变化改本页；当前里程碑、阻塞或删除区改 status；难回退
+决定和重要迁移改 maintenance。提交这些文档前运行：
+
+```bash
+python scripts/maintenance/check_docs_governance.py
+```
+
 ## 项目总览 (`overview/`)
 | 文档 | 说明 |
 |---|---|

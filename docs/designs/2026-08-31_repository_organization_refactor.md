@@ -14,7 +14,7 @@
 | Phase 2 数据双读单写 | 完成 | `real_capture`、预处理、dataset/fixture selector、组合/清洗、SAM2 与 QC 均统一读写 workspace | 后续新增脚本持续遵守同一合同 |
 | Phase 3 训练合同 | 完成 | 新 run 根、轻量 run manifest v2、旧 checkpoint 双读、engine 验证/选择/早停循环及 transition adapter 已落地；GT/OpenLoop 排序等价、真实流水线切换与 canonical formal run 均通过 | 新模型接入时继续复用合同，不回补改写历史 run |
 | Phase 4 历史导入 | 部分完成 | 67 项资产已原子迁入 workspace；14 个 dataset 均有历史/观察型 manifest，104 个训练 run 已索引，4 个真实主线试次已有 `legacy_run_manifest.json` | 严格 v2 升级、归档 run manifest 和 15 条缺失数据引用继续审计 |
-| Phase 5 文档治理 | 部分完成 | 唯一导航及数据划分、训练评价、试次、证据标准 | workflow 合并、旧文档逐份裁决、front matter lint |
+| Phase 5 文档治理 | 部分完成 | Constitution/Map/Status/History 角色、删除区、唯一论文树、第三方/参考资产边界、权威文档 front matter/link 守门及数据划分/训练评价/试次/证据标准 | workflow 合并、剩余旧文档逐份裁决、逐步扩大 front matter 覆盖 |
 | Phase 6 物理清理 | 部分完成 | 经授权并完成 GT/OpenLoop 2+2 epoch 主线短跑后，67 个旧兼容链接及空旧根已移除；Python 字节码缓存和 4 个可重建旧展示文件已清理 | 无明确生成入口的展示文件、废弃工作树另行审计 |
 
 本表是实现状态，不替代下文的目标设计。提交历史按功能分层保存；任何尚未完成项都不能从目标描述推断为已实现。
