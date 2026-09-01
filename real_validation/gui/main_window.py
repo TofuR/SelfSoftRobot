@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import time
@@ -40,6 +41,20 @@ from .theme import QSS, CARD, STATE_BADGE_COLORS, configure_pyqtgraph
 import pyqtgraph as pg   # 可视化面板的气压/NDI 实时曲线(real_capture 右栏同款)
 
 APP_DIR = Path(__file__).resolve().parent.parent  # real_validation/ 包根(数据目录 config/checkpoints/data/runs 不变)
+DEFAULT_ANCHOR_DATASET_ID = "seq_20260627_163921_n15_sam2_clean"
+
+
+def _registered_dataset_selector():
+    """Use the project registry when running inside the source repository.
+
+    A copied standalone deployment can still browse an explicit NPZ without
+    depending on the repository's ``src`` package.
+    """
+    try:
+        from src.registry import DatasetSelector, ProjectPaths
+        return DatasetSelector(ProjectPaths.load())
+    except (ImportError, FileNotFoundError, ValueError):
+        return None
 
 
 class SafetyPolicyDialog(QDialog):
@@ -219,6 +234,7 @@ class ValidationWindow(QMainWindow):
         self._post_evaluation_context = None
         self._last_live_perception_time = 0.0
         self._valve_connect_thread: _ValveConnectThread | None = None
+        self.dataset_selector = _registered_dataset_selector()
         configure_pyqtgraph()          # 任何 PlotWidget 之前,保证白底全局生效
         self._build_ui()
         self._init_viz_buffers()
@@ -480,7 +496,25 @@ class ValidationWindow(QMainWindow):
         scene = QPushButton("加载 scene.json"); scene.clicked.connect(self._load_scene)
         buttons.addWidget(anchor); buttons.addWidget(scene); buttons.addStretch()
         off.addLayout(buttons)
-        self.anchor_npz = QLineEdit(str(APP_DIR / "data" / "npz" / "seq_20260627_163921_train.npz"))
+        self.anchor_dataset = QComboBox()
+        dataset_ids = (
+            self.dataset_selector.dataset_ids()
+            if self.dataset_selector is not None else ())
+        self.anchor_dataset.addItems(dataset_ids)
+        preferred_dataset = os.environ.get(
+            "SSR_VALIDATION_DATASET_ID", DEFAULT_ANCHOR_DATASET_ID)
+        preferred_index = self.anchor_dataset.findText(preferred_dataset)
+        if preferred_index >= 0:
+            self.anchor_dataset.setCurrentIndex(preferred_index)
+        self.anchor_role = QComboBox(); self.anchor_role.addItems(("train", "val", "test"))
+        choose_dataset = QPushButton("选择注册数据")
+        choose_dataset.clicked.connect(self._select_registered_anchor_dataset)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Dataset")); row.addWidget(self.anchor_dataset, 1)
+        row.addWidget(QLabel("划分")); row.addWidget(self.anchor_role)
+        row.addWidget(choose_dataset)
+        off.addLayout(row)
+        self.anchor_npz = QLineEdit()
         self.anchor_index = QSpinBox(); self.anchor_index.setRange(0, 100000000)
         self.anchor_index.setValue(39)
         self.anchor_index.setToolTip(
@@ -503,6 +537,7 @@ class ValidationWindow(QMainWindow):
         self.anchor_help.setWordWrap(True)
         self.anchor_help.setStyleSheet("color:#486581;font-size:11px;")
         off.addWidget(self.anchor_help)
+        self._select_registered_anchor_dataset(show_error=False)
         root.addWidget(gb_off)
 
         # 卡2:当前相机的实验级 ROI 与在线感知配置
@@ -1852,8 +1887,9 @@ class ValidationWindow(QMainWindow):
             atomic_write_json(self.session.run_dir / "anchor.json", anchor.to_dict())
             self._scene_changed()
         except FileNotFoundError as error:
-            self._error(f"找不到 NPZ 文件:\n{error}\n\n请把 transition NPZ 拷入 "
-                        f"real_validation/data/npz/,或点击 … 选择现有文件。")
+            self._error(f"找不到 NPZ 文件:\n{error}\n\n请选择已注册 dataset，"
+                        "或点击 … 选择现有文件。若数据在外部工作区，请设置 "
+                        "SSR_WORKSPACE_ROOT。")
         except IndexError as error:
             self._error(f"帧索引越界:\n{error}\n\n请把『帧索引』改到数据帧数范围内"
                         f"(示例数据 0~8171)。")
@@ -1875,6 +1911,30 @@ class ValidationWindow(QMainWindow):
                 hint = ("\n\n该文件不是 transition NPZ,或格式不符。需要 "
                         "positions(T,3,N) + actions(T,D)。")
             self._error(message + hint)
+
+    def _select_registered_anchor_dataset(self, _checked=False, *, show_error=True) -> None:
+        if self.dataset_selector is None:
+            if show_error:
+                self._error("当前是独立部署目录，未发现项目 dataset registry；"
+                            "请点击 … 选择外部 transition NPZ。")
+            return
+        dataset_id = self.anchor_dataset.currentText().strip()
+        role = self.anchor_role.currentText().strip()
+        if not dataset_id:
+            if show_error:
+                self._error("没有发现已注册 dataset；请先设置 SSR_WORKSPACE_ROOT，"
+                            "或点击 … 选择现有文件。")
+            return
+        try:
+            artifact = self.dataset_selector.resolve(dataset_id, role)
+            self.anchor_npz.setText(str(artifact.path))
+            if show_error:
+                self._log(
+                    f"已选择 dataset={dataset_id} role={role} "
+                    f"source={artifact.source}: {artifact.path}")
+        except (FileNotFoundError, ValueError) as error:
+            if show_error:
+                self._error(str(error))
 
     def _load_scene(self) -> None:
         self._load_session_json("scene", Scene.from_dict)

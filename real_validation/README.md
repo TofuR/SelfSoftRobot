@@ -9,7 +9,7 @@
 - action dimension、六通道映射、压力、速率和 `K_safe` preflight；
 - 控制观测与隐藏评价流的 observation policy；
 - Mock ACK、错误注入、Abort 后归零与 `execution.csv`；
-- 从 transition NPZ 建立带完整 H 历史的离线 anchor；
+- 从项目 dataset registry 或显式 transition NPZ 建立带完整 H 历史的离线 anchor；
 - 受压力/速率约束的 OpenLoop shooting 与逐步轨迹/动作预览；
 - 当前相机的实验级 ROI、参考背景、在线分割和 15 节点整臂中心线；
 - 相机像素、ROI 局部像素与机器人毫米坐标的可追溯正反变换；
@@ -43,8 +43,10 @@ python -m pip install -r requirements-perception.txt
 `checkpoints/<model_name>/`。部署清单声明动作压力尺度、通道来源、训练时基、毫米状态坐标、
 `K_safe` 和位移统计；加载时会校验 checkpoint 哈希。
 
-离线锚定用的 transition NPZ 放 `data/npz/`(示例 15 节点数据已内置;GUI_GUIDE
-§2.2 有『从 NPZ 建 Anchor』的完整操作入门)。
+在源码仓库中运行时，离线锚定从统一 dataset registry 选择 train/val/test
+artifact，不再在应用目录保存正式 NPZ 副本；外置工作区通过
+`SSR_WORKSPACE_ROOT` 选择。复制到独立部署 PC 后，也可以用文件选择器加载外部
+transition NPZ。GUI_GUIDE §2.2 有『从 NPZ 建 Anchor』的完整操作入门。
 
 启动 GUI：
 

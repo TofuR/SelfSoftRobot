@@ -1,5 +1,7 @@
 """Artifact path and manifest registry primitives."""
 
+from .datasets import DATASET_ROLES, DatasetArtifact, DatasetSelector
+
 from .manifests import (
     ManifestError,
     ManifestStore,
@@ -12,6 +14,9 @@ from .manifests import (
 from .paths import LegacyRoots, ProjectPaths
 
 __all__ = [
+    "DATASET_ROLES",
+    "DatasetArtifact",
+    "DatasetSelector",
     "LegacyRoots",
     "ManifestError",
     "ManifestStore",
