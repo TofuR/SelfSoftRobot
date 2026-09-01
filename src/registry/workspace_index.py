@@ -99,6 +99,11 @@ def _artifact_uri_if_file(paths: ProjectPaths, path: Path) -> Optional[str]:
     return paths.artifact_uri(path) if path.is_file() else None
 
 
+def _split_root(dataset: Path, role: str) -> Path:
+    canonical = dataset / "splits" / role
+    return canonical if canonical.is_dir() else dataset / role
+
+
 class WorkspaceIndexBuilder:
     """Build dataset-to-run lineage from the current canonical workspace."""
 
@@ -171,8 +176,8 @@ class WorkspaceIndexBuilder:
                 "source_sequence_ids": (
                     _source_sequence_ids(manifest) if manifest else []),
                 "split_files": {
-                    role: len(list((dataset / role).glob("*.npz")))
-                    if (dataset / role).is_dir() else 0
+                    role: len(list(_split_root(dataset, role).glob("*.npz")))
+                    if _split_root(dataset, role).is_dir() else 0
                     for role in ("train", "val", "test")
                 },
             })
@@ -264,7 +269,7 @@ def _legacy_stage_records(paths: ProjectPaths, run: Path, config: dict) -> list[
 def _observed_sequence_ids(dataset: Path) -> list[str]:
     result = set()
     for role in ("train", "val", "test"):
-        split = dataset / role
+        split = _split_root(dataset, role)
         if not split.is_dir():
             continue
         for path in split.glob("*.npz"):

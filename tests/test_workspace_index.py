@@ -83,6 +83,20 @@ class WorkspaceIndexTest(unittest.TestCase):
             self.index["reverse_index"]["dataset_to_runs"]["dataset_a"],
             [run_uri])
 
+    def test_counts_canonical_splits_directory(self):
+        dataset = self.paths.processed_dataset("real", "dataset_canonical")
+        for role in ("train", "val", "test"):
+            split = dataset / "splits" / role
+            split.mkdir(parents=True)
+            (split / f"{role}.npz").write_bytes(role.encode())
+
+        index = WorkspaceIndexBuilder(self.paths).build()
+        item = next(value for value in index["datasets"]
+                    if value["dataset_id"] == "dataset_canonical")
+
+        self.assertEqual(item["split_files"], {
+            "train": 1, "val": 1, "test": 1})
+
     def test_writes_refreshable_index_and_non_overwriting_mainline_manifest(self):
         target = write_workspace_index(self.paths, self.index)
         self.assertEqual(json.loads(target.read_text()), self.index)
