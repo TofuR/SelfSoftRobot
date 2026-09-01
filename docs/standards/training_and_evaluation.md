@@ -83,4 +83,4 @@ sources:
 
 训练内旧 `transition_metrics` 的 rollout 诊断现按 NPZ `state_length_unit` 显式把 `m/mm/px` 转为米后再汇总毫米指标，避免 robot-mm 数据被重复乘 1000。归一化空间的 rollout/onestep 漂移比不受此修正影响。
 
-GT/OpenLoop 排序等价门槛已经满足，完整真实流水线已切换到 engine adapter，不再并行启动 watcher 写同一 `best_eval_model.pt`。阶段完成后的定量评价和叠图保持不变；切换后的 GT 1 epoch + OpenLoop 2 epoch 完整短跑已通过。watcher 已退出主线，源文件暂时保留并作为下一项独立清理审查。
+GT/OpenLoop 排序等价门槛已经满足，完整真实流水线已切换到 engine adapter，不再并行启动 watcher 写同一 `best_eval_model.pt`。阶段完成后的定量评价和叠图保持不变；切换后的 GT 1 epoch + OpenLoop 2 epoch 完整短跑已通过。确认无运行时引用后，旧 watcher 入口及专属测试已删除，历史实现仍可从 Git 恢复。

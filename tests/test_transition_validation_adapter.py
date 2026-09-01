@@ -7,7 +7,6 @@ import unittest
 import numpy as np
 import torch
 
-from scripts.evaluation.watch_best_checkpoint import validation_node_mean
 from scripts.training.train_transition import configure_transition_validation
 from src.evaluation.real_transition_validation import evaluate_native_node_metrics
 from src.evaluation.transition_metrics import evaluate_transition_rollout
@@ -59,7 +58,7 @@ class TransitionValidationAdapterTest(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def test_native_node_mean_matches_periodic_watcher_aggregation(self):
+    def test_native_node_mean_matches_external_csv_aggregation(self):
         metrics, details = evaluate_native_node_metrics(
             self.model, self.data_dir, self.config, torch.device("cpu"),
             mode="gt", max_steps=6, return_details=True)
@@ -75,12 +74,15 @@ class TransitionValidationAdapterTest(unittest.TestCase):
                     "node_mean_mm": float(value),
                 })
 
-        watcher_score, unit = validation_node_mean(csv_path)
+        with csv_path.open(newline="", encoding="utf-8") as stream:
+            rows = list(csv.DictReader(stream))
+        csv_values = [float(row["node_mean_mm"]) for row in rows
+                      if row["is_prediction"] == "1"]
+        csv_score = sum(csv_values) / len(csv_values)
 
-        self.assertEqual(unit, "mm")
         self.assertAlmostEqual(
-            metrics["validation.node_mean_mm"], watcher_score)
-        self.assertAlmostEqual(watcher_score, 5.0 / 3.0)
+            metrics["validation.node_mean_mm"], csv_score)
+        self.assertAlmostEqual(csv_score, 5.0 / 3.0)
 
     def test_adapter_uses_openloop_semantics_from_phase_name(self):
         phase = PhaseSpec("open_loop_transition", episode_len=2)

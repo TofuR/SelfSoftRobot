@@ -101,7 +101,7 @@ def evaluate_native_node_metrics(
     seq_idx=0,
     return_details=False,
 ):
-    """Return the same native-unit node mean used by the periodic watcher."""
+    """Return native-unit node metrics shared by training and the evaluation CLI."""
     files = sorted(glob.glob(os.path.join(str(data_dir), "*.npz")))
     if not files:
         raise FileNotFoundError(f"val 目录没有 NPZ: {data_dir}")

@@ -38,9 +38,9 @@ OpenLoop 采用 3 epoch 线性 teacher-forcing 退火（`1.0 -> 0.5 -> 0.0`）�
 
 ## 结论与边界
 
-GT 和 OpenLoop 均满足指标口径与 checkpoint 选择等价门槛，完整真实训练流水线
-可以切换到内部 adapter。切换时不得让 watcher 与 engine 同时写
-`best_eval_model.pt`。watcher 源文件先保留，待流水线切换后的测试与短跑通过后再单独审查。
+GT 和 OpenLoop 均满足指标口径与 checkpoint 选择等价门槛。完整真实训练流水线随后
+切换到内部 adapter；迁移过程中始终禁止 watcher 与 engine 同时写
+`best_eval_model.pt`。
 
 ## 流水线切换验收
 
@@ -53,4 +53,5 @@ GT 和 OpenLoop 均满足指标口径与 checkpoint 选择等价门槛，完整�
 - 定量评价、叠图、`commands.sh`、`status.txt` 和 `artifacts.json` 全部完成；
 - `commands.sh` 不含 watcher，未发生双写。
 
-该短跑证明完整调用链可以运行。watcher 已退出主线，但源文件是否删除仍作为独立清理项审查。
+该短跑证明完整调用链可以运行。随后复核仓库引用，确认 watcher 已无运行时调用；
+其 CSV 聚合对照保留在 adapter 测试内，watcher 入口及专属测试已删除。历史实现仍可从 Git 恢复。
