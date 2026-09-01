@@ -2,7 +2,7 @@
 title: SelfSoftRobot 项目状态快照
 kind: overview
 status: active
-updated: 2026-08-31
+updated: 2026-09-01
 scope: active research line, engineering migration, evidence boundaries
 supersedes: []
 superseded_by: null
@@ -16,14 +16,14 @@ sources:
 > “现在到哪了 + 接下来做什么”。本页是唯一当前状态入口；具体参数和数值以 dataset/run manifest 与实验记录为准。
 > 文献详见 [`../background/literature.md`](../background/literature.md); 模型架构详见 [`project_help.md`](project_help.md); 研究方向详见 [`../directions/`](../directions/)。
 
-## 0. 2026-08-31 当前结论
+## 0. 2026-09-01 当前结论
 
 - 部署研究主线是少观测/有遮挡条件下的 windowed OpenLoop；GTObserved 用于上界、诊断和验证，不作为部署主张。
 - HereditaryOperatorModel v2 已实现，用显式 PI/Maxwell 状态研究迟滞份额和可解释性；它是灰盒运动学模型，不等同于材料谱或 Cosserat 材料模型。
-- 仓库正在执行分阶段整理：新 raw、预处理数据、直接训练和正式真实训练默认写统一 workspace；历史 `real_capture/data`、`data/real_seq`、`train_log`、`output` 保持只读兼容。
+- 仓库分阶段整理已完成历史资产搬迁：67 项 raw/intermediate/processed/training/analysis/model 资产统一位于 workspace；GT/OpenLoop 2+2 epoch 主线短跑及评价通过后，旧兼容入口与空根已移除。
 - 数据划分、checkpoint 语义、早停、试次归档和证据表述以 [`../standards/`](../standards/) 为权威规则。
 - `real_capture` 与 `real_validation` 继续分离；NDI 只作独立 endpoint 评价，不能成为模型或 planner 输入。
-- 尚未完成：公共训练 engine 的原生 validation/early-stop 合同、`real_validation` dataset selector、次级数据脚本迁移和文档逐份归档。
+- 尚未完成：公共训练 engine 的原生 validation/early-stop 合同、历史 manifest/反向引用补齐、缓存与废弃工作树分组清理、文档逐份归档。
 
 下文保留仿真与早期实物路线的历史基线；其中带“当前默认”“最好”的旧表述若与本节或具体 run 记录冲突，以本节和带日期证据为准。
 

@@ -2,7 +2,7 @@
 title: SelfSoftRobot 仓库与运行工作区规范
 kind: standard
 status: active
-updated: 2026-08-31
+updated: 2026-09-01
 scope: source tree, data artifacts, experiment runs, compatibility paths
 supersedes: []
 superseded_by: null
@@ -52,9 +52,9 @@ workspace/
 - 配置、命令、日志、checkpoint、评价和完成标记必须留在同一 run 下；
 - 不得用“最新目录”作为正式实验的隐式输入。
 
-## 4. 迁移期兼容规则
+## 4. 历史路径状态
 
-以下位置是只读兼容根，不是新产物的写入目标：
+以下历史资产已于 2026-09-01 原子迁入 workspace，并在主线短跑通过后移除旧入口：
 
 | 历史位置 | 目标角色 |
 |---|---|
@@ -65,7 +65,7 @@ workspace/
 | `real_validation/runs` | validation run |
 | `output` | analysis run |
 
-兼容读取由统一路径解析器控制。每迁移一个消费者，都必须证明旧路径仍可读、新写入只进入 workspace，并在独立提交中记录验证。
+这些路径不再是可用的数据入口。路径解析器仍保留 legacy fallback，用于外部 workspace 或尚未导入的机器本地资产；本仓库内的正式命令、配置和新产物必须使用 workspace/canonical 路径。迁移清单与回滚映射见 [`../maintenance/2026-09-01_legacy_asset_migration.json`](../maintenance/2026-09-01_legacy_asset_migration.json)。
 
 ## 5. 禁止事项
 
