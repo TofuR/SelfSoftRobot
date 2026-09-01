@@ -2,7 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> **新接手本项目?先读 [`docs/HANDOFF.md`](docs/HANDOFF.md)** — 5 分钟接手指南:当前真实状态、别破坏的不变量、怎么跑最新控制/规划、诚实边界。本文件(CLAUDE.md)是完整规范,HANDOFF 是快速定向。
+> 本文件只拥有必须遵守的项目约束。进入仓库后依次读取
+> [`docs/README.md`](docs/README.md)（结构与权威入口）、
+> [`docs/overview/status.md`](docs/overview/status.md)（当前状态、阻塞和删除区），
+> 再按任务读取 [`docs/maintenance/README.md`](docs/maintenance/README.md) 中的相关历史。
+> 文档是上下文而非可执行真相；路径、命令和状态必须用当前代码、测试、manifest
+> 与 Git 验证。旧 [`docs/HANDOFF.md`](docs/HANDOFF.md) 不再拥有当前状态。
 
 ## Project Overview
 
@@ -68,7 +73,9 @@ python scripts/evaluation/visualize_predictions.py animate   # GIF animation
 python scripts/evaluation/visualize_3d_shape.py              # 3D SDF/mesh visualization
 ```
 
-There is no formal test suite. Validation is done through notebooks and the evaluation scripts.
+仓库已有 `unittest` 测试集；优先运行受影响模块的聚焦测试，再按依赖影响扩大到
+`python -m unittest discover -s tests`。notebook 和评价脚本只能补充科学证据，不能
+替代代码回归测试。
 
 ### Real-Data Pipeline (route B, calibration-free 2D)
 

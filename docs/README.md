@@ -1,12 +1,29 @@
+---
+title: SelfSoftRobot 文档地图
+kind: map
+status: active
+updated: 2026-09-01
+scope: canonical documentation navigation and ownership
+supersedes: []
+superseded_by: null
+sources: []
+---
+
 # docs/ 导航索引
 
-> docs/ 的唯一导航。按主题找权威文档；“当前/最好/最新”只由状态页或具体 run 记录拥有。最后更新 2026-08-31。
+> docs/ 的唯一地图。按主题找权威文档；“当前/最好/最新”只由状态页或具体 run
+> 记录拥有。文档内容需用当前代码、测试、manifest 与 Git 验证。
 
-## 接手指南(给 AI agent)
+## 治理角色
 
-| 文档 | 说明 |
-|---|---|
-| [`HANDOFF.md`](HANDOFF.md) | **新接手先读**: 5 分钟心智模型 + 当前真实状态(exp_20260714_7/8) + 别破坏的不变量 + 怎么跑最新控制/规划 + 诚实边界 + 术语表 |
+| 角色 | 权威来源 | 只负责 |
+|---|---|---|
+| Constitution | [`../CLAUDE.md`](../CLAUDE.md) + [`standards/`](standards/) | 必须遵守的约束；详细规则链接到 standards |
+| Map | 本页 | 结构、所有权和“去哪里找” |
+| Status | [`overview/status.md`](overview/status.md) | 当前主线、阻塞、健康和删除区 |
+| History | [`maintenance/README.md`](maintenance/README.md) | 重要迁移、替换、删除及验收决定 |
+
+旧 [`HANDOFF.md`](HANDOFF.md) 是 2026-07-28 快照，不再作为当前入口。
 
 ## 项目总览 (`overview/`)
 | 文档 | 说明 |
@@ -42,6 +59,12 @@
 | [`standards/training_and_evaluation.md`](standards/training_and_evaluation.md) | **训练与选择共识**：验证、早停、checkpoint 语义、模型差异和测试集使用 |
 | [`standards/experiment_layout.md`](standards/experiment_layout.md) | **试次归档共识**：run 布局、无覆盖、resume、完成标记和历史运行 |
 | [`standards/evidence_language.md`](standards/evidence_language.md) | **证据语言共识**：模型误差、离线规划、Mock 链路和实机控制的表述边界 |
+
+## 治理历史 (`maintenance/`)
+
+| 文档 | 说明 |
+|---|---|
+| [`maintenance/README.md`](maintenance/README.md) | 重要迁移、发布、验收和有意删除的索引；普通提交仍以 Git 为准 |
 
 ## 文献与背景 (`background/`)
 | 文档 | 说明 |
