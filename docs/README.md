@@ -40,18 +40,20 @@ python scripts/maintenance/check_docs_governance.py
 | [`overview/pipeline.md`](overview/pipeline.md) | 技术管线与模型演进(MSTNF→C-MSTNF→MS-SCNF→state-transition) |
 | [`overview/status.md`](overview/status.md) | 项目状态快照: 现在到哪了 + 接下来做什么 |
 
-## 实物数据 (`real_data/`) — 当前主线
+## 实物数据 (`real_data/`)
 | 文档 | 说明 |
 |---|---|
-| [`real_data/workflow.md`](real_data/workflow.md) | **免标定 2D 骨架→状态转移→NDI 验证** 完整流程(分割/修复/SAM2/骨架化/npz/clean/训练/评估) |
+| [`real_data/README.md`](real_data/README.md) | 实物文档入口：当前流程、实验记录和旧流程分类 |
+| [`real_data/general_6ch_postprocess.md`](real_data/general_6ch_postprocess.md) | **当前通用数据前处理主线** |
+| [`real_data/automated_real_pipeline.md`](real_data/automated_real_pipeline.md) | 当前自动前处理、训练和离线验证编排 |
 | [`real_data/capture_setup.md`](real_data/capture_setup.md) | 硬件采集系统: 双段硅胶臂 + 6通道 Modbus 比例阀 + RealSense + NDI Aurora |
 | [`real_data/deployment.md`](real_data/deployment.md) | **实机部署指南**: 采集→数据前处理→训练→deploy_manifest→工作台闭环;含已知坑与诚实边界 |
 
 ## 研究方向 (`directions/`)
 | 文档 | 说明 |
 |---|---|
-| [`directions/directions_overview.md`](directions/directions_overview.md) | 17 个研究方向索引 |
-| `directions/02_*.md` ~ `17_*.md` | 各方向详述(迟滞/编码/骨架/多视角/sim2real/OpenLoop/控制/路径依赖 IK 等) |
+| [`directions/directions_overview.md`](directions/directions_overview.md) | 18 个研究方向索引（部分为历史假设） |
+| `directions/02_*.md` ~ `18_*.md` | 各方向详述(迟滞/编码/骨架/多视角/sim2real/OpenLoop/控制/路径依赖 IK 等) |
 
 ## 设计 (`designs/`)
 | 文档 | 说明 |
@@ -89,11 +91,11 @@ python scripts/maintenance/check_docs_governance.py
 ## 实验 (`experiments/`)
 | 文档 | 说明 |
 |---|---|
+| [`experiments/README.md`](experiments/README.md) | 实验文档入口：当前方案、正式记录和历史仿真实验 |
 | [`experiments/openloop_sparse_observation_validation_plan.md`](experiments/openloop_sparse_observation_validation_plan.md) | **当前论文实验主方案**：机制层物理记忆与 H–K 可行域，任务层路径依赖 IK/不可见轨迹，应用层不透明通道稀疏观测巡检 |
 | [`experiments/real_robot_validation_workbench_todo.md`](experiments/real_robot_validation_workbench_todo.md) | **实机验证界面 TODO**：模型/场景/规划/安全执行/同步评价的通用工作台与任务插件 |
-| `experiments/experiment_analysis.md` | 全部实验结果分析 |
-| `experiments/improvement_proposals.md` | 改进方案记录 |
-| `experiments/results_evaluation.md` | 评估结果 |
+| `experiments/hereditary_v2_training_validation.md` | Hereditary v2 正式训练与验证记录 |
+| `experiments/experiment_analysis.md`、`improvement_proposals.md`、`results_evaluation.md` | **历史仿真阶段记录**，仅用于追溯，不作为当前结论入口 |
 
 ## 演示 (`presentations/`)
 - `presentations/Project_presentation1.md` / `Project_presentation2.md`
