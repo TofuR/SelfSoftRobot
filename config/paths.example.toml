@@ -1,0 +1,15 @@
+schema_version = 1
+
+[paths]
+# 相对路径按仓库根解析；本机可改为大容量磁盘的绝对路径。
+workspace_root = "workspace"
+
+[compat]
+# 迁移期允许读取历史位置；新代码不得向这些根写入新产物。
+enable_legacy_reads = true
+raw_roots = ["real_capture/data/raw"]
+intermediate_roots = ["real_capture/data/derived", "sam2/masks"]
+processed_roots = ["data/real_seq"]
+training_roots = ["train_log"]
+validation_roots = ["real_validation/runs"]
+analysis_roots = ["output"]

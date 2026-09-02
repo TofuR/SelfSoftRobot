@@ -101,10 +101,10 @@ GUI 用五个 Tab 页串起"**加载模型 → 配置当前相机与 ROI → 建
 
 **Anchor = 模型规划的起点**:OpenLoop 模型是状态转移模型 `s_t = F(s_{t-1}, 最近 H 步动作, z)`,它需要知道"现在软臂在什么形状 + 最近 H 步怎么动的",才能预测下一步。这个"现在的形状 + 最近 H 步动作"就是 anchor。**它不是界面填出来的,是从 transition NPZ 数据里选一帧提取的。**
 
-**最快跑通步骤(示例数据已内置)**:
+**最快跑通步骤(从统一 dataset registry 选择)**:
 ```text
 1. Setup 页:  New Experiment → Load Model(checkpoint 已放 checkpoints/current/)
-2. Observe 页: 左下『离线锚定』卡,Transition NPZ 已默认指向 data/npz/seq_20260627_163921_train.npz
+2. Observe 页: 左下『离线锚定』卡，选择 Dataset 与 train/val/test 划分，点击『选择注册数据』
 3. 帧索引保持 39(≥H-1=39,保证有完整 40 步历史)→ 点『从 NPZ 建立 Anchor』
 4. 底部 anchor_status 显示『已锚定 …』+ 右侧 scene_summary 更新 → 可去第 3 页规划
 ```
@@ -114,7 +114,7 @@ GUI 用五个 Tab 页串起"**加载模型 → 配置当前相机与 ROI → 建
   新六腔数据保留 `D=6`，工作台按 manifest 的 `channel_source6` 根通道和 `channel_map`
   投影为模型历史。当前 `[0,1,1,3,4,4]` 示例得到四维 `[0,1,3,4]`，但实现支持 1–6D。
 - 帧索引往前必须凑满 H=40 步历史 —— 选太靠前会报"缺少 N 步历史",把帧索引调大即可(示例数据 8172 帧,用 39+)。
-- 其它序列:把 transition npz 拷入 `real_validation/data/npz/`,或点 `…` 选择任意位置的文件。
+- 其它序列:从 Dataset 下拉框选择；外部 workspace 设置 `SSR_WORKSPACE_ROOT`。独立部署时可点 `…` 选择任意位置的文件。
 
 **实时相机锚定与控制方式**:
 ```text

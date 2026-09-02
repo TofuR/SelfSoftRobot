@@ -1,9 +1,23 @@
 # SelfSoftRobot 仓库整理与重构设计
 
-> 状态：Proposal（仅设计，不代表已经迁移）
+> 状态：Active migration（目标设计；实际落地范围以“实施状态”表为准）
 > 日期：2026-08-31
 > 范围：仓库结构、数据谱系、训练共识、实验产物和文档治理
-> 非目标：本阶段不删除、不移动现有数据，不覆盖历史训练，不改变模型科学结论
+> 原始非目标：首轮设计阶段不删除、不移动现有数据；2026-09-01 经明确授权后进入历史资产物理迁移，仍不覆盖历史训练、不改变模型科学结论
+
+## 实施状态（2026-09-01）
+
+| 阶段 | 状态 | 已落地 | 尚未完成 |
+|---|---|---|---|
+| Phase 0 清单 | 完成 | 历史 raw/intermediate/processed/training/analysis 只读 inventory | 定期刷新策略 |
+| Phase 1 路径与 manifest | 完成 | `ProjectPaths`、URI、schema、原子写入、路径配置模板 | 历史 manifest 批量升级 |
+| Phase 2 数据双读单写 | 完成 | `real_capture`、预处理、dataset/fixture selector、组合/清洗、SAM2 与 QC 均统一读写 workspace | 后续新增脚本持续遵守同一合同 |
+| Phase 3 训练合同 | 完成 | 新 run 根、轻量 run manifest v2、旧 checkpoint 双读、engine 验证/选择/早停循环及 transition adapter 已落地；GT/OpenLoop 排序等价、真实流水线切换与 canonical formal run 均通过 | 新模型接入时继续复用合同，不回补改写历史 run |
+| Phase 4 历史导入 | 部分完成 | 67 项资产已原子迁入 workspace；14 个 dataset 均有历史/观察型 manifest，104 个训练 run 已索引，4 个真实主线试次已有 `legacy_run_manifest.json` | 严格 v2 升级、归档 run manifest 和 15 条缺失数据引用继续审计 |
+| Phase 5 文档治理 | 部分完成 | Constitution/Map/Status/History 角色、删除区、唯一论文树、第三方/参考资产边界、权威文档 front matter/link 守门及数据划分/训练评价/试次/证据标准 | workflow 合并、剩余旧文档逐份裁决、逐步扩大 front matter 覆盖 |
+| Phase 6 物理清理 | 部分完成 | 经授权并完成 GT/OpenLoop 2+2 epoch 主线短跑后，67 个旧兼容链接及空旧根已移除；Python 字节码缓存和 4 个可重建旧展示文件已清理 | 无明确生成入口的展示文件、废弃工作树另行审计 |
+
+本表是实现状态，不替代下文的目标设计。提交历史按功能分层保存；任何尚未完成项都不能从目标描述推断为已实现。
 
 ## 0. 结论先行
 
@@ -14,7 +28,7 @@
 3. **把训练规则拆成三层：项目强制协议、模型声明、具体试次配置。** 数据划分、选择指标、早停、checkpoint 和测试集使用遵守共同合同；GTObserved、OpenLoop、Hereditary、渲染/多阶段模型仍可声明各自不同需求。
 4. **文档按“事实类型”治理，而不是按产生工具或临时任务堆放。** 每个主题只有一个权威入口；过时内容保留但明确 `superseded` 或归档，实验过程记录与长期共识分开。
 
-迁移采用“**先注册、后双读、再单写、最后清理旧入口**”的方式。历史路径在完成校验前保持只读兼容，不批量重命名历史试次，也不复制 19 GB 原始图像来制造第二份真相。
+迁移采用“**先注册、后双读、再单写、最后清理旧入口**”的方式。历史路径在完成校验前保持只读兼容，不批量重命名历史试次，也不复制大体积原始图像来制造第二份真相。2026-09-01 的实际迁移使用同文件系统原子 rename；主线短跑通过后已移除旧入口。
 
 ---
 
@@ -524,12 +538,12 @@ docs/
 | `overview/status.md` | 成为唯一当前状态；避免复制完整教程和论文论证 |
 | `real_data/workflow.md`、`general_6ch_postprocess.md` | 合并出一个通用 preprocessing workflow；旧单通道内容归档 |
 | `seq_*.md` | 移到 `experiments/records/<sequence_id>/`，只描述该次处理证据 |
-| `paper/` | 作为唯一活跃 manuscript，重命名到 `research/paper/` |
-| `papers/notes`、综述 | 移到 `research/literature/`；不要与论文草稿同名 |
-| `papers/*_draft.md` | 明确并入 active paper 或标为 superseded/archive |
+| `paper/` | 2026-09-01 固定为唯一活跃 manuscript；为避免大规模断链，暂不重命名 |
+| `papers/notes`、综述 | 保留为文献证据区，由 `papers/README.md` 约束，不拥有当前论文 |
+| `papers/*_draft.md` | 作为阶段输入保留；只有被 `paper/` 明确引用的部分进入 active manuscript |
 | `directions/` | 移到 `research/directions/`，overview 标记 active/parked/rejected |
 | `superpowers/specs/plans` | 已落地者转 ADR/归档，未落地者进入 designs，不以工具名分类 |
-| `docs/ref` | 移出 docs；在 `external/manifest.toml` 记录来源、commit、license |
+| `docs/ref` | 2026-09-01 决定保留为本机 ignored 参考区；根 README 记录硬件用途及嵌套项目来源/commit/license 边界 |
 | HTML 报告和大型图 | 正式发布放 reports，运行生成物留 workspace run |
 
 ### 7.3 文档 front matter
@@ -616,7 +630,20 @@ sources: []
 
 ### Phase 4：历史数据和实验只读导入
 
-- 计算大小、文件数和 manifest/hash；
+> 2026-09-01 实施说明：已用
+> `docs/maintenance/2026-09-01_legacy_asset_migration.json` 登记并原子迁移
+> 67 项历史资产。按本次轻量迁移决策，不对同文件系统 rename 重复计算逐文件
+> SHA-256；ledger 记录 source/target 与状态，目标存在时拒绝覆盖。
+>
+> 同日新增 `workspace/registry/workspace_asset_index.json`：只读取目录、小型 JSON
+> 和完成标记，不 hash NPZ/checkpoint 等 payload。它提供 dataset→run 反向查询，
+> 但不能替代严格不可变 manifest。4 个已有 `real_pipeline` 试次已补非覆盖的
+> `legacy_run_manifest.json`，并明确记录 validation 选择或训练 loss/未知语义。
+> 其余 10 个原本无清单的旧 dataset 已补观察型 `legacy_dataset_manifest.json`；
+> 来源仅在 NPZ 文件名可确认时记录，训练就绪状态仍标为 `unknown`。索引发现的
+> 15 条缺失 dataset 引用保持 unresolved，不能据此删除关联归档 run。
+
+- 登记 source/target、资产类型和迁移状态；跨文件系统复制时再增加内容 hash；
 - 在 registry 登记旧路径，不强制重命名；
 - 对需要长期保留的 run 补 `legacy_run_manifest.json`；
 - `output/` 中可再生项只记录生成命令，正式结果关联到对应 run。
@@ -634,9 +661,14 @@ sources: []
 
 ### Phase 6：物理清理（最后、单独审批）
 
-- 仅在 hash、引用扫描、备份和回滚演练通过后处理重复副本；
+> 2026-09-01 实施说明：历史资产部分已获授权完成。完整真实流水线使用 911 帧
+> 数据集完成 GT 2 epoch + OpenLoop 2 epoch、周期/最佳评价和叠图；随后移除
+> 67 个兼容链接与空旧根。试次保存在
+> `workspace/runs/training/real_pipeline/seq_20260819_182253/trial_20260901_000/`。
+
+- 仅在 canonical 目标存在、目标不覆盖保护和回滚路径确认后处理旧入口；
 - 清理 `__pycache__`、根目录生成图、tests GIF、废弃工作树等可重建内容；
-- 旧路径先改只读链接，再经过至少一个完整训练/验证周期才考虑移除。
+- 旧路径先改只读链接，再经过主线短训练与评价确认可运行后移除。
 
 **验收：** 清理列表逐项记录“删除对象、原大小、可恢复位置/重建命令”；不对 workspace 根或仓库根执行宽泛递归删除。
 
@@ -650,9 +682,16 @@ sources: []
 2. 定稿 dataset/run manifest v2；
 3. 为现有真实 dataset 生成 registry 索引；
 4. 写训练选择合同，明确 `best_model.pt` 和 `best_eval_model.pt` 的现状；
-5. 禁止新增硬编码 `real_capture/data`、`train_log`、`output`。
+5. 禁止新增硬编码 `real_capture/data`、`train_log`、`output`（已由可执行字面量非递增 baseline 守门）。
 
 ### P1：打通一条参考主线
+
+> **状态：完成（2026-09-01）。** 已发布 `real_transition_reference_10hz_v1`，明确
+> train/val 与独立序列 frozen test；`trial_20260901_000` 已从干净提交
+> `9608dc7` 完成 GT 1 epoch、OpenLoop 2 epoch、逐 epoch validation、独立 frozen
+> test、deploy manifest 和 offline fixture。发布和验收记录见
+> [`../maintenance/2026-09-01_reference_dataset_release.md`](../maintenance/2026-09-01_reference_dataset_release.md)。
+> 后续回归继续使用该不可变 release，不得把 test 用于选择或调参。
 
 选择一个已完成、非正在训练的真实序列，完整验证：
 

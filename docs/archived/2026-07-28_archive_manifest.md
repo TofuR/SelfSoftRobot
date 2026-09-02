@@ -1,5 +1,10 @@
 # 归档清单 · 2026-07-28
 
+> **2026-09-01 更正：** 当时的动态接手文档已归档为
+> [`HANDOFF_2026-07-28.md`](HANDOFF_2026-07-28.md)；文中提到的
+> `docs/HANDOFF.md` 章节均指向该历史快照。当前状态见
+> [`../overview/status.md`](../overview/status.md)。
+
 > **为什么归档**:方法路线已收敛到**状态转移族**,特别是 `open_loop_transition`(部署主线);`gt_transition` 保留作论文消融。其余模型族(C-MSTNF / MS-SCNF / SDF / SkeletonSDF / FlowMatch / SpatialSequence 等)已完成历史作用,连同实验日志一起归档,以简化项目目录。
 >
 > **本轮范围**:只动 `train_log/`(gitignored,纯磁盘移动)与文档状态标记。**`src/` 代码一律不动** —— 见 §4。

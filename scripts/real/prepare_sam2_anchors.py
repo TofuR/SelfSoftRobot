@@ -28,6 +28,10 @@ from real_validation.perception.segmentation import (  # noqa: E402
     build_median_background,
     segment_white_on_blue_stages,
 )
+from src.registry import (  # noqa: E402
+    ProjectPaths, canonical_intermediate, canonical_output,
+    resolve_raw_sequence,
+)
 
 
 STAGE_NAMES = ("white", "moved", "gated", "morph", "pretrim", "final")
@@ -267,7 +271,8 @@ def build_parser():
     pa.add_argument("--seq", required=True, help="原始序列目录，含 camN/")
     pa.add_argument("--camera", default="cam0")
     pa.add_argument("--out-root", default=None,
-                    help="默认 real_capture/data/derived/<seq名>")
+                    help="显式输出根；必须位于 workspace")
+    pa.add_argument("--workspace-root", default=None)
     pa.add_argument("--chunk-size", type=int, default=200)
     pa.add_argument("--frame-step", type=int, default=1, help="诊断抽样步长；正式运行必须为1")
     pa.add_argument("--n-bg", type=int, default=500)
@@ -292,10 +297,12 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    seq = os.path.abspath(args.seq.rstrip("/"))
+    paths = ProjectPaths.load(workspace_root=args.workspace_root)
+    seq = str(resolve_raw_sequence(paths, args.seq, camera=args.camera))
     seq_name = os.path.basename(seq)
-    out_root = args.out_root or os.path.join(
-        PROJECT_ROOT, "real_capture", "data", "derived", seq_name)
+    out_root = str(canonical_output(paths, args.out_root or
+                   canonical_intermediate(
+                       paths, seq_name, "sam2-anchors-v1")))
     mask_dir = os.path.join(out_root, "masks_candidate")
     anchor_dir = os.path.join(out_root, "anchors")
     qc_dir = os.path.join(out_root, "qc_candidate")

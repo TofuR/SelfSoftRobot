@@ -15,7 +15,11 @@ Loss 分两层:
 """
 
 import csv
+from collections.abc import Mapping
+from dataclasses import asdict
 import glob
+import json
+import math
 import os
 import random
 import numpy as np
@@ -24,8 +28,10 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.training.phase_strategy import PhaseStrategy
+from src.training.selection import SelectionState
 from src.rendering.view_strategy import ViewStrategy
 from src.training.dataset_factory import create_dataset, get_collate_fn
+from src.registry.paths import ProjectPaths
 from src.utils.experiment import create_experiment, save_config
 from src.evaluation.shape_evaluation import evaluate_shape_during_training, evaluate_skeleton_during_training, evaluate_transition_during_training
 from config.params import load_config
@@ -236,6 +242,8 @@ class UnifiedTrainer:
                 p_info["save_modules"] = p.save_modules
             if p.load_modules:
                 p_info["load_modules"] = p.load_modules
+            if p.validation is not None:
+                p_info["validation"] = asdict(p.validation)
             phases_info.append(p_info)
 
         config = {
@@ -351,9 +359,9 @@ class UnifiedTrainer:
         except Exception:
             pass
 
-    def _update_config_phase_trained(self, exp_dir, phase_name, best_loss):
+    def _update_config_phase_trained(
+            self, exp_dir, phase_name, best_loss, selection=None):
         """Phase 完成后更新 config.json，标记 trained=true 并记录最终 loss。"""
-        import json
         config_path = os.path.join(exp_dir, "config.json")
         if not os.path.exists(config_path):
             return
@@ -363,6 +371,9 @@ class UnifiedTrainer:
             if p["name"] == phase_name:
                 p["trained"] = True
                 p["best_loss"] = best_loss
+                p["best_train_loss"] = best_loss
+                if selection is not None:
+                    p["validation_selection"] = selection
                 break
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2, ensure_ascii=False)
@@ -426,8 +437,99 @@ class UnifiedTrainer:
 
         self.views.setup(self.device, self.config)
 
+    @staticmethod
+    def _lookup_phase_value(values, phase_spec):
+        if not values:
+            return None
+        if not isinstance(values, Mapping):
+            raise ValueError("validation data/adapters 必须是 mapping")
+        return (values.get(phase_spec.name) or
+                values.get(phase_spec.data_mode) or values.get("*"))
+
+    def _prepare_validation(
+            self, phase_spec, validation_data_dirs, validation_adapters):
+        spec = phase_spec.validation
+        if spec is None:
+            return None
+        data_dir = self._lookup_phase_value(validation_data_dirs, phase_spec)
+        adapter = self._lookup_phase_value(validation_adapters, phase_spec)
+        if data_dir is None:
+            raise ValueError(
+                f"phase {phase_spec.name!r} 声明了 validation，但未提供 val 数据目录")
+        if not os.path.exists(data_dir):
+            raise FileNotFoundError(
+                f"phase {phase_spec.name!r} 的 val 数据路径不存在: {data_dir}")
+        if adapter is None or not callable(adapter):
+            raise ValueError(
+                f"phase {phase_spec.name!r} 声明了 validation，但未提供 evaluator adapter")
+        return {
+            "spec": spec,
+            "data_dir": data_dir,
+            "adapter": adapter,
+            "state": SelectionState(spec),
+        }
+
+    def _run_validation(self, runtime, phase_spec, epoch, exp_dir):
+        was_training = self.model.training
+        try:
+            self.model.eval()
+            values = runtime["adapter"](
+                model=self.model,
+                phase_spec=phase_spec,
+                data_dir=runtime["data_dir"],
+                epoch=epoch,
+                exp_dir=exp_dir,
+                device=self.device,
+                config=self.config,
+            )
+        finally:
+            self.model.train(was_training)
+        if not isinstance(values, Mapping):
+            raise ValueError("validation adapter 必须返回扁平 metric mapping")
+        metrics = {}
+        for name, value in values.items():
+            if not isinstance(name, str) or not name:
+                raise ValueError("validation metric 名必须是非空字符串")
+            try:
+                number = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"validation metric {name!r} 不是数值: {value!r}") from exc
+            if not math.isfinite(number):
+                raise ValueError(
+                    f"validation metric {name!r} 必须是有限值: {number!r}")
+            metrics[name] = number
+        required = {
+            runtime["spec"].selection_metric,
+            runtime["spec"].lr_scheduler_metric,
+        }
+        missing = sorted(required - metrics.keys())
+        if missing:
+            raise ValueError(f"validation adapter 缺少合同 metric: {missing}")
+        return metrics
+
+    @staticmethod
+    def _early_stopping_allowed(phase_spec, validation_spec, epoch):
+        if validation_spec.allow_early_stop_before_tf_anneal:
+            return True
+        anneal_epochs = getattr(phase_spec, "tf_anneal_epochs", 0)
+        return anneal_epochs <= 0 or epoch >= anneal_epochs
+
+    @staticmethod
+    def _append_validation_record(phase_dir, epoch, metrics, decision):
+        target = os.path.join(phase_dir, "validation_metrics.jsonl")
+        record = {
+            "epoch": epoch,
+            "metrics": metrics,
+            "selection": asdict(decision),
+        }
+        with open(target, "a", encoding="utf-8") as stream:
+            json.dump(record, stream, ensure_ascii=False, sort_keys=True)
+            stream.write("\n")
+
     def train(self, data_dirs, exp_dir=None, n_epochs_per_phase=None,
-              skip_phases=None):
+              skip_phases=None, validation_data_dirs=None,
+              validation_adapters=None):
         """统一训练入口。
 
         Args:
@@ -435,6 +537,8 @@ class UnifiedTrainer:
             exp_dir: 实验日志目录
             n_epochs_per_phase: dict, key 为 phase name, value 为 epoch 数
             skip_phases: list[str], 要跳过的阶段名列表
+            validation_data_dirs: dict, phase name/data_mode 到 val 路径
+            validation_adapters: dict, phase name/data_mode 到 evaluator callable
         """
         self.device = next(self.model.parameters()).device
         if self.views:
@@ -444,7 +548,8 @@ class UnifiedTrainer:
 
         exp_config = self._build_exp_config(data_dirs, n_epochs_per_phase)
         if exp_dir is None:
-            exp_dir = create_experiment(f"train_log/{self.model_tag}", exp_config)
+            study_dir = ProjectPaths.load().training_study(self.model_tag)
+            exp_dir = create_experiment(study_dir, exp_config)
         else:
             exp_dir = os.path.normpath(exp_dir)
             os.makedirs(exp_dir, exist_ok=True)
@@ -465,6 +570,9 @@ class UnifiedTrainer:
             if data_dir is None:
                 print(f"  Skipping phase '{phase_spec.name}': no data for '{phase_spec.data_mode}'")
                 continue
+
+            validation = self._prepare_validation(
+                phase_spec, validation_data_dirs, validation_adapters)
 
             # 加载前面阶段保存的权重
             self._load_phase_modules(phase_spec, saved_modules_by_phase)
@@ -502,6 +610,7 @@ class UnifiedTrainer:
             csv_path = os.path.join(phase_dir, "loss_log.csv")
             csv_file = open(csv_path, "w", newline="", encoding="utf-8")
             csv_header_written = False
+            stopped_early = False
 
             for epoch in range(1, n_epochs + 1):
                 self.model.train()
@@ -600,15 +709,54 @@ class UnifiedTrainer:
                     torch.save(self.model.state_dict(),
                                os.path.join(phase_dir, "model", "best_model.pt"))
 
+                validation_decision = None
+                validation_metrics = None
+                if validation is not None:
+                    val_spec = validation["spec"]
+                    if (epoch % val_spec.eval_interval_epochs == 0 or
+                            epoch == n_epochs):
+                        validation_metrics = self._run_validation(
+                            validation, phase_spec, epoch, exp_dir)
+                        validation_decision = validation["state"].observe(
+                            validation_metrics[val_spec.selection_metric],
+                            epoch=epoch,
+                            early_stopping_allowed=self._early_stopping_allowed(
+                                phase_spec, val_spec, epoch),
+                        )
+                        if validation_decision.improved:
+                            torch.save(
+                                self.model.state_dict(),
+                                os.path.join(
+                                    phase_dir, "model", "best_eval_model.pt"))
+                        self._append_validation_record(
+                            phase_dir, epoch, validation_metrics,
+                            validation_decision)
+                        print(
+                            f"    Validation: {val_spec.selection_metric}="
+                            f"{validation_metrics[val_spec.selection_metric]:.6g} "
+                            f"best={validation_decision.best_value:.6g} "
+                            f"bad={validation_decision.bad_evaluations} "
+                            f"({validation_decision.reason})")
+
                 if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                    scheduler.step(avg)
+                    if validation is None:
+                        scheduler.step(avg)
+                    elif validation_metrics is not None:
+                        scheduler.step(validation_metrics[
+                            validation["spec"].lr_scheduler_metric])
                 else:
                     scheduler.step()
 
                 checkpoint_interval = int(
                     self.config.get("logging", {}).get("checkpoint_interval", 5))
-                if checkpoint_interval > 0 and (
-                        epoch % checkpoint_interval == 0 or epoch == n_epochs):
+                should_stop = bool(
+                    validation_decision is not None and
+                    validation_decision.should_stop)
+                should_checkpoint = (
+                    (checkpoint_interval > 0 and (
+                        epoch % checkpoint_interval == 0 or epoch == n_epochs)) or
+                    should_stop)
+                if should_checkpoint:
                     current_path, archive_path, _ = self._save_periodic_checkpoint(
                         phase_dir, phase_spec.name, epoch, optimizer, scheduler,
                         best_val)
@@ -628,8 +776,38 @@ class UnifiedTrainer:
                         self.model, self.model_tag, self.config,
                         self.device, phase_spec.name, data_dir, epoch, exp_dir)
 
-            # 保存 Phase 权重
+                if should_stop:
+                    stopped_early = True
+                    print(f"    Early stop: phase={phase_spec.name} epoch={epoch} "
+                          f"metric={validation['spec'].selection_metric}")
+                    break
+
+            # final_model 保留预算末尾/早停时参数；随后可恢复验证最优供后续 phase。
             csv_file.close()
+            torch.save(self.model.state_dict(),
+                       os.path.join(phase_dir, "model", "final_model.pt"))
+            selection_summary = None
+            if validation is not None:
+                state = validation["state"]
+                selection_summary = {
+                    "metric": validation["spec"].selection_metric,
+                    "mode": validation["spec"].selection_mode,
+                    "dataset_role": validation["spec"].dataset_role,
+                    "best_value": state.best_value,
+                    "best_epoch": state.best_epoch,
+                    "evaluations": state.evaluations,
+                    "stopped_early": stopped_early,
+                    "checkpoint": (
+                        f"phase_{phase_spec.name}/model/best_eval_model.pt"),
+                }
+                if validation["spec"].restore_best_at_end:
+                    best_eval_path = os.path.join(
+                        phase_dir, "model", "best_eval_model.pt")
+                    self.model.load_state_dict(torch.load(
+                        best_eval_path, map_location=self.device,
+                        weights_only=True))
+
+            # 保存 Phase 模块；validation phase 默认保存恢复后的 best。
             save_path = self._save_phase_modules(phase_dir, phase_spec)
             if save_path:
                 saved_modules_by_phase[phase_spec.name] = {
@@ -637,11 +815,10 @@ class UnifiedTrainer:
                     for mod_name in phase_spec.save_modules
                 }
 
-            torch.save(self.model.state_dict(),
-                       os.path.join(phase_dir, "model", "final_model.pt"))
-
             # 更新 config.json 标记该 phase 已训练
-            self._update_config_phase_trained(exp_dir, phase_spec.name, best_val)
+            self._update_config_phase_trained(
+                exp_dir, phase_spec.name, best_val,
+                selection=selection_summary)
 
         print(f"\n训练完成! 日志: {exp_dir}")
         return exp_dir

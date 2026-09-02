@@ -643,7 +643,11 @@ def build_parser():
     pa.add_argument("--val-frac", type=float, default=0.2,
                     help="末尾连续 val 比例(时序连续切分，避免乱序泄漏)")
     pa.add_argument("--out-root", default=None,
-                    help="输出根(默认 data/real_seq/<seq名>)")
+                    help="输出根(默认 workspace/data/processed/real/<seq名>)")
+    pa.add_argument("--dataset-id", default=None,
+                    help="输出 dataset ID；默认使用序列名")
+    pa.add_argument("--workspace-root", default=None,
+                    help="覆盖 SSR_WORKSPACE_ROOT/config/默认 workspace")
     pa.add_argument("--planarity-qc", default=None,
                     help="可选 planarity_qc.json；默认读取 <seq>/planarity_qc.json")
     pa.add_argument("--crop-meta", default=None,
@@ -655,13 +659,18 @@ def build_parser():
 
 def main():
     args = build_parser().parse_args()
-    seq = args.seq.rstrip("/")
+    from src.registry import (
+        ProjectPaths, canonical_output, resolve_candidate_masks,
+        resolve_raw_sequence,
+    )
+    paths = ProjectPaths.load(workspace_root=args.workspace_root)
+    seq = str(resolve_raw_sequence(paths, args.seq))
     seq_name = os.path.basename(seq)
-    masks_dir = args.masks_dir or os.path.abspath(
-        os.path.join(os.path.dirname(seq), "..", "derived", seq_name, "masks"))
+    masks_dir = args.masks_dir or str(resolve_candidate_masks(paths, seq_name))
     actions_csv = args.actions or os.path.join(seq, "actions6.csv")
-    out_root = args.out_root or os.path.abspath(
-        os.path.join("data", "real_seq", seq_name))
+    dataset_id = args.dataset_id or seq_name
+    out_root = str(canonical_output(
+        paths, args.out_root or paths.processed_dataset("real", dataset_id)))
     meta = load_capture_metadata(seq)
     crop_meta = {}
     if args.crop_meta:

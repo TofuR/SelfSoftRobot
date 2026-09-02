@@ -90,7 +90,7 @@ class ModelRuntime:
         if not checkpoint_path.is_file():
             raise ModelLoadError(
                 f"checkpoint 不存在:{checkpoint_path}\n"
-                f"请从服务器复制 train_log/<tag>/<exp>/phase_*/model/best_model.pt 到 "
+                f"请从服务器 workspace/runs/training/<study>/<run>/ 中选择 checkpoint，复制到 "
                 f"{checkpoint_path.parent}/,并同时复制该实验的 config.json 与 "
                 f"deploy_manifest.json(见 real_validation/checkpoints/README.md)。")
         info = load_openloop_model(str(checkpoint_path), device=device)

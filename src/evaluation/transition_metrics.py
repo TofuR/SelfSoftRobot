@@ -13,7 +13,7 @@
     onestep_mse_by_k   干净 teacher-forced 参考（独立 z_tf，喂 GT s）
     drift_by_k         rollout/onestep 逐位漂移比
     z_norm_by_k        窗口内 ‖z_t‖
-  物理空间（部署精度故事，反归一化到米）:
+  物理空间（部署精度故事，按 NPZ state_length_unit 转为米）:
     mean_node / endpoint / max / chamfer (mm)，逐节点 base/mid/tip (mm)
     在 rollout 预测上算（开环部署精度）。
 
@@ -26,9 +26,23 @@ import numpy as np
 import torch
 
 from src.training.metrics_3d import evaluate_skeleton, node_errors
+from src.evaluation.diameter_scale import resolve_diameter_scale
 
 ARM_LENGTH = 0.5   # 臂长（米）
 ROD_RADIUS = 0.015  # 杆半径（米）
+
+
+def _state_scale_to_m(npz, data_dir):
+    unit = (str(npz["state_length_unit"].item())
+            if "state_length_unit" in npz else "legacy_assumed_m")
+    if unit == "mm":
+        return 1e-3, unit, "state_length_unit:mm"
+    if unit in ("m", "legacy_assumed_m"):
+        return 1.0, unit, "state_length_unit:m"
+    if unit == "px":
+        scale = resolve_diameter_scale(npz, data_dir)
+        return scale.mm_per_px * 1e-3, unit, scale.source
+    raise ValueError(f"不支持的 state_length_unit: {unit!r}")
 
 
 def build_action_window(actions_norm, t, window_size):
@@ -166,6 +180,7 @@ def evaluate_transition_rollout(model, data_dir, config, device,
     n_win = 0
     all_roll_world, all_gt_world = [], []   # 物理空间聚合
     per_node_sum = None
+    physical_scales = set()
 
     for f in files:
         d = np.load(f)
@@ -180,6 +195,8 @@ def evaluate_transition_rollout(model, data_dir, config, device,
             from src.data.action_view import project_actions
             actions = project_actions(actions, view_channels).astype(np.float32)
         positions = d['positions'].astype(np.float32)  # (T,3,N)
+        state_to_m, state_unit, scale_source = _state_scale_to_m(d, data_dir)
+        physical_scales.add((state_unit, scale_source, float(state_to_m)))
         T = positions.shape[0]
         if T - 1 < K:
             continue
@@ -198,8 +215,9 @@ def evaluate_transition_rollout(model, data_dir, config, device,
             copy_mse_k += ((seed.unsqueeze(0) - gt) ** 2).mean(dim=(1, 2)).cpu().numpy()
             z_k += r['z_norm']
             # 物理空间 per-k 平均节点误差 (mm)
-            roll_world = roll.cpu().numpy() * pc_scale + pc_center  # (K,N,3) m
-            gt_world = gt.cpu().numpy() * pc_scale + pc_center
+            roll_world = (
+                roll.cpu().numpy() * pc_scale + pc_center) * state_to_m
+            gt_world = (gt.cpu().numpy() * pc_scale + pc_center) * state_to_m
             roll_t = torch.from_numpy(roll_world).float()
             gt_t = torch.from_numpy(gt_world).float()
             nk_k = node_errors(roll_t, gt_t).mean(dim=1).cpu().numpy() * 1000.0  # (K,) mm per-k
@@ -253,6 +271,10 @@ def evaluate_transition_rollout(model, data_dir, config, device,
         'per_node_base_mm': float(per_node[:nb].mean() * 1000),
         'per_node_mid_mm': float(per_node[nb:nm].mean() * 1000),
         'per_node_tip_mm': float(per_node[nm:].mean() * 1000),
+        'physical_scales': [
+            {"state_unit": unit, "source": source, "state_to_m": scale}
+            for unit, source, scale in sorted(physical_scales)
+        ],
     }
     by_k = {
         'rollout_mse': roll_mse_k.tolist(),

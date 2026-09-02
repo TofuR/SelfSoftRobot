@@ -54,6 +54,9 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 
 from src.utils.model_loader import load_model
 from src.evaluation.transition_metrics import build_action_window
+from src.registry.paths import ProjectPaths
+from src.registry.real_assets import resolve_raw_sequence, resolve_sam2_masks
+from src.registry.runs import create_analysis_run
 
 FRAME_DT = 0.203   # 实测帧间隔(s)
 
@@ -356,12 +359,16 @@ def main():
     p.add_argument("--overlay", action="store_true",
                    help="把 open_loop rollout 预测骨架叠到真实 cam0 照片拼 montage")
     p.add_argument("--overlay_n", type=int, default=12, help="overlay montage 帧数")
-    p.add_argument("--cam0", default=None, help="原图目录(默认 real_capture/data/raw/<seq>/cam0)")
-    p.add_argument("--masks", default=None, help="mask 目录(默认 sam2/masks/<seq>_full)")
-    p.add_argument("--out", type=str, default="output/viz")
+    p.add_argument("--cam0", default=None, help="原图目录(默认解析 canonical raw)")
+    p.add_argument("--masks", default=None, help="mask 目录(默认解析 canonical SAM2 mask)")
+    p.add_argument("--out", type=str, default=None,
+                   help="默认分配新的 workspace analysis run")
     args = p.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    paths = ProjectPaths.load()
+    if args.out is None:
+        args.out = str(create_analysis_run(paths, "viz_control"))
     os.makedirs(args.out, exist_ok=True)
 
     files = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
@@ -410,8 +417,9 @@ def main():
     if args.overlay:
         print("画 overlay_montage.png (预测骨架叠真实照片)...")
         raw_seq = guess_raw_seq(args.data_dir)
-        cam0_dir = args.cam0 or os.path.join(PROJECT_ROOT, "real_capture", "data", "raw", raw_seq, "cam0")
-        masks_dir = args.masks or os.path.join(PROJECT_ROOT, "sam2", "masks", raw_seq + "_full")
+        cam0_dir = args.cam0 or str(
+            resolve_raw_sequence(paths, raw_seq, camera="cam0") / "cam0")
+        masks_dir = args.masks or str(resolve_sam2_masks(paths, raw_seq))
         offset = auto_offset_npz(args.data_dir)
         viz_overlay_montage(ol, actions_norm_t, positions, args.t0, args.max_steps, window_size,
                             pc_center, pc_scale, device, cam0_dir, masks_dir, offset,

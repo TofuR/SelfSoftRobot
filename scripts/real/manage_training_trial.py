@@ -10,8 +10,10 @@ import glob
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime
+from pathlib import Path
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
@@ -19,6 +21,13 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from src.utils.experiment import create_experiment, save_config  # noqa: E402
+from src.registry.paths import ProjectPaths  # noqa: E402
+from src.registry.real_assets import resolve_sam2_masks  # noqa: E402
+from src.registry.manifests import (  # noqa: E402
+    atomic_write_json,
+    validate_dataset_manifest as validate_registry_dataset_manifest,
+    validate_run_manifest,
+)
 
 
 LAYOUT = {
@@ -36,6 +45,10 @@ FINAL_OUTPUT_DIRS = (
     "evaluations/gt/best/overlay",
     "evaluations/open_loop/best/quantitative",
     "evaluations/open_loop/best/overlay",
+    "evaluations/test/gt/quantitative",
+    "evaluations/test/gt/overlay",
+    "evaluations/test/open_loop/quantitative",
+    "evaluations/test/open_loop/overlay",
 )
 
 SEQUENCE_TAG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -46,6 +59,57 @@ PROCESSING_SUFFIX_PATTERN = re.compile(
 
 def _timestamp():
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _git_source_state():
+    """Capture lightweight source identity without hashing run payloads."""
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT,
+        check=True, capture_output=True, text=True).stdout.strip()
+    dirty = bool(subprocess.run(
+        ["git", "status", "--porcelain"], cwd=PROJECT_ROOT,
+        check=True, capture_output=True, text=True).stdout.strip())
+    return {"git_commit": commit, "dirty": dirty}
+
+
+def _run_kind_for_dataset_manifest(path):
+    """Only canonical schema-v2 datasets qualify a new trial as formal."""
+    if not path or not os.path.isfile(path):
+        return "exploratory"
+    try:
+        with open(path, encoding="utf-8") as stream:
+            validate_registry_dataset_manifest(json.load(stream))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return "exploratory"
+    return "formal"
+
+
+def resolve_dataset_role(dataset_manifest, role, paths=None):
+    """Resolve one strict-v2 split entry for shell pipeline orchestration."""
+    paths = paths or ProjectPaths.load()
+    with open(dataset_manifest, encoding="utf-8") as stream:
+        manifest = json.load(stream)
+    validate_registry_dataset_manifest(manifest)
+    if (role == "test" and
+            manifest.get("contracts", {}).get("evaluation", {}).get(
+                "test_policy") != "frozen_final_only"):
+        raise ValueError("test split 缺少 frozen_final_only 合同")
+    entries = manifest["splits"].get(role, [])
+    if len(entries) != 1:
+        raise ValueError(f"dataset split {role!r} 必须恰有一个文件，当前={len(entries)}")
+    entry = entries[0]
+    sequence_id = entry.get("sequence_id")
+    if not isinstance(sequence_id, str) or not sequence_id:
+        raise ValueError(f"dataset split {role!r} 缺少 sequence_id")
+    artifact = paths.resolve_artifact_uri(entry["uri"])
+    if not artifact.is_file():
+        raise FileNotFoundError(artifact)
+    return {
+        "dataset_id": manifest["dataset_id"],
+        "sequence_id": sequence_id,
+        "npz": str(artifact),
+        "dir": str(artifact.parent),
+    }
 
 
 def _write_json(path, payload):
@@ -92,6 +156,12 @@ def infer_sequence_tag(train_dir, dataset_manifest=None):
         sequence = source.get("sequence")
         if isinstance(sequence, str) and sequence:
             return validate_sequence_tag(sequence)
+        sources = manifest.get("sources", [])
+        if (isinstance(sources, list) and len(sources) == 1 and
+                isinstance(sources[0], dict)):
+            sequence = sources[0].get("sequence_id")
+            if isinstance(sequence, str) and sequence:
+                return validate_sequence_tag(sequence)
         dataset_id = manifest.get("dataset_id")
         if isinstance(dataset_id, str) and dataset_id:
             concise = PROCESSING_SUFFIX_PATTERN.sub("", dataset_id)
@@ -107,6 +177,37 @@ def infer_sequence_tag(train_dir, dataset_manifest=None):
     return validate_sequence_tag(concise)
 
 
+def resolve_real_pipeline_paths(
+        sequence_id, dataset_id, sequence_tag, paths=None, camera="cam0"):
+    """解析正式真实训练使用的统一写入根和新旧只读观测资产。"""
+    paths = paths or ProjectPaths.load()
+    validate_sequence_tag(sequence_id)
+    validate_sequence_tag(dataset_id)
+    validate_sequence_tag(sequence_tag)
+    validate_sequence_tag(camera)
+
+    canonical_raw = paths.raw_sequence("real", sequence_id)
+    raw_candidates = (canonical_raw, *paths.legacy_candidates(
+        "raw", sequence_id))
+    raw = next((candidate for candidate in raw_candidates
+                if candidate.is_dir()), canonical_raw)
+
+    try:
+        masks = resolve_sam2_masks(paths, sequence_id)
+    except FileNotFoundError:
+        masks = paths.intermediate_sequence(
+            "real", sequence_id, dataset_id) / "sam2_masks"
+
+    return {
+        "trial_base": paths.training_study("real_pipeline") / sequence_tag,
+        "raw_sequence": raw,
+        "camera_dir": raw / camera,
+        "masks_dir": masks,
+        "ndi_csv": raw / "ndi.csv",
+        "frame_times": raw / "frame_times.txt",
+    }
+
+
 def prepare_trial_layout(trial_dir):
     """Create every directory consumed directly by a stage process or logger."""
     trial_dir = os.path.normpath(trial_dir)
@@ -118,8 +219,16 @@ def prepare_trial_layout(trial_dir):
 def build_trial_config(args, trial_dir):
     train_npz_files = sorted(glob.glob(os.path.join(args.train_dir, "*.npz")))
     val_npz_files = sorted(glob.glob(os.path.join(args.val_dir, "*.npz")))
+    test_dir = getattr(args, "test_dir", None)
+    test_npz_files = (
+        sorted(glob.glob(os.path.join(test_dir, "*.npz"))) if test_dir else [])
     return {
         "schema_version": 1,
+        "run": {
+            "kind": _run_kind_for_dataset_manifest(
+                getattr(args, "dataset_manifest", None)),
+            "source": _git_source_state(),
+        },
         "trial": {
             "id": os.path.basename(trial_dir),
             "created_at": _timestamp(),
@@ -132,6 +241,10 @@ def build_trial_config(args, trial_dir):
             "train_npz": args.train_npz,
             "train_npz_files": train_npz_files,
             "val_npz_files": val_npz_files,
+            "test_dir": test_dir,
+            "test_npz_files": test_npz_files,
+            "test_sequence": getattr(args, "test_sequence", None),
+            "test_policy": "frozen_final_only" if test_npz_files else None,
             "dataset_manifest": getattr(args, "dataset_manifest", None),
             "cam0_dir": args.cam0_dir,
             "masks_dir": args.masks_dir,
@@ -276,6 +389,124 @@ def _require_files(trial_dir, paths):
             "试次归档缺少必要产物: " + ", ".join(missing))
 
 
+def build_formal_run_manifest(trial_dir, config, artifacts, paths=None):
+    """Build the lightweight v2 manifest for a completed formal trial."""
+    paths = paths or ProjectPaths.load()
+    trial = os.path.abspath(trial_dir)
+    dataset_manifest_path = config["data"].get("dataset_manifest")
+    if not dataset_manifest_path or not os.path.isfile(dataset_manifest_path):
+        raise FileNotFoundError(
+            f"正式试次缺少 dataset manifest: {dataset_manifest_path}")
+    with open(dataset_manifest_path, encoding="utf-8") as stream:
+        dataset_manifest = json.load(stream)
+    validate_registry_dataset_manifest(dataset_manifest)
+
+    source = config.get("run", {}).get("source")
+    if not isinstance(source, dict):
+        raise ValueError("正式试次缺少创建时 source 状态")
+
+    stages = []
+    expected_artifacts = []
+    for stage_name, phase_name in (
+            ("gt", "gt_transition"),
+            ("open_loop", "open_loop_transition")):
+        stage_config_path = os.path.join(
+            trial, artifacts["stages"][stage_name]["config"])
+        with open(stage_config_path, encoding="utf-8") as stream:
+            stage_config = json.load(stream)
+        phase = next(
+            item for item in stage_config["phases"]
+            if item["name"] == phase_name)
+        selection = phase.get("validation_selection")
+        validation = phase.get("validation")
+        if not isinstance(selection, dict) or not isinstance(validation, dict):
+            raise ValueError(f"{stage_name} 缺少 validation selection")
+        checkpoint = os.path.join(
+            trial, artifacts["stages"][stage_name]["best_checkpoint"])
+        checkpoint_uri = paths.artifact_uri(checkpoint)
+        stages.append({
+            "name": stage_name,
+            "selection": {
+                "metric": selection["metric"],
+                "mode": selection["mode"],
+                "dataset_role": selection["dataset_role"],
+                "best_value": selection["best_value"],
+                "best_epoch": selection["best_epoch"],
+                "checkpoint_uri": checkpoint_uri,
+            },
+        })
+        expected_artifacts.extend((
+            checkpoint_uri,
+            paths.artifact_uri(os.path.join(
+                trial, artifacts["stages"][stage_name]["best_quantitative"],
+                "summary.txt")),
+            paths.artifact_uri(os.path.join(
+                trial, artifacts["stages"][stage_name]["best_overlay"],
+                "summary.txt")),
+        ))
+
+    manifest = {
+        "schema_version": 2,
+        "kind": "training_run",
+        "run_id": config["trial"]["id"],
+        "study_id": f"real_pipeline.{config['trial']['sequence_tag']}",
+        "created_at": config["trial"]["created_at"],
+        "status": "complete",
+        "run_kind": "formal",
+        "dataset": {
+            "dataset_id": dataset_manifest["dataset_id"],
+            "manifest_uri": paths.artifact_uri(dataset_manifest_path),
+        },
+        "source": {
+            "git_commit": source["git_commit"],
+            "dirty": bool(source["dirty"]),
+        },
+        "commands_uri": paths.artifact_uri(os.path.join(trial, "commands.sh")),
+        "resolved_config_uri": paths.artifact_uri(
+            os.path.join(trial, "config.json")),
+        "seed": config["training"]["seed"],
+        "stages": stages,
+        "expected_artifacts": expected_artifacts,
+        "complete_marker_uri": paths.artifact_uri(os.path.join(trial, "COMPLETE")),
+    }
+    test_artifacts = artifacts.get("final_evaluations", [])
+    if test_artifacts:
+        manifest["final_evaluations"] = []
+        for item in test_artifacts:
+            manifest["final_evaluations"].append({
+                "stage": item["stage"],
+                "dataset_role": "test",
+                "quantitative_uri": paths.artifact_uri(os.path.join(
+                    trial, item["quantitative"], "summary.txt")),
+                "overlay_uri": paths.artifact_uri(os.path.join(
+                    trial, item["overlay"], "summary.txt")),
+            })
+        manifest["offline_fixture_uri"] = paths.artifact_uri(os.path.join(
+            trial, artifacts["offline_fixture"]))
+        manifest["deploy_manifest_uri"] = paths.artifact_uri(os.path.join(
+            trial, artifacts["deploy_manifest"]))
+    validate_run_manifest(manifest)
+    return manifest
+
+
+def write_formal_run_manifest(trial_dir, config, artifacts, paths=None):
+    """Write COMPLETE and run_manifest.json without overwriting either."""
+    manifest = build_formal_run_manifest(
+        trial_dir, config, artifacts, paths=paths)
+    trial = os.path.abspath(trial_dir)
+    complete = os.path.join(trial, "COMPLETE")
+    if os.path.exists(complete):
+        raise FileExistsError(f"拒绝覆盖完成标记: {complete}")
+    with open(complete, "x", encoding="utf-8") as stream:
+        stream.write(f"complete_at={_timestamp()}\n")
+    try:
+        return atomic_write_json(
+            Path(trial) / "run_manifest.json", manifest, overwrite=False)
+    except BaseException:
+        os.unlink(complete)
+        raise
+
+
 def finalize_trial(trial_dir):
     trial_dir = os.path.normpath(trial_dir)
     required = [
@@ -295,6 +526,22 @@ def finalize_trial(trial_dir):
     _require_files(trial_dir, required)
     with open(os.path.join(trial_dir, "config.json"), encoding="utf-8") as stream:
         config = json.load(stream)
+    has_frozen_test = bool(config.get("data", {}).get("test_npz_files"))
+    if has_frozen_test:
+        required.extend([
+            f"evaluations/test/{stage}/{kind}/{filename}"
+            for stage in ("gt", "open_loop")
+            for kind, filename in (
+                ("quantitative", "summary.txt"),
+                ("overlay", "summary.txt"),
+                ("overlay", "montage.png"),
+            )
+        ])
+        required.extend([
+            "evaluations/test/offline_fixture.json",
+            "stages/open_loop/deploy_manifest.json",
+        ])
+        _require_files(trial_dir, required)
     def selected_checkpoint(stage):
         evaluated = (
             f"stages/{stage}/phase_{'gt' if stage == 'gt' else 'open_loop'}_transition/"
@@ -339,8 +586,22 @@ def finalize_trial(trial_dir):
         "commands": "commands.sh",
         "status": "status.txt",
     }
+    if has_frozen_test:
+        artifacts["final_evaluations"] = [
+            {
+                "stage": stage,
+                "dataset_role": "test",
+                "quantitative": f"evaluations/test/{stage}/quantitative",
+                "overlay": f"evaluations/test/{stage}/overlay",
+            }
+            for stage in ("gt", "open_loop")
+        ]
+        artifacts["offline_fixture"] = "evaluations/test/offline_fixture.json"
+        artifacts["deploy_manifest"] = "stages/open_loop/deploy_manifest.json"
     artifacts_path = os.path.join(trial_dir, "artifacts.json")
     _write_json(artifacts_path, artifacts)
+    if config.get("run", {}).get("kind") == "formal":
+        write_formal_run_manifest(trial_dir, config, artifacts)
     return artifacts_path
 
 
@@ -375,6 +636,8 @@ def build_parser():
     create.add_argument("--val-dir", required=True)
     create.add_argument("--train-npz", required=True)
     create.add_argument("--dataset-manifest", default=None)
+    create.add_argument("--test-dir", default=None)
+    create.add_argument("--test-sequence", default=None)
     create.add_argument("--cam0-dir", required=True)
     create.add_argument("--masks-dir", required=True)
     create.add_argument("--ndi-csv", default=None)
@@ -439,6 +702,22 @@ def build_parser():
         "infer-sequence-tag", help="从数据清单推导简洁采集序列标签")
     infer.add_argument("--train-dir", required=True)
     infer.add_argument("--dataset-manifest", default=None)
+    resolve = subparsers.add_parser(
+        "resolve-real-path", help="解析正式真实训练的统一路径或历史只读资产")
+    resolve.add_argument("--sequence-id", required=True)
+    resolve.add_argument("--dataset-id", required=True)
+    resolve.add_argument("--sequence-tag", required=True)
+    resolve.add_argument("--camera", default="cam0")
+    resolve.add_argument("--field", required=True, choices=(
+        "trial_base", "raw_sequence", "camera_dir", "masks_dir",
+        "ndi_csv", "frame_times"))
+    dataset_role = subparsers.add_parser(
+        "resolve-dataset-role", help="解析 strict-v2 dataset 的单个 split")
+    dataset_role.add_argument("--dataset-manifest", required=True)
+    dataset_role.add_argument("--role", choices=("train", "val", "test"),
+                              required=True)
+    dataset_role.add_argument("--field", choices=(
+        "dataset_id", "sequence_id", "npz", "dir"), required=True)
     return parser
 
 
@@ -473,8 +752,15 @@ def main(argv=None):
                 "open_loop_scheduler_patience":
                     args.open_loop_scheduler_patience,
             }), ensure_ascii=False))
-    else:
+    elif args.command == "infer-sequence-tag":
         print(infer_sequence_tag(args.train_dir, args.dataset_manifest))
+    elif args.command == "resolve-real-path":
+        print(resolve_real_pipeline_paths(
+            args.sequence_id, args.dataset_id, args.sequence_tag,
+            camera=args.camera)[args.field])
+    else:
+        print(resolve_dataset_role(
+            args.dataset_manifest, args.role)[args.field])
     return 0
 
 

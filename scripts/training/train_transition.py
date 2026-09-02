@@ -45,7 +45,11 @@ from src.config.args import (  # noqa: E402
     add_common_args, resolve_training_config, build_common_overrides)
 from src.utils.data_detect import detect_n_nodes  # noqa: E402
 from src.data.action_view import resolve_action_contract  # noqa: E402
+from src.registry.paths import ProjectPaths  # noqa: E402
+from src.evaluation.real_transition_validation import transition_state_unit  # noqa: E402
+from src.training.spec import ValidationSpec  # noqa: E402
 from src.training.trainer_unified import UnifiedTrainer  # noqa: E402
+from src.training.validation_adapters import transition_validation_adapter  # noqa: E402
 
 
 def build_parser():
@@ -74,10 +78,25 @@ def build_parser():
     parser.add_argument(
         "--experiment-dir", default=None,
         help="本阶段的实验根目录；流水线传入 stages/gt 或 stages/open_loop")
+    parser.add_argument(
+        "--val_dir", default=None,
+        help="可选独立 val NPZ 目录；提供后由 engine 生成 best_eval_model.pt")
+    parser.add_argument("--validation_interval", type=int, default=5,
+                        help="有 --val_dir 时每多少 epoch 验证一次")
+    parser.add_argument("--validation_max_steps", type=int, default=500,
+                        help="每次主线验证最多评估多少帧")
+    parser.add_argument("--validation_min_delta", type=float, default=0.0)
+    parser.add_argument("--validation_warmup", type=int, default=2,
+                        help="早停前不计 patience 的验证次数")
+    parser.add_argument("--early_stopping_patience", type=int, default=None,
+                        help="按验证次数计；缺省关闭早停但仍按 val 选择 checkpoint")
+    parser.add_argument(
+        "--allow-early-stop-before-tf-anneal", action="store_true",
+        help="允许 OpenLoop 在 teacher-forcing 退火完成前早停（默认禁止）")
     # ── open_loop 专属（gt 模式忽略）──
     parser.add_argument("--init_from", type=str, default=None,
                         help="[open_loop] 热启动 checkpoint（默认自动找最新 "
-                             "train_log/gt_transition/*/phase_gt_transition/model/best_model.pt）")
+                             "workspace 和历史 train_log 中的 gt_transition）")
     parser.add_argument("--tf_ratio", type=float, default=0.0,
                         help="[open_loop] 稳态/退火起始 teacher forcing (0.0=纯闭环)")
     parser.add_argument("--tf_anneal_epochs", type=int, default=0,
@@ -108,6 +127,35 @@ def build_parser():
                         help="[hereditary] 残差幅度上限（归一化骨架单位）。F5: 修 F1 后重训，"
                              "若 residual_scale 仍钉在此上限则是真容量信号（可上调做对照实验）")
     return parser
+
+
+def configure_transition_validation(args, phase_spec, config):
+    """Attach an explicit native-unit validator when ``--val_dir`` is given."""
+    phase_spec.validation = None
+    if not args.val_dir:
+        return None, None
+    if args.validation_max_steps <= 0:
+        raise ValueError("validation_max_steps 必须为正整数")
+    unit = transition_state_unit(args.val_dir)
+    metric = f"validation.node_mean_{unit}"
+    phase_spec.validation = ValidationSpec(
+        selection_metric=metric,
+        selection_mode="min",
+        eval_interval_epochs=args.validation_interval,
+        min_delta=args.validation_min_delta,
+        warmup_evaluations=args.validation_warmup,
+        early_stopping_patience_evaluations=args.early_stopping_patience,
+        lr_scheduler_metric=metric,
+        restore_best_at_end=True,
+        allow_early_stop_before_tf_anneal=(
+            args.allow_early_stop_before_tf_anneal),
+    )
+    config.setdefault("evaluation", {})[
+        "transition_validation_max_steps"] = args.validation_max_steps
+    return (
+        {phase_spec.name: args.val_dir},
+        {phase_spec.name: transition_validation_adapter},
+    )
 
 
 def main(argv=None):
@@ -215,9 +263,16 @@ def main(argv=None):
     config["state_view"] = norm_dataset.get_state_contract()
 
     data_dirs = {"sequence": args.data_dir}
+    validation_data_dirs, validation_adapters = configure_transition_validation(
+        args, spec.phases[0], config)
     trainer = UnifiedTrainer(model, view_strategy=None, config=config,
                              model_tag=model_tag)
-    trainer.train(data_dirs, exp_dir=args.experiment_dir)
+    trainer.train(
+        data_dirs,
+        exp_dir=args.experiment_dir,
+        validation_data_dirs=validation_data_dirs,
+        validation_adapters=validation_adapters,
+    )
 
 
 def _ckpt_action_dim(ckpt_path):
@@ -254,9 +309,7 @@ def _warm_start_open_loop(model, init_from, device, action_dim=None):
        上 → state_mlp size mismatch 崩溃。传 action_dim 后只挑匹配的 checkpoint。
     """
     if init_from is None:
-        cands = glob.glob(os.path.join(
-            "train_log", "gt_transition", "*", "phase_gt_transition", "model",
-            "best_model.pt"))
+        cands = _default_gt_checkpoint_candidates()
         if action_dim is not None and cands:
             cands = [c for c in cands if _ckpt_action_dim(c) == action_dim]
         if cands:
@@ -301,6 +354,29 @@ def _warm_start_open_loop(model, init_from, device, action_dim=None):
     print(f"[warm-start] loaded {init_from}")
     print(f"  missing(应仅 mode buffer)={incompatible.missing_keys}")
     print(f"  unexpected(应仅 gt_observed_mode)={incompatible.unexpected_keys}")
+
+
+def _default_gt_checkpoint_candidates(paths=None):
+    """按“统一 workspace + 历史只读根”收集 GT 热启动候选。
+
+    路径由 ``ProjectPaths`` 解析，因此调用者的当前工作目录不会改变搜索范围。
+    返回字符串是为了保持下游 ``os.path``/``torch.load`` 的现有接口不变。
+    """
+    paths = paths or ProjectPaths.load()
+    study_roots = [paths.training_study("gt_transition")]
+    study_roots.extend(
+        paths.legacy_candidates("training", "gt_transition"))
+
+    candidates = []
+    seen = set()
+    pattern = "*/phase_gt_transition/model/best_model.pt"
+    for study_root in study_roots:
+        for candidate in study_root.glob(pattern):
+            resolved = candidate.resolve(strict=False)
+            if resolved not in seen:
+                seen.add(resolved)
+                candidates.append(str(candidate))
+    return candidates
 
 
 if __name__ == "__main__":

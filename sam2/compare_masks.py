@@ -17,6 +17,7 @@
   python sam2/compare_masks.py --seq seq_20260627_163921 --frames 4080,4902,2330,100
 """
 import argparse
+from datetime import datetime
 import os
 import sys
 
@@ -27,6 +28,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, PROJECT_ROOT)
 
+from src.registry import (  # noqa: E402
+    ProjectPaths, canonical_output, resolve_candidate_masks,
+    resolve_raw_sequence, resolve_repaired_masks, resolve_sam2_masks,
+)
+
 # 典型腐败帧(静态截断/动作段半mask/手污染) + 干净 + 跨序列抽样
 DEFAULT_FRAMES = [100, 4080, 4902, 2330, 2316, 1692, 4516, 1000, 3000, 7000, 9000]
 
@@ -36,8 +42,8 @@ def _load(d, f):
     return (cv2.imread(p, cv2.IMREAD_GRAYSCALE) > 127).astype(np.uint8) if os.path.isfile(p) else None
 
 
-def _photo(seq, f):
-    p = os.path.join(PROJECT_ROOT, "real_capture", "data", "raw", seq, "cam0", f"{f:05d}.png")
+def _photo(camera_dir, f):
+    p = os.path.join(camera_dir, f"{f:05d}.png")
     return cv2.imread(p) if os.path.isfile(p) else None
 
 
@@ -73,11 +79,10 @@ def _label(img, text):
 
 
 def compare_panels(args):
-    seq = args.seq
-    raw_d = os.path.join(PROJECT_ROOT, "real_capture", "data", "derived", seq, "masks")
-    prev_d = os.path.join(PROJECT_ROOT, "real_capture", "data", "derived", seq, "masks_repaired")
-    sam_d = args.sam_dir or os.path.join(HERE, "masks", f"{seq}_full")
-    out_qc = os.path.join(sam_d, "qc")
+    raw_d = args.candidate_dir
+    prev_d = args.repaired_dir
+    sam_d = args.sam_dir
+    out_qc = args.out_dir
     os.makedirs(out_qc, exist_ok=True)
     frames = [int(x) for x in args.frames.split(",")] if args.frames else DEFAULT_FRAMES
 
@@ -87,7 +92,7 @@ def compare_panels(args):
         raw = _load(raw_d, f)
         prev = _load(prev_d, f)
         sam = _load(sam_d, f)
-        photo = _photo(seq, f)
+        photo = _photo(args.camera_dir, f)
         if sam is None:
             n_sam_missing += 1
         iou = _iou(prev, sam)
@@ -107,10 +112,9 @@ def compare_panels(args):
 def area_scatter(args):
     """全序列 prev_area vs sam_area 散点 + 1:1 线。SAM2 area 来自 area_curve.txt;
     prev area 现算。"""
-    seq = args.seq
-    prev_d = os.path.join(PROJECT_ROOT, "real_capture", "data", "derived", seq, "masks_repaired")
-    sam_d = args.sam_dir or os.path.join(HERE, "masks", f"{seq}_full")
-    out_qc = os.path.join(sam_d, "qc")
+    prev_d = args.repaired_dir
+    sam_d = args.sam_dir
+    out_qc = args.out_dir
     os.makedirs(out_qc, exist_ok=True)
     area_txt = os.path.join(sam_d, "area_curve.txt")
     if not os.path.isfile(area_txt):
@@ -179,13 +183,37 @@ def area_scatter(args):
         print(f"[skip scatter] {e}")
 
 
-def main():
+def main(argv=None):
     pa = argparse.ArgumentParser(description="之前 mask(repaired) vs SAM2 mask 对比图")
     pa.add_argument("--seq", default="seq_20260627_163921")
     pa.add_argument("--sam-dir", default=None, help="SAM2 mask 目录(默认 sam2/masks/<seq>_full)")
+    pa.add_argument("--candidate-dir", default=None)
+    pa.add_argument("--repaired-dir", default=None)
+    pa.add_argument("--out-dir", default=None,
+                    help="分析输出目录；默认 workspace/runs/analysis/mask-comparison/<run>")
+    pa.add_argument("--workspace-root", default=None)
+    pa.add_argument("--overwrite", action="store_true")
     pa.add_argument("--frames", default=None, help="逗号分隔帧(默认含腐败+抽样)")
     pa.add_argument("--scatter-only", action="store_true", help="只画 area 散点(全序列量化)")
-    args = pa.parse_args()
+    args = pa.parse_args(argv)
+    paths = ProjectPaths.load(workspace_root=args.workspace_root)
+    sequence = resolve_raw_sequence(paths, args.seq, camera="cam0")
+    args.camera_dir = str(sequence / "cam0")
+    args.candidate_dir = str(
+        args.candidate_dir or resolve_candidate_masks(paths, args.seq))
+    args.repaired_dir = str(
+        args.repaired_dir or resolve_repaired_masks(paths, args.seq))
+    args.sam_dir = str(args.sam_dir or resolve_sam2_masks(paths, args.seq))
+    if args.out_dir:
+        output = canonical_output(paths, args.out_dir)
+        if output.exists() and any(output.iterdir()) and not args.overwrite:
+            raise FileExistsError(f"拒绝覆盖已有 mask comparison: {output}")
+        output.mkdir(parents=True, exist_ok=True)
+    else:
+        run_id = f"{args.seq}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        output = paths.create_new_directory(
+            paths.analysis_run("mask-comparison", run_id))
+    args.out_dir = str(output)
     if not args.scatter_only:
         compare_panels(args)
     area_scatter(args)

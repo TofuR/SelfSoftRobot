@@ -19,6 +19,7 @@ SAM2_HOME 指向 sam2/sam2_src(否则 import sam2 报 NoneType)。
 """
 import argparse
 import os
+from pathlib import Path
 import sys
 import shutil
 
@@ -33,6 +34,12 @@ import cv2
 import numpy as np
 
 PROJECT_ROOT = os.path.dirname(HERE)
+sys.path.insert(0, PROJECT_ROOT)
+
+from src.registry import (  # noqa: E402
+    ProjectPaths, canonical_output, resolve_raw_sequence,
+)
+
 CKPT = os.path.join(HERE, "checkpoints", "sam2.1_hiera_tiny.pt")
 CONFIG_DIR = os.path.join(SAM2_SRC, "sam2", "configs")        # hydra config_dir
 CONFIG_FILE = "sam2.1/sam2.1_hiera_t.yaml"                     # 相对 configs 根
@@ -60,18 +67,30 @@ def prepare_jpeg_dir(cam0, start, end, jpeg_dir):
 
 
 def main():
+    global CKPT
     pa = argparse.ArgumentParser(description="SAM2 视频分割(持久版)")
     pa.add_argument("--seq", required=True)
     pa.add_argument("--start", type=int, required=True)
     pa.add_argument("--end", type=int, required=True)
     pa.add_argument("--anchor", type=int, required=True, help="锚帧(干净, 用其 mask 作 prompt)")
     pa.add_argument("--anchor-mask-dir", required=True, help="锚帧 mask 目录(如 masks_repaired)")
-    pa.add_argument("--out", required=True, help="输出 mask 目录")
+    pa.add_argument("--out", required=True, help="输出 mask 目录；必须位于 workspace")
+    pa.add_argument("--workspace-root", default=None)
+    pa.add_argument("--checkpoint", default=None)
     pa.add_argument("--device", default="cuda:0")
     args = pa.parse_args()
 
-    cam0 = os.path.join(PROJECT_ROOT, "real_capture", "data", "raw", args.seq, "cam0")
-    tmp_jpeg = os.path.join(HERE, "_jpeg_tmp", f"{args.seq}_{args.start}-{args.end}")
+    paths = ProjectPaths.load(workspace_root=args.workspace_root)
+    sequence = resolve_raw_sequence(paths, args.seq, camera="cam0")
+    cam0 = str(sequence / "cam0")
+    args.out = str(canonical_output(paths, args.out))
+    tmp_jpeg = str(paths.workspace_root / "cache" / "sam2_jpeg" /
+                   f"{sequence.name}_{args.start}-{args.end}")
+    canonical_checkpoint = paths.pretrained_model_dir(
+        "sam2") / "sam2.1_hiera_tiny.pt"
+    CKPT = str(args.checkpoint or (
+        canonical_checkpoint if canonical_checkpoint.is_file()
+        else Path(HERE) / "checkpoints" / "sam2.1_hiera_tiny.pt"))
     frames = prepare_jpeg_dir(cam0, args.start, args.end, tmp_jpeg)
     anchor_local = frames.index(args.anchor)
     print(f">>> {len(frames)} 帧 [{args.start}..{args.end}], 锚帧 f{args.anchor}(local idx {anchor_local})")

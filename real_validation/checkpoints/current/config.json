@@ -46,7 +46,7 @@
   },
   "checkpoint_interval": 5,
   "data_dirs": {
-    "sequence": "data/real_seq/seq_20260819_172644_n15_sam2_robot_mm/train"
+    "sequence": "workspace/data/processed/real/seq_20260819_172644_n15_sam2_robot_mm/train"
   },
   "view_strategy": null,
   "action_view": {

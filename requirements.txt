@@ -33,6 +33,7 @@ python-dateutil==2.9.0.post0
 pytweening==1.2.0
 six==1.17.0
 sympy==1.13.1
+tomli>=2.0.0; python_version < "3.11"
 torch==2.6.0
 tqdm==4.67.1
 typing_extensions==4.12.2

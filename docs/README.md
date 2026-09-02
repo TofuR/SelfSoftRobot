@@ -1,12 +1,37 @@
+---
+title: SelfSoftRobot 文档地图
+kind: map
+status: active
+updated: 2026-09-01
+scope: canonical documentation navigation and ownership
+supersedes: []
+superseded_by: null
+sources: []
+---
+
 # docs/ 导航索引
 
-> docs/ 的地图。按主题找文档; 每条一行说明。最后更新 2026-07-20。
+> docs/ 的唯一地图。按主题找权威文档；“当前/最好/最新”只由状态页或具体 run
+> 记录拥有。文档内容需用当前代码、测试、manifest 与 Git 验证。
 
-## 接手指南(给 AI agent)
+## 治理角色
 
-| 文档 | 说明 |
-|---|---|
-| [`HANDOFF.md`](HANDOFF.md) | **新接手先读**: 5 分钟心智模型 + 当前真实状态(exp_20260714_7/8) + 别破坏的不变量 + 怎么跑最新控制/规划 + 诚实边界 + 术语表 |
+| 角色 | 权威来源 | 只负责 |
+|---|---|---|
+| Constitution | [`../CLAUDE.md`](../CLAUDE.md) + [`standards/`](standards/) | 必须遵守的约束；详细规则链接到 standards |
+| Map | 本页 | 结构、所有权和“去哪里找” |
+| Status | [`overview/status.md`](overview/status.md) | 当前主线、阻塞、健康和删除区 |
+| History | [`maintenance/README.md`](maintenance/README.md) | 重要迁移、替换、删除及验收决定 |
+
+[`HANDOFF.md`](HANDOFF.md) 只保留兼容重定向；2026-07-28 完整快照已归档，
+不再作为当前入口。
+
+治理更新规则：结构/所有权变化改本页；当前里程碑、阻塞或删除区改 status；难回退
+决定和重要迁移改 maintenance。提交这些文档前运行：
+
+```bash
+python scripts/maintenance/check_docs_governance.py
+```
 
 ## 项目总览 (`overview/`)
 | 文档 | 说明 |
@@ -15,45 +40,62 @@
 | [`overview/pipeline.md`](overview/pipeline.md) | 技术管线与模型演进(MSTNF→C-MSTNF→MS-SCNF→state-transition) |
 | [`overview/status.md`](overview/status.md) | 项目状态快照: 现在到哪了 + 接下来做什么 |
 
-## 实物数据 (`real_data/`) — 当前主线
+## 实物数据 (`real_data/`)
 | 文档 | 说明 |
 |---|---|
-| [`real_data/workflow.md`](real_data/workflow.md) | **免标定 2D 骨架→状态转移→NDI 验证** 完整流程(分割/修复/SAM2/骨架化/npz/clean/训练/评估) |
+| [`real_data/README.md`](real_data/README.md) | 实物文档入口：当前流程、实验记录和旧流程分类 |
+| [`real_data/general_6ch_postprocess.md`](real_data/general_6ch_postprocess.md) | **当前通用数据前处理主线** |
+| [`real_data/automated_real_pipeline.md`](real_data/automated_real_pipeline.md) | 当前自动前处理、训练和离线验证编排 |
 | [`real_data/capture_setup.md`](real_data/capture_setup.md) | 硬件采集系统: 双段硅胶臂 + 6通道 Modbus 比例阀 + RealSense + NDI Aurora |
 | [`real_data/deployment.md`](real_data/deployment.md) | **实机部署指南**: 采集→数据前处理→训练→deploy_manifest→工作台闭环;含已知坑与诚实边界 |
 
 ## 研究方向 (`directions/`)
 | 文档 | 说明 |
 |---|---|
-| [`directions/directions_overview.md`](directions/directions_overview.md) | 17 个研究方向索引 |
-| `directions/02_*.md` ~ `17_*.md` | 各方向详述(迟滞/编码/骨架/多视角/sim2real/OpenLoop/控制/路径依赖 IK 等) |
+| [`directions/directions_overview.md`](directions/directions_overview.md) | 18 个研究方向索引（部分为历史假设） |
+| `directions/02_*.md` ~ `18_*.md` | 各方向详述(迟滞/编码/骨架/多视角/sim2real/OpenLoop/控制/路径依赖 IK 等) |
 
 ## 设计 (`designs/`)
 | 文档 | 说明 |
 |---|---|
-| [`designs/2026-08-29_hereditary_operator_model.md`](designs/2026-08-29_hereditary_operator_model.md) | **HereditaryOperatorModel 设计(定稿未实现)**:迟滞的显式算子状态表示(PI play 组+广义 Maxwell+线性模态读出),含对抗审稿裁决、四公理、可辨识性协议、E0-E4 实验协议、论文定位与退路阶梯 |
+| [`designs/2026-08-29_hereditary_operator_model.md`](designs/2026-08-29_hereditary_operator_model.md) | **HereditaryOperatorModel v2 设计与实现边界**：PI play + 广义 Maxwell + 局部模态读出、验证协议和文献边界 |
 | [`designs/2026-08-31_repository_organization_refactor.md`](designs/2026-08-31_repository_organization_refactor.md) | **仓库整理与重构提案**：统一数据/运行路径、manifest 谱系、训练验证与早停共识、文档治理及分阶段迁移验收 |
+
+## 项目规范 (`standards/`)
+| 文档 | 说明 |
+|---|---|
+| [`standards/repository_layout.md`](standards/repository_layout.md) | **当前生效的仓库与工作区合同**：源码/产物边界、统一 workspace、历史路径只读兼容和迁移验收 |
+| [`standards/dataset_split.md`](standards/dataset_split.md) | **数据划分共识**：先划分后构窗、证据等级、时序泄漏与模型可声明差异 |
+| [`standards/training_and_evaluation.md`](standards/training_and_evaluation.md) | **训练与选择共识**：验证、早停、checkpoint 语义、模型差异和测试集使用 |
+| [`standards/experiment_layout.md`](standards/experiment_layout.md) | **试次归档共识**：run 布局、无覆盖、resume、完成标记和历史运行 |
+| [`standards/evidence_language.md`](standards/evidence_language.md) | **证据语言共识**：模型误差、离线规划、Mock 链路和实机控制的表述边界 |
+
+## 治理历史 (`maintenance/`)
+
+| 文档 | 说明 |
+|---|---|
+| [`maintenance/README.md`](maintenance/README.md) | 重要迁移、发布、验收和有意删除的索引；普通提交仍以 Git 为准 |
 
 ## 文献与背景 (`background/`)
 | 文档 | 说明 |
 |---|---|
 | [`background/literature.md`](background/literature.md) | 相关工作综述(NeRF系/自建模/迟滞/视觉控制) + 本项目创新点 |
 
-## 论文笔记 (`papers/`)
-| 子目录/文件 | 说明 |
+## 论文与文献
+
+| 入口 | 说明 |
 |---|---|
-| `papers/notes/` | 10 篇短笔记(3DGS/flow_matching/hysteresis/koopman/jacobian/pinn/shape_node/ssl/tang/yu) |
-| `papers/understanding/` | 深读: hu2025(FBV-SM)/chen2022/shan2024(SoftNeRF) + brainstorm + depth_supervision_innovation |
-| `papers/*.pdf` `*.jpg` | 论文原文 |
+| [`paper/README.md`](paper/README.md) | 唯一活跃 manuscript 树；方法、实验、outline 和正文草稿在这里维护 |
+| [`papers/README.md`](papers/README.md) | 文献证据、66 篇单篇笔记、深读材料、原文副本和旧阶段草稿的边界 |
 
 ## 实验 (`experiments/`)
 | 文档 | 说明 |
 |---|---|
+| [`experiments/README.md`](experiments/README.md) | 实验文档入口：当前方案、正式记录和历史仿真实验 |
 | [`experiments/openloop_sparse_observation_validation_plan.md`](experiments/openloop_sparse_observation_validation_plan.md) | **当前论文实验主方案**：机制层物理记忆与 H–K 可行域，任务层路径依赖 IK/不可见轨迹，应用层不透明通道稀疏观测巡检 |
 | [`experiments/real_robot_validation_workbench_todo.md`](experiments/real_robot_validation_workbench_todo.md) | **实机验证界面 TODO**：模型/场景/规划/安全执行/同步评价的通用工作台与任务插件 |
-| `experiments/experiment_analysis.md` | 全部实验结果分析 |
-| `experiments/improvement_proposals.md` | 改进方案记录 |
-| `experiments/results_evaluation.md` | 评估结果 |
+| `experiments/hereditary_v2_training_validation.md` | Hereditary v2 正式训练与验证记录 |
+| `experiments/experiment_analysis.md`、`improvement_proposals.md`、`results_evaluation.md` | **历史仿真阶段记录**，仅用于追溯，不作为当前结论入口 |
 
 ## 演示 (`presentations/`)
 - `presentations/Project_presentation1.md` / `Project_presentation2.md`
@@ -63,7 +105,7 @@
 |---|---|
 | [`encoders.md`](encoders.md) | 时序编码器(EMA/Fractional/Gamma/GRU/Transformer/TCN) |
 | `superpowers/` | 设计规格与计划(specs/ + plans/, 工具生成) |
-| `ref/` | 外部参考(SelfSimRobot 旧刚臂代码 / TwinCAT Project8 / Main UI-plc / visual-selfmodeling) |
+| [`ref/README.md`](ref/README.md) | 本机硬件实验资料与外部参考项目边界；内容默认 ignored，不是当前项目事实来源 |
 
 ## 归档 (`archived/`)
 被合并或取代的旧文档(完整内容在 git 历史 + 新文档里):

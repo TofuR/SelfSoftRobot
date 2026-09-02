@@ -2,25 +2,381 @@ import json
 import os
 import tempfile
 import unittest
+from pathlib import Path
 
 import cv2
 import numpy as np
 
 from scripts.real.manage_training_trial import (
+    build_formal_run_manifest,
+    infer_sequence_tag,
     prepare_trial_layout,
+    resolve_dataset_role,
+    resolve_real_pipeline_paths,
     validate_dataset_manifest,
     validate_open_loop_start,
 )
 from scripts.real.masks_to_transition_npz import save_npz
 from scripts.real.preprocess_capture import (
+    build_dataset_manifest,
     build_parser,
+    resolve_capture_sequence,
+    resolve_preprocess_layout,
     resolve_pipeline_args,
     validate_stage_dependencies,
 )
+from src.registry.manifests import (
+    validate_dataset_manifest as validate_registry_dataset_manifest,
+)
+from src.registry.paths import ProjectPaths
+from src.registry.real_assets import SAM2_VIDEO_RECIPE
 from scripts.real.save_preprocess_stage_example import save_stage_example
 
 
 class RealPipelineAutomationTest(unittest.TestCase):
+    def test_resolves_strict_dataset_role_and_sequence(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo = Path(root) / "repo"
+            repo.mkdir()
+            paths = ProjectPaths.load(repo_root=repo, environ={})
+            dataset = paths.processed_dataset("real", "reference_v1")
+            test_npz = dataset / "splits/test/test.npz"
+            test_npz.parent.mkdir(parents=True)
+            test_npz.write_bytes(b"npz")
+            manifest = dataset / "dataset_manifest.json"
+            manifest.write_text(json.dumps({
+                "schema_version": 2,
+                "kind": "dataset",
+                "dataset_id": "reference_v1",
+                "created_at": "2026-09-01T12:00:00+08:00",
+                "status": "released",
+                "sources": [{"sequence_id": "seq_test",
+                             "raw_manifest_sha256": "a" * 64}],
+                "recipe": {"name": "reference", "version": 1,
+                           "git_commit": "3157b12", "parameters": {},
+                           "commands": ["publish"]},
+                "contracts": {
+                    **{name: {} for name in
+                       ("state", "action", "timing", "observation")},
+                    "evaluation": {"test_policy": "frozen_final_only"},
+                },
+                "split_policy": {"name": "reference", "group_key": "sequence_id",
+                                 "embargo_frames": 0, "seed": None,
+                                 "evidence_level": "within_sequence"},
+                "files": [{"uri": paths.artifact_uri(test_npz),
+                           "sha256": "b" * 64, "bytes": 3}],
+                "splits": {"train": [], "val": [], "test": [{
+                    "uri": paths.artifact_uri(test_npz), "sha256": "b" * 64,
+                    "frames": 1, "sequence_id": "seq_test"}]},
+                "quality_control": {},
+            }), encoding="utf-8")
+
+            selected = resolve_dataset_role(manifest, "test", paths=paths)
+
+            self.assertEqual(selected["dataset_id"], "reference_v1")
+            self.assertEqual(selected["sequence_id"], "seq_test")
+            self.assertEqual(Path(selected["dir"]), test_npz.parent)
+
+    def test_builds_lightweight_stage_aware_run_manifest(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo = Path(root) / "repo"
+            repo.mkdir()
+            paths = ProjectPaths.load(repo_root=repo, environ={})
+            dataset = paths.processed_dataset("real", "dataset_a")
+            dataset.mkdir(parents=True)
+            dataset_manifest = dataset / "dataset_manifest.json"
+            dataset_manifest.write_text(json.dumps({
+                "schema_version": 2,
+                "kind": "dataset",
+                "dataset_id": "dataset_a",
+                "created_at": "2026-09-01T12:00:00+08:00",
+                "status": "released",
+                "sources": [{
+                    "sequence_id": "seq_a",
+                    "raw_manifest_sha256": "a" * 64,
+                }],
+                "recipe": {
+                    "name": "reference-release",
+                    "version": 1,
+                    "git_commit": "3157b12",
+                    "parameters": {},
+                    "commands": ["prepare reference release"],
+                },
+                "contracts": {
+                    "state": {}, "action": {}, "timing": {},
+                    "observation": {},
+                },
+                "split_policy": {
+                    "name": "cross_sequence",
+                    "group_key": "sequence_id",
+                    "embargo_frames": 0,
+                    "seed": None,
+                    "evidence_level": "cross_sequence",
+                },
+                "files": [],
+                "splits": {"train": [], "val": [], "test": []},
+                "quality_control": {"training_ready": True},
+            }), encoding="utf-8")
+            trial = paths.training_study("real_pipeline") / "seq_a/run_001"
+            for stage, phase in (("gt", "gt_transition"),
+                                 ("open_loop", "open_loop_transition")):
+                stage_dir = trial / f"stages/{stage}"
+                stage_dir.mkdir(parents=True, exist_ok=True)
+                (stage_dir / "config.json").write_text(json.dumps({
+                    "phases": [{
+                        "name": phase,
+                        "validation": {"selection_metric": "validation.node_mean_mm"},
+                        "validation_selection": {
+                            "metric": "validation.node_mean_mm",
+                            "mode": "min",
+                            "dataset_role": "val",
+                            "best_value": 1.0,
+                            "best_epoch": 1,
+                        },
+                    }],
+                }), encoding="utf-8")
+            config = {
+                "run": {"kind": "formal", "source": {
+                    "git_commit": "3157b12", "dirty": True}},
+                "trial": {"id": "run_001", "sequence_tag": "seq_a",
+                          "created_at": "2026-09-01T12:00:00+08:00"},
+                "data": {"dataset_manifest": str(dataset_manifest)},
+                "training": {"seed": 42},
+            }
+            artifacts = {"stages": {}}
+            for stage, phase in (("gt", "gt_transition"),
+                                 ("open_loop", "open_loop_transition")):
+                artifacts["stages"][stage] = {
+                    "config": f"stages/{stage}/config.json",
+                    "best_checkpoint": (
+                        f"stages/{stage}/phase_{phase}/model/best_eval_model.pt"),
+                    "best_quantitative": f"evaluations/{stage}/best/quantitative",
+                    "best_overlay": f"evaluations/{stage}/best/overlay",
+                }
+            artifacts["final_evaluations"] = [{
+                "stage": stage,
+                "dataset_role": "test",
+                "quantitative": f"evaluations/test/{stage}/quantitative",
+                "overlay": f"evaluations/test/{stage}/overlay",
+            } for stage in ("gt", "open_loop")]
+            artifacts["offline_fixture"] = "evaluations/test/offline_fixture.json"
+            artifacts["deploy_manifest"] = "stages/open_loop/deploy_manifest.json"
+
+            manifest = build_formal_run_manifest(
+                trial, config, artifacts, paths=paths)
+
+            self.assertEqual(manifest["schema_version"], 2)
+            self.assertEqual(manifest["dataset"]["dataset_id"], "dataset_a")
+            self.assertEqual([stage["name"] for stage in manifest["stages"]],
+                             ["gt", "open_loop"])
+            self.assertNotIn("manifest_sha256", manifest["dataset"])
+            self.assertEqual(
+                [item["stage"] for item in manifest["final_evaluations"]],
+                ["gt", "open_loop"])
+            self.assertTrue(all(
+                item["dataset_role"] == "test"
+                for item in manifest["final_evaluations"]))
+            self.assertTrue(manifest["offline_fixture_uri"].endswith(
+                "/evaluations/test/offline_fixture.json"))
+
+    def test_real_training_pipeline_uses_engine_validation_without_watcher(self):
+        script = (Path(__file__).resolve().parents[1] /
+                  "scripts/real/train_real_transition.sh").read_text(
+                      encoding="utf-8")
+        self.assertIn('--val_dir "$DATA_VAL_DIR"', script)
+        self.assertIn(
+            '--validation_interval "$PERIODIC_EVAL_INTERVAL"', script)
+        self.assertIn(
+            '--validation_max_steps "$PERIODIC_MAX_STEPS"', script)
+        self.assertNotIn("watch_best_checkpoint.py", script)
+        self.assertIn("RUNNING frozen_test", script)
+        self.assertIn('--data_dir "$DATA_TEST_DIR"', script)
+        self.assertLess(script.index("OPEN_LOOP_EVAL_CMD="),
+                        script.index("RUNNING frozen_test"))
+
+    def test_preprocess_reads_legacy_raw_and_writes_workspace(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo = Path(root) / "repo"
+            (repo / "config").mkdir(parents=True)
+            (repo / "config/paths.local.toml").write_text(
+                "schema_version = 1\n"
+                "[paths]\nworkspace_root = '../large_workspace'\n"
+                "[compat]\nraw_roots = ['old_raw']\n",
+                encoding="utf-8")
+            legacy = repo / "old_raw/seq_demo/cam0"
+            legacy.mkdir(parents=True)
+            paths = ProjectPaths.load(repo_root=repo, environ={})
+            args = build_parser().parse_args([
+                "--seq", "seq_demo", "--roi", "0,0,10,10"])
+            resolved = resolve_pipeline_args(args)
+
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                layout = resolve_preprocess_layout(resolved, paths)
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertEqual(layout["seq"], legacy.parent)
+            expected_workspace = Path(root) / "large_workspace"
+            self.assertEqual(
+                layout["derived"],
+                expected_workspace /
+                "data/intermediate/real/seq_demo/seq_demo_n15_sam2_robot_mm")
+            self.assertEqual(
+                layout["out_root"],
+                expected_workspace /
+                "data/processed/real/seq_demo_n15_sam2_robot_mm")
+            self.assertEqual(layout["mask_dir"],
+                             layout["derived"] / "sam2_masks")
+
+    def test_preprocess_prefers_canonical_raw_and_accepts_explicit_legacy(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo = Path(root) / "repo"
+            repo.mkdir()
+            paths = ProjectPaths.load(repo_root=repo, environ={})
+            canonical = paths.raw_sequence("real", "seq_demo")
+            legacy = repo / "real_capture/data/raw/seq_demo"
+            for sequence in (canonical, legacy):
+                (sequence / "cam0").mkdir(parents=True)
+
+            self.assertEqual(
+                resolve_capture_sequence("seq_demo", "cam0", paths), canonical)
+            self.assertEqual(
+                resolve_capture_sequence(str(legacy), "cam0", paths), legacy)
+
+    def test_preprocess_rejects_new_processed_output_in_legacy_root(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo = Path(root) / "repo"
+            (repo / "raw/seq_demo/cam0").mkdir(parents=True)
+            paths = ProjectPaths.load(repo_root=repo, environ={})
+            args = resolve_pipeline_args(build_parser().parse_args([
+                "--seq", str(repo / "raw/seq_demo"),
+                "--roi", "0,0,10,10",
+                "--out-root", "data/real_seq/legacy_write",
+            ]))
+            with self.assertRaisesRegex(ValueError, "workspace"):
+                resolve_preprocess_layout(args, paths)
+
+    def test_dataset_manifest_is_portable_and_registry_valid(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo = Path(root) / "repo"
+            repo.mkdir()
+            paths = ProjectPaths.load(repo_root=repo, environ={})
+            seq = repo / "legacy_raw/seq_demo"
+            derived = paths.intermediate_sequence(
+                "real", "seq_demo", "recipe_001")
+            crop_root = derived / "crop"
+            mask_dir = derived / "sam2_masks"
+            out_root = paths.processed_dataset("real", "dataset_demo")
+            for directory in (
+                    seq / "cam0", crop_root / "cam0", mask_dir,
+                    derived / "qc_capture", out_root / "train",
+                    out_root / "val", out_root / "qc_skeleton"):
+                directory.mkdir(parents=True)
+
+            (derived / "qc_capture/capture_audit.json").write_text(
+                json.dumps({"ready_for_image_preprocessing": True,
+                            "issues": [], "counts": {"images": 2}}))
+            (crop_root / "crop_meta.json").write_text(json.dumps({
+                "complete": True, "n_output_frames": 2,
+                "n_source_frames": 2,
+            }))
+            (derived / "candidate_summary.json").write_text(json.dumps({
+                "n_frames": 2, "n_empty": 0, "n_selected_anchors": 1,
+            }))
+            (out_root / "qc_skeleton/skeleton_metrics.csv").write_text(
+                "success,hard_invalid,interpolated,suspicious,explicit_repair\n"
+                "True,False,False,False,False\n"
+                "True,False,False,False,False\n")
+            np.savetxt(seq / "frame_times.txt", np.asarray((0.0, 0.2)))
+            image = np.zeros((4, 4, 3), np.uint8)
+            mask = np.zeros((4, 4), np.uint8)
+            for frame in range(2):
+                cv2.imwrite(str(crop_root / "cam0" / f"{frame:05d}.png"), image)
+                cv2.imwrite(str(mask_dir / f"{frame:05d}.png"), mask)
+
+            common = {
+                "positions": np.zeros((1, 3, 15), np.float32),
+                "positions_camera_px": np.zeros((1, 3, 15), np.float32),
+                "actions": np.zeros((1, 6), np.float32),
+                "node_order": np.array("base_to_tip"),
+                "n_points": np.array(15),
+                "state_coordinate_frame": np.array("robot_planar_mm_v1"),
+                "state_length_unit": np.array("mm"),
+                "raw_action_dim": np.array(6),
+                "model_action_dim": np.array(6),
+            }
+            np.savez_compressed(out_root / "train/train.npz", **common)
+            np.savez_compressed(out_root / "val/val.npz", **common)
+            config = {
+                "n_points": 15, "state_frame": "robot_planar_mm",
+                "max_interpolated_fraction": 0.05,
+                "seq": str(seq), "out_root": str(out_root),
+            }
+            manifest = build_dataset_manifest(
+                seq=str(seq), camera="cam0", derived=str(derived),
+                crop_root=str(crop_root), mask_dir=str(mask_dir),
+                out_root=str(out_root), resolved_config=config,
+                commands=[f"python {repo}/scripts/run.py --seq {seq}"],
+                sam2_summary={
+                    "frame_ids_match": True, "failures_empty": True,
+                    "mask_count": 2,
+                }, paths=paths, git_commit="f06c8c9")
+
+            validate_registry_dataset_manifest(manifest)
+            serialized = json.dumps(
+                manifest, ensure_ascii=False, allow_nan=False)
+            self.assertNotIn(str(repo), serialized)
+            self.assertIn("artifact://data/processed/real/dataset_demo", serialized)
+            self.assertEqual(manifest["status"], "draft")
+            self.assertTrue(manifest["quality_control"]["training_ready"])
+
+    def test_training_tag_reads_registry_sources_contract(self):
+        with tempfile.TemporaryDirectory() as root:
+            manifest_path = Path(root) / "dataset_manifest.json"
+            manifest_path.write_text(json.dumps({
+                "dataset_id": "dataset_demo",
+                "sources": [{"sequence_id": "seq_20260819_172644"}],
+            }))
+            self.assertEqual(
+                infer_sequence_tag(root, str(manifest_path)),
+                "seq_20260819_172644")
+
+    def test_real_training_paths_use_workspace_and_legacy_read_fallback(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo = Path(root) / "repo"
+            (repo / "config").mkdir(parents=True)
+            (repo / "config/paths.local.toml").write_text(
+                "schema_version = 1\n"
+                "[paths]\nworkspace_root = 'artifacts'\n"
+                "[compat]\nraw_roots = ['old_raw']\n"
+                "intermediate_roots = ['old_derived', 'old_masks']\n",
+                encoding="utf-8")
+            raw = repo / "old_raw/seq_demo"
+            masks = repo / "old_masks/seq_demo_full"
+            raw.mkdir(parents=True)
+            masks.mkdir(parents=True)
+            paths = ProjectPaths.load(repo_root=repo, environ={})
+
+            resolved = resolve_real_pipeline_paths(
+                "seq_demo", "dataset_demo", "seq_demo", paths)
+            self.assertEqual(resolved["raw_sequence"], raw)
+            self.assertEqual(resolved["masks_dir"], masks)
+            self.assertEqual(
+                resolved["trial_base"],
+                repo / "artifacts/runs/training/real_pipeline/seq_demo")
+
+            canonical_raw = paths.raw_sequence("real", "seq_demo")
+            canonical_masks = paths.intermediate_sequence(
+                "real", "seq_demo", SAM2_VIDEO_RECIPE)
+            canonical_raw.mkdir(parents=True)
+            canonical_masks.mkdir(parents=True)
+            resolved = resolve_real_pipeline_paths(
+                "seq_demo", "dataset_demo", "seq_demo", paths)
+            self.assertEqual(resolved["raw_sequence"], canonical_raw)
+            self.assertEqual(resolved["masks_dir"], canonical_masks)
+
     def test_json_config_and_cli_override(self):
         with tempfile.TemporaryDirectory() as root:
             path = os.path.join(root, "sequence.json")

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "description": "单序列真实图像前处理配置",
-  "seq": "real_capture/data/raw/seq_YYYYMMDD_HHMMSS",
+  "seq": "seq_YYYYMMDD_HHMMSS",
   "camera": "cam0",
   "roi": [220, 68, 300, 300],
   "gpus": [0],

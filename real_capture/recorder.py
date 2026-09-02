@@ -315,13 +315,12 @@ class ValveRecorder(QObject):
             self.log.emit(f"⚠ 通道等值约束无效：{error}")
             return False
         seq_dir = os.path.abspath(seq_dir)
-        os.makedirs(seq_dir, exist_ok=True)
+        if os.path.exists(seq_dir):
+            self.log.emit(f"⚠ 拒绝覆盖已有采集目录: {seq_dir}")
+            return False
         self._cam_dirs = [os.path.join(seq_dir, f"cam{i}")
                           for i in range(len(self.cams))]
-        for camera_dir in self._cam_dirs:
-            os.makedirs(camera_dir, exist_ok=True)
         self._cam_dir = self._cam_dirs[0]
-        self.seq_dir = seq_dir
         self.t0 = time.monotonic()
         self._frame_idx = 0
         self._mode = mode
@@ -354,6 +353,16 @@ class ValveRecorder(QObject):
             except Exception as e:
                 self.log.emit(f"⚠ replay 文件无效：{e}")
                 return
+
+        os.makedirs(os.path.dirname(seq_dir), exist_ok=True)
+        try:
+            os.mkdir(seq_dir)
+        except FileExistsError:
+            self.log.emit(f"⚠ 拒绝覆盖并发创建的采集目录: {seq_dir}")
+            return False
+        for camera_dir in self._cam_dirs:
+            os.mkdir(camera_dir)
+        self.seq_dir = seq_dir
 
         self._f_frame = open(os.path.join(seq_dir, "frame_times.txt"), "w")
         self._f_act6 = open(os.path.join(seq_dir, "actions6.csv"), "w", newline="")

@@ -34,6 +34,7 @@ import subprocess
 import sys
 import threading
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pyqtgraph as pg
@@ -57,12 +58,35 @@ pg.setConfigOption("foreground", "#334E68")
 
 PLOT_LEN = 300
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))   # py 文件所在目录；保存路径默认基于此
+PROJECT_ROOT = str(Path(__file__).resolve().parents[1])
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from src.registry.paths import ProjectPaths
 
 # 6 路曲线颜色
 _CH_COLORS = ["#2CB1BC", "#667EEA", "#EF4E4E", "#F6AD55", "#68D391", "#B388FF"]
 
 # 单通道模式下，选中通道的默认 max（保守值；inactive 通道 min=max=0）
 DEFAULT_MAX = 200.0
+
+
+def resolve_capture_base(value, paths):
+    """解析 GUI 保存根并确保新 raw 只写入配置的 workspace。"""
+    raw_root = paths.raw_domain_root("real").resolve(strict=False)
+    if not value:
+        return raw_root
+    requested = Path(value).expanduser()
+    if not requested.is_absolute():
+        requested = paths.repo_root / requested
+    requested = requested.resolve(strict=False)
+    try:
+        requested.relative_to(raw_root)
+    except ValueError as error:
+        raise ValueError(
+            f"采集目录必须位于统一 raw 根 {raw_root}；"
+            "如需换盘请配置 SSR_WORKSPACE_ROOT") from error
+    return requested
 
 
 class _CleanAxis(pg.AxisItem):
@@ -104,7 +128,7 @@ class CaptureWindow(QMainWindow):
     def __init__(self, mock_cam=False, mock_valve=False, mock_ndi=False,
                  group1="COM3", group2="COM46", ndi_port="COM9", baudrate=9600,
                  slave_addr=1, fps=30, ndi_count=2, camera_count=1,
-                 camera_serials=""):
+                 camera_serials="", workspace_root=None):
         super().__init__()
         self.mock_cam = bool(mock_cam)
         self.mock_valve = bool(mock_valve)
@@ -115,6 +139,9 @@ class CaptureWindow(QMainWindow):
         self.camera_serials_text = str(camera_serials or "")
         self.fps = int(fps)
         self.project_root = _detect_project_root()
+        self.paths = ProjectPaths.load(
+            repo_root=self.project_root, workspace_root=workspace_root)
+        self.capture_root = str(self.paths.raw_domain_root("real"))
         self._cfg_path = os.path.join(SCRIPT_DIR, "real_capture_config.ini")
         self._npz_proc = None
         self._hardware_started = False
@@ -348,7 +375,7 @@ class CaptureWindow(QMainWindow):
         # ---- 采集 ----
         gb = QGroupBox("数据采集（动作门控）")
         g = QGridLayout(gb)
-        g.addWidget(QLabel("保存目录"), 0, 0); self.le_seq = QLineEdit("data/raw"); g.addWidget(self.le_seq, 0, 1, 1, 2)
+        g.addWidget(QLabel("保存目录"), 0, 0); self.le_seq = QLineEdit(self.capture_root); g.addWidget(self.le_seq, 0, 1, 1, 2)
         self.btn_browse = QPushButton("…"); self.btn_browse.setFixedWidth(34); self.btn_browse.clicked.connect(self._on_browse); g.addWidget(self.btn_browse, 0, 3)
         g.addWidget(QLabel("模式"), 1, 0); self.cb_mode = QComboBox()
         self.cb_mode.addItems(["手动录制 (Manual)", "自动随机游走 (Random)",
@@ -595,9 +622,12 @@ class CaptureWindow(QMainWindow):
             self.sb_slave.setValue(float(c.get("slave_addr", self.sb_slave.value())))
             saved = c.get("seq_dir", None)
             if saved:
-                # 相对路径总恢复；绝对路径仅当其父目录在本机存在才恢复（否则视为别机失效路径）
-                if not os.path.isabs(saved) or os.path.isdir(os.path.dirname(saved) or "."):
-                    self.le_seq.setText(saved)
+                try:
+                    self.le_seq.setText(str(resolve_capture_base(
+                        saved, self.paths)))
+                except ValueError:
+                    # 旧版 data/raw 或别机绝对路径不能恢复为新的 raw 写入根。
+                    self.le_seq.setText(self.capture_root)
             self.cb_mode.setCurrentIndex(int(c.get("mode", self.cb_mode.currentIndex())))
             self.sb_interval.setValue(float(c.get("action_interval", self.sb_interval.value())))
             self.sb_settle.setValue(float(c.get("settle", self.sb_settle.value())))
@@ -1083,7 +1113,8 @@ class CaptureWindow(QMainWindow):
         self.controller.zero_all()
 
     def _on_browse(self):
-        d = QFileDialog.getExistingDirectory(self, "选择保存目录", ".")
+        d = QFileDialog.getExistingDirectory(
+            self, "选择统一 workspace 内的保存目录", self.capture_root)
         if d:
             self.le_seq.setText(d)
 
@@ -1109,8 +1140,11 @@ class CaptureWindow(QMainWindow):
         base = self.le_seq.text().strip()
         if not base:
             self._log("请填写保存目录。"); return
-        if not os.path.isabs(base):
-            base = os.path.join(SCRIPT_DIR, base)         # 相对路径按 py 文件目录解析
+        try:
+            base = str(resolve_capture_base(base, self.paths))
+        except ValueError as error:
+            self._log(f"⚠ {error}")
+            return
         seq = base
         if self.cb_ts.isChecked():
             seq = os.path.join(base, "seq_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
@@ -1250,6 +1284,8 @@ def main():
     p.add_argument("--baudrate", type=int, default=9600)
     p.add_argument("--slave", type=int, default=1, dest="slave_addr")
     p.add_argument("--fps", type=int, default=30)
+    p.add_argument("--workspace-root", default=None,
+                   help="本次采集 workspace 根；优先于环境变量和本机配置")
     args = p.parse_args()
 
     mock_cam = args.mock or args.mock_cam
@@ -1262,7 +1298,8 @@ def main():
                         baudrate=args.baudrate, slave_addr=args.slave_addr, fps=args.fps,
                         ndi_count=args.ndi_count,
                         camera_count=args.camera_count or 1,
-                        camera_serials=args.camera_serials or "")
+                        camera_serials=args.camera_serials or "",
+                        workspace_root=args.workspace_root)
     if args.camera_count is not None or args.camera_serials is not None:
         if args.camera_count is not None:
             win.sb_camera_count.setValue(max(1, args.camera_count))

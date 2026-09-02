@@ -1,7 +1,51 @@
+---
+title: SelfSoftRobot 项目状态快照
+kind: overview
+status: active
+updated: 2026-09-01
+scope: active research line, engineering migration, evidence boundaries
+supersedes: []
+superseded_by: null
+sources:
+  - ../designs/2026-08-31_repository_organization_refactor.md
+  - ../experiments/hereditary_v2_training_validation.md
+---
+
 # 项目状态快照
 
-> "现在到哪了 + 接下来做什么"。精简自 `../archived/project_status_report.md`(2026.04.29, 仿真 MS-SCNF 阶段) + 实物路线后续进展。
+> “现在到哪了 + 接下来做什么”。本页是唯一当前状态入口；具体参数和数值以 dataset/run manifest 与实验记录为准。
 > 文献详见 [`../background/literature.md`](../background/literature.md); 模型架构详见 [`project_help.md`](project_help.md); 研究方向详见 [`../directions/`](../directions/)。
+
+## 0. 2026-09-01 当前结论
+
+- 部署研究主线是少观测/有遮挡条件下的 windowed OpenLoop；GTObserved 用于上界、诊断和验证，不作为部署主张。
+- HereditaryOperatorModel v2 已实现，用显式 PI/Maxwell 状态研究迟滞份额和可解释性；它是灰盒运动学模型，不等同于材料谱或 Cosserat 材料模型。
+- 仓库分阶段整理已完成历史资产搬迁：67 项 raw/intermediate/processed/training/analysis/model 资产统一位于 workspace；GT/OpenLoop 2+2 epoch 主线短跑及评价通过后，旧兼容入口与空根已移除。训练验证现由公共 engine 选择 `best_eval_model.pt`；10 Hz canonical release 的首个 formal run 已完成独立 frozen test 和 offline fixture 验收。
+- 数据划分、checkpoint 语义、早停、试次归档和证据表述以 [`../standards/`](../standards/) 为权威规则。
+- `real_capture` 与 `real_validation` 继续分离；NDI 只作独立 endpoint 评价，不能成为模型或 planner 输入。
+- 尚未完成：15 条历史 dataset 引用审计、废弃工作树审计、文档逐份归档。
+
+## 0.1 文档治理健康与删除区
+
+治理角色已经固定：`CLAUDE.md` 是约束面、`docs/README.md` 是地图、本页是当前
+状态、`docs/maintenance/README.md` 是重要历史。旧 `docs/HANDOFF.md` 是
+2026-07-28 快照，不再拥有当前状态。`paper/` 已固定为唯一活跃 manuscript，
+`papers/` 只保存文献证据和阶段草稿输入。仍待处理的是通用/单序列 workflow
+分离，以及旧文档逐份 keep/merge/supersede/archive 裁决。
+权威入口、standards 和 maintenance 已由
+`scripts/maintenance/check_docs_governance.py` 检查 front matter、四角色映射和
+关键相对链接；历史长尾文档暂不强制批量改写。
+
+以下路径或概念属于删除区；除非 replacement 合同发生经记录的变更，否则不要重建：
+
+| 已移除入口/内容 | 原因 | replacement |
+|---|---|---|
+| `real_capture/data/`、`data/real_seq/`、`train_log/`、`output/` 正式写入口 | 同一资产多处存放 | `workspace/` + registry URI |
+| 外部 validation watcher | 与公共 engine 双写 selection checkpoint | `src/training/` validation adapter |
+| 被 Git 跟踪的 `__pycache__/*.pyc` | 可重建缓存污染源码历史 | Python 运行时缓存，保持 ignored |
+| 根目录/`tests/` 的旧生成图 | 源码与展示产物混放 | 对应 run/analysis 输出目录 |
+
+下文保留仿真与早期实物路线的历史基线；其中带“当前默认”“最好”的旧表述若与本节或具体 run 记录冲突，以本节和带日期证据为准。
 
 ---
 

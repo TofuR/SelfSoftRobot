@@ -15,7 +15,64 @@ Loss 分两层:
 """
 
 from dataclasses import dataclass, field
+import math
 from typing import Optional
+
+
+@dataclass
+class ValidationSpec:
+    """Validation selection and early-stop contract for one phase.
+
+    The contract only describes semantics.  A model-specific evaluator still
+    supplies the metric value, allowing rendering, transition and hereditary
+    models to share selection behavior without sharing an evaluator.
+    """
+
+    selection_metric: str
+    dataset_role: str = "val"
+    selection_mode: str = "min"
+    eval_interval_epochs: int = 1
+    min_delta: float = 0.0
+    warmup_evaluations: int = 0
+    early_stopping_patience_evaluations: Optional[int] = None
+    lr_scheduler_metric: Optional[str] = None
+    restore_best_at_end: bool = True
+    allow_early_stop_before_tf_anneal: bool = False
+
+    def __post_init__(self):
+        if not isinstance(self.selection_metric, str) or not self.selection_metric:
+            raise ValueError("selection_metric 必须是非空字符串")
+        if self.dataset_role != "val":
+            raise ValueError("validation dataset_role 必须为 'val'")
+        if self.selection_mode not in ("min", "max"):
+            raise ValueError("selection_mode 必须为 'min' 或 'max'")
+        if (not isinstance(self.eval_interval_epochs, int) or
+                isinstance(self.eval_interval_epochs, bool) or
+                self.eval_interval_epochs <= 0):
+            raise ValueError("eval_interval_epochs 必须是正整数")
+        if (not isinstance(self.min_delta, (int, float)) or
+                isinstance(self.min_delta, bool) or
+                not math.isfinite(self.min_delta) or self.min_delta < 0):
+            raise ValueError("min_delta 不能为负数")
+        if (not isinstance(self.warmup_evaluations, int) or
+                isinstance(self.warmup_evaluations, bool) or
+                self.warmup_evaluations < 0):
+            raise ValueError("warmup_evaluations 必须是非负整数")
+        patience = self.early_stopping_patience_evaluations
+        if patience is not None and (
+                not isinstance(patience, int) or isinstance(patience, bool) or
+                patience <= 0):
+            raise ValueError(
+                "early_stopping_patience_evaluations 必须是正整数或 null")
+        if self.lr_scheduler_metric is None:
+            self.lr_scheduler_metric = self.selection_metric
+        elif (not isinstance(self.lr_scheduler_metric, str) or
+              not self.lr_scheduler_metric):
+            raise ValueError("lr_scheduler_metric 必须是非空字符串或 null")
+        if not isinstance(self.restore_best_at_end, bool):
+            raise ValueError("restore_best_at_end 必须是 bool")
+        if not isinstance(self.allow_early_stop_before_tf_anneal, bool):
+            raise ValueError("allow_early_stop_before_tf_anneal 必须是 bool")
 
 
 @dataclass
@@ -49,6 +106,7 @@ class PhaseSpec:
         episode_len: episode 模式下单条序列长度（时间步数）。
         dense_step_weight: 窗口内逐步 loss 的加权。'uniform'=等权；'linear'=后段权重更大
                           （接近部署目标、累积误差更多）。显式声明，避免 getattr 默认值漂移导致静默 no-op。
+        validation: 可选验证、选择和早停合同；None 保持历史训练行为。
     """
     name: str
     freeze_modules: list[str] = field(default_factory=list)
@@ -71,6 +129,7 @@ class PhaseSpec:
     tf_schedule: str = "linear"
     episode_len: int = 20
     dense_step_weight: str = "uniform"
+    validation: Optional[ValidationSpec] = None
 
 
 @dataclass

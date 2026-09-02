@@ -43,6 +43,8 @@ plt.rcParams["axes.unicode_minus"] = False
 
 from src.utils.model_loader import load_model
 from src.evaluation.transition_metrics import build_action_window
+from src.registry.paths import ProjectPaths
+from src.registry.runs import create_analysis_run
 
 MM_PER_PX = 0.302          # 臂直径 10mm ≈ 33px
 FRAME_DT = 0.203           # 帧间隔 ~5fps
@@ -121,10 +123,14 @@ def main():
     ap.add_argument("--w1", required=True)
     ap.add_argument("--w40", required=True)
     ap.add_argument("--data_dir", required=True)
-    ap.add_argument("--out", default="output/openloop_window_compare")
+    ap.add_argument("--out", default=None,
+                    help="默认分配新的 workspace analysis run")
     ap.add_argument("--max_steps", type=int, default=300)
     ap.add_argument("--n_seeds", type=int, default=8)
     args = ap.parse_args()
+    if args.out is None:
+        args.out = str(create_analysis_run(
+            ProjectPaths.load(), "openloop_window_compare"))
     os.makedirs(args.out, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

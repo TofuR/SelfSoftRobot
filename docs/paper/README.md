@@ -1,9 +1,27 @@
+---
+title: ICRA 活跃论文索引
+kind: paper-index
+status: active
+updated: 2026-09-01
+scope: active manuscript structure, claims, and experiment placeholders
+supersedes: []
+superseded_by: null
+sources:
+  - ../papers/README.md
+  - ../overview/status.md
+---
+
 # ICRA 论文规划 · 软体机器人整体形态自建模(非马尔可夫记忆视角)
 
 > **日期**:2026-08-09 · 分支 `feat/real-data-transition`
 > **状态**:调研完成(两个并行 workflow 核实 100+ 篇文献)+ 科学问题重构完成 + 添加项与实验计划已定
 > **产出**:本文档为索引;详细内容见 01–05 各章
 > **关联**:[`docs/papers/related_work_draft.md`](../papers/related_work_draft.md)(旧 related work,差异化论点需按本文 §2 重写)· [`docs/directions/12_scientific_problems_soft_robot_self_modeling.md`](../directions/12_scientific_problems_soft_robot_self_modeling.md)(科学问题 A/B/C)· [`docs/directions/17_path_dependent_ik.md`](../directions/17_path_dependent_ik.md)(方向 17 的路径依赖 IK)
+
+> **治理边界（2026-09-01）：** `docs/paper/` 是唯一活跃 manuscript 树；本文中的
+> 实验状态、最佳结果和贡献措辞仍是论文草稿，当前工程状态以
+> [`../overview/status.md`](../overview/status.md)、run manifest 和正式实验记录为准。
+> `docs/papers/` 只提供文献证据、深读笔记和阶段草稿输入。
 
 ---
 

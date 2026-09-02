@@ -52,6 +52,7 @@ from real_validation.planning.planner_service import build_plan
 from real_validation.runtime.warmup import warmup_actions
 from real_validation.runtime.warmup import expand_to_6ch
 from src.data.dataset_spatial import SpatialSequenceDataset
+from src.registry.paths import ProjectPaths
 
 
 _app: QApplication | None = None
@@ -190,6 +191,41 @@ class CaptureEqualityTest(unittest.TestCase):
                 self.assertEqual(float(rows[0]["pair_residual2"]), 0.0)
             finally:
                 recorder.shutdown()
+
+    def test_recorder_refuses_to_overwrite_existing_raw_sequence(self):
+        ValveRecorder = _capture_module("recorder").ValveRecorder
+        MockValveController = _capture_module("valve_control").MockValveController
+        controller = MockValveController()
+        controller.connect()
+        recorder = ValveRecorder(_CameraStub(), _NdiStub(), controller)
+        with tempfile.TemporaryDirectory(prefix="planar_capture_") as root:
+            seq = Path(root) / "seq_existing"
+            seq.mkdir()
+            try:
+                self.assertFalse(recorder.start_recording(
+                    str(seq), "manual", [0] * 6, [100] * 6,
+                    1.0, 0.1, 0, "no overwrite"))
+                self.assertEqual(list(seq.iterdir()), [])
+            finally:
+                recorder.shutdown()
+
+    def test_capture_base_is_scoped_to_configured_workspace(self):
+        main_capture = _capture_module("main_capture")
+        with tempfile.TemporaryDirectory(prefix="capture_paths_") as root:
+            repo = Path(root) / "repo"
+            repo.mkdir()
+            paths = ProjectPaths.load(
+                repo_root=repo, workspace_root=Path(root) / "large_workspace",
+                environ={})
+            expected = Path(root) / "large_workspace/data/raw/real"
+            self.assertEqual(
+                main_capture.resolve_capture_base("", paths), expected)
+            self.assertEqual(
+                main_capture.resolve_capture_base(expected / "batch_a", paths),
+                expected / "batch_a")
+            with self.assertRaisesRegex(ValueError, "SSR_WORKSPACE_ROOT"):
+                main_capture.resolve_capture_base(repo / "real_capture/data/raw",
+                                                  paths)
 
     def test_gui_mirrors_and_locks_follower_controls(self):
         main_capture = _capture_module("main_capture")

@@ -65,7 +65,7 @@ data/real_seq/<seq>_n15_sam2_robot_mm/
 └── qc_skeleton/
 ```
 
-在 tmux 中启动两阶段训练、周期评价和最终评价：
+在 tmux 中启动两阶段训练、训练内验证选择和最终评价：
 
 ```bash
 GPU_ID=2 EVAL_GPU_ID=2 \
@@ -75,8 +75,9 @@ bash scripts/real/start_training_tmux.sh \
   data/real_seq/<seq>_n15_sam2_robot_mm/val
 ```
 
-训练与评价使用同一张 GPU 时，评价 watcher 作为独立进程读取 checkpoint 里程碑；训练
-进程继续运行。可用以下命令查看会话：
+GT 和 OpenLoop 均由公共训练 engine 按验证集指标生成 `best_eval_model.pt`，不再启动
+并行 watcher 写同一 checkpoint。阶段完成后仍会对选中权重运行定量评价和叠图。可用以下
+命令查看会话：
 
 ```bash
 tmux attach -t real_<seq>
@@ -114,6 +115,8 @@ bash scripts/real/start_training_tmux.sh \
 `TF_SCHEDULE` 与 `DENSE_STEP_WEIGHT` 会同时写入根配置和阶段配置。每次启动通过原子目录
 创建获得新的当日序号，显式 `RUN_DIR` 也只接受空目录，因此历史日志不会被覆盖。
 课程训练可以用 `OPEN_LOOP_SCHEDULER_PATIENCE` 延长学习率平台调度的观察区间。
+迁移期仍保留环境变量名 `PERIODIC_EVAL_INTERVAL` 和 `PERIODIC_MAX_STEPS`，它们现在分别
+表示训练内验证间隔和每次验证的最大帧数，不再启动外部周期评价进程。
 
 ## 3. 前处理配置
 

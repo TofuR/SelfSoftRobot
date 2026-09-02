@@ -1,8 +1,34 @@
+---
+title: SAM2 本地集成与第三方源码边界
+kind: workflow
+status: active
+updated: 2026-09-01
+scope: SAM2 video segmentation integration and vendored upstream source
+supersedes: []
+superseded_by: null
+sources:
+  - https://github.com/facebookresearch/sam2
+---
+
 # sam2/ — SAM2 视频分割(实物 mask 修复, 持久化)
 
 本目录是 SAM2 的**持久化**工作区(从 /tmp 迁出, 避免 /tmp 被清)。用于用 SAM2 **视频模式**
 修复实物 mask 的"半mask/缺块"——那块硅胶在单帧图里看不见(半透明), image 模式补不回, 但视频
 模式从邻帧传播 mask 能补回(实测 f4902 r132-156 宽 19→32, area 6050→8860, 比启发式时间插值更干净)。
+
+## 第三方源码边界
+
+`sam2/sam2_src/` 是直接拉取的 Meta SAM2 上游 Git 仓库，不是 SelfSoftRobot
+自研源码。2026-09-01 盘点时它是干净的 `main`，remote 为
+`https://github.com/facebookresearch/sam2.git`，HEAD 为
+`2b90b9f5ceec907a1c18123530e92e794ad901a4`。许可证以
+`sam2/sam2_src/LICENSE` 为准。
+
+- 外层仓库继续忽略整个 `sam2_src/`；不得把它的文件逐份提交进 SelfSoftRobot；
+- 更新上游时在嵌套仓库内显式 checkout/pull 到目标 commit，并同步更新本节记录；
+- 若必须打本地补丁，先记录原因和 diff，不把修改伪装成项目自研代码；
+- SelfSoftRobot 只拥有本目录的分割脚本、配置约定和与 workspace 的集成；
+- checkpoint、mask 与临时 JPEG 仍属于运行资产，不进入源码 Git。
 
 ## 目录结构
 
@@ -10,7 +36,7 @@
 sam2/
 ├── segment_video.py     # 视频分割脚本(自包含, 顶部设 SAM2_HOME)  ← 入库
 ├── README.md            # 本文件                                 ← 入库
-├── sam2_src/            # SAM2 包源码(editable install 来源)      ← gitignore(大)
+├── sam2_src/            # 上游嵌套 Git 仓库(editable install 来源)← gitignore(大)
 ├── checkpoints/         # sam2.1_hiera_tiny.pt (149M)            ← gitignore(*.pt)
 ├── masks/               # 输出 mask(QC + 各窗口)                 ← gitignore
 └── _jpeg_tmp/           # SAM2 要求的连续名 JPEG 临时帧           ← gitignore

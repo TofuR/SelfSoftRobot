@@ -66,6 +66,8 @@ matplotlib.rcParams['axes.unicode_minus'] = False
 import matplotlib.pyplot as plt
 
 from src.utils.model_loader import load_model
+from src.registry.paths import ProjectPaths
+from src.registry.runs import create_analysis_run
 
 
 # ── 梯度友好的动作窗口切片(保留 requires_grad) ──
@@ -265,10 +267,13 @@ def main():
     parser.add_argument("--obstacle", type=str, default=None,
                         help="避障圆 'cx,cy,r_px'(px, col-row); 多个用 | 分隔")
     parser.add_argument("--w_obs", type=float, default=1.0)
-    parser.add_argument("--out", type=str, default="output/inverse_plan")
+    parser.add_argument("--out", type=str, default=None,
+                        help="输出目录；默认分配新的 workspace analysis run")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if args.out is None:
+        args.out = str(create_analysis_run(ProjectPaths.load(), "inverse_plan"))
     os.makedirs(args.out, exist_ok=True)
 
     info = load_model(args.checkpoint, data_dir=args.data_dir, device=device)
