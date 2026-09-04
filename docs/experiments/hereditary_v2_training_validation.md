@@ -1,6 +1,6 @@
 # Hereditary v2 训练与验证记录
 
-更新日期：2026-08-31
+更新日期：2026-09-03
 
 ## 1. 目标与结论边界
 
@@ -235,3 +235,49 @@ tmux attach -t h2_f1_s42_g1
 tmux capture-pane -pt h2_f1_s42_g1 -S -80
 tail -f train_log/hereditary/exp_20260831_002/session.log
 ```
+
+## 10. 2026-09-03 同 fit/dev、同选模规则对照
+
+为与 ISHSM v4 比较，Hereditary v2 使用同一 fit/dev、seed 42、100 epoch 上限和聚合 dev
+`validation.node_mean_mm` 选模，在 GPU3 新目录从 epoch 1 干净重训：
+
+```text
+workspace/runs/training/ishsm_v4_formal/hereditary_v2_equilibrium_s42_gpu3_restart
+```
+
+正式 `best_eval_model.pt` 位于 epoch 100，continuous 为
+`1.7818 / 2.9004 mm`，cold-restart-40 为 `1.8331 / 3.0527 mm`
+（node / endpoint）。相同 dev 上，ISHSM v4 zero-init 为 `1.7486 / 3.2866 mm`：配对
+bootstrap 对 node 的差异不确定，Hereditary endpoint 则稳定改善约 `0.3862 mm`。
+
+F1 的旧式单调链式爆炸没有重现；continuous 相对 cold-restart-40 的 endpoint 稳定改善约
+`0.1523 mm`。F5 仍触发：`residual_scale_raw=0.3060`，前向有效值被 clamp 在
+`0.3000/0.3000`。由于 epoch 100 仍刷新验证最优，这些数值是预算截断结果；下一步需延长训练，
+并用 `residual_scale_max=0.5` 单变量重训区分训练不足与真实 residual 容量需求。
+
+完整协议、置信区间和 ISHSM 消融见 `ishsm_optimization_validation_record.md`。谱图位于：
+
+```text
+workspace/runs/analysis/ishsm_v4/hereditary_spectrum_s42_epoch100/
+```
+
+其中原始权重的 `play/maxwell=0.10/0.90` 只能作为模型内部诊断，不能直接解释为材料迟滞份额；
+定量物理结论仍需 realised contribution、LOO、跨 seed 和独立变速率实验。
+
+## 11. 2026-09-03 200 epoch 与 residual 容量消融
+
+在同一 fit/dev、seed 42 和选模规则下，将 Hereditary v2 的训练上限延长到 200 epoch，并只改变
+`residual_scale_max`：
+
+| residual 上限 | continuous node / endpoint | cold-restart-40 node / endpoint | raw / effective scale |
+|---:|---:|---:|---:|
+| 0.3 | 1.4344 / 2.4665 | 1.4458 / 2.4971 | 0.3060 / 0.3000 |
+| 0.5 | **1.3366 / 2.3704** | **1.3467 / 2.3765** | 0.5004 / 0.5000 |
+
+0.5 相对 0.3 在 continuous 的 node/endpoint 分别改善 `0.0978 mm
+[0.0751, 0.1241]` 和 `0.0961 mm [0.0385, 0.1514]`；cold-restart-40 的改善方向一致。
+这确认 F5 是当前开发集上的容量信号。由于 0.5 仍然钉住上限，不能仅据此无限放宽 residual；
+最终值需要在冻结配置后的新独立轨迹上裁决。
+
+机器汇总：`workspace/runs/analysis/ishsm_v5_200/analysis_summary.json`。完整 ISHSM 对照、证据边界
+和当前模型选择见 `ishsm_optimization_validation_record.md`。
