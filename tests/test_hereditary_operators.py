@@ -39,6 +39,19 @@ class TestMonotoneSplineDrive(unittest.TestCase):
         e, e2 = drive(a), drive(a2)
         self.assertTrue(torch.allclose(e[:, 1:], e2[:, 1:]))
 
+    def test_unit_range_normalization_fixes_full_scale(self):
+        drive = MonotoneSplineDrive(
+            n_channels=4, output_normalization="unit_range")
+        with torch.no_grad():
+            drive.raw_weights.normal_(0.0, 3.0)
+        endpoint = drive(torch.ones(1, 4))
+        self.assertTrue(torch.allclose(
+            endpoint, torch.ones_like(endpoint), atol=1e-6))
+        grid = torch.linspace(0.0, 1.0, 101).view(101, 1).expand(101, 4)
+        values = drive(grid)
+        self.assertTrue(torch.all(values >= -1e-7))
+        self.assertTrue(torch.all(values <= 1.0 + 1e-6))
+
 
 class TestPlayBank(unittest.TestCase):
     def _bank(self):

@@ -6,11 +6,13 @@ Only its free point-coordinate readout is replaced:
     xi = xi_eq(a) + W_PI q + W_M (h-e) + eps_mem(q, h-e)
     skeleton = deterministic_geometry(xi)
 
-``xi`` contains eight coefficients in a fixed fit-only POD bending basis and
-two section log-length offsets. Every learned structured readout direction is
-unit norm in an immutable fit-residual metric, and all scalar gains are
-nonnegative. The optional neural residual reads memory only and is exactly
-zero when both operator branches are at equilibrium.
+``xi`` contains either coefficients in a fixed fit-only POD bending basis or
+the full set of local centerline bend angles, plus two section log-length
+offsets. Every learned structured readout direction is unit norm in an
+immutable fit-residual metric, and all scalar gains are nonnegative. The
+optional neural residual reads memory only and is exactly zero when both
+operator branches are at equilibrium. New HOV2.2 runs also fix each monotone
+operator drive to e(0)=0, e(1)=1, removing its free amplitude gauge.
 """
 
 from __future__ import annotations
@@ -61,6 +63,7 @@ class HereditaryGeometryModel(HereditaryOperatorModel):
             r_range=(0.02, 0.5),
             tau_range=(0.3, 2.0),
             burnin_mode: str = "equilibrium",
+            drive_normalization: str = "unit_range",
             n_bend_modes: int = 8,
             section_intervals: Iterable[int] = (7, 7),
             bend_basis=None,
@@ -73,6 +76,7 @@ class HereditaryGeometryModel(HereditaryOperatorModel):
             reference_kind: str = "linear",
             reference_knots=None,
             reference_drive_weights=None,
+            bend_basis_kind: str = "pod",
             base_position=None,
             residual_mode: str = "memory",
             bend_residual_max_rad: float = 0.05,
@@ -83,6 +87,7 @@ class HereditaryGeometryModel(HereditaryOperatorModel):
             window_size=window_size, n_play=n_play, n_maxwell=n_maxwell,
             dt=dt, r_range=r_range, tau_range=tau_range,
             burnin_mode=burnin_mode, residual_scale_max=0.0,
+            drive_normalization=drive_normalization,
             episode_len=episode_len)
 
         # Remove every free point-coordinate readout from HOV2. The inherited
@@ -98,18 +103,26 @@ class HereditaryGeometryModel(HereditaryOperatorModel):
         self.n_sections = len(self.section_intervals)
         self.generalized_dim = self.n_bend_modes + self.n_sections
         self.reference_kind = str(reference_kind)
+        self.bend_basis_kind = str(bend_basis_kind)
         self.residual_mode = str(residual_mode)
         self.bend_residual_max_rad = float(bend_residual_max_rad)
         self.length_residual_max_log = float(length_residual_max_log)
         self.spatial_propagation_direction = "generalized_geometry"
         self.gl_kernel_alignment = "current_at_window_end"
-        self.model_contract_version = 4
-        self.coordinate_loss_basis = "fixed_modal_fit_scale"
+        self.model_contract_version = 5
+        self.coordinate_loss_basis = (
+            "fixed_local_fit_scale" if self.bend_basis_kind == "local"
+            else "fixed_modal_fit_scale")
 
         if self.n_nodes - 1 != sum(self.section_intervals):
             raise ValueError("section_intervals 与 n_nodes 不匹配")
         if not 1 <= self.n_bend_modes <= self.n_nodes - 1:
             raise ValueError("n_bend_modes 必须在 [1,n_nodes-1]")
+        if self.bend_basis_kind not in {"pod", "local"}:
+            raise ValueError("bend_basis_kind 必须为 pod 或 local")
+        if (self.bend_basis_kind == "local" and
+                self.n_bend_modes != self.n_nodes - 1):
+            raise ValueError("local 弯曲基需要 n_bend_modes=n_nodes-1")
         if self.residual_mode not in {"none", "memory"}:
             raise ValueError("residual_mode 必须为 none 或 memory")
         if self.bend_residual_max_rad <= 0:
@@ -408,6 +421,8 @@ class HereditaryGeometryModel(HereditaryOperatorModel):
             "n_sections": self.n_sections,
             "section_intervals": self.section_intervals,
             "reference_kind": self.reference_kind,
+            "bend_basis_kind": self.bend_basis_kind,
+            "drive_normalization": self.drive_normalization,
             "residual_mode": self.residual_mode,
             "coordinate_loss_basis": self.coordinate_loss_basis,
             "residual_coordinate_scales": (

@@ -244,7 +244,8 @@ def fit_ishsm_priors_from_arrays(
         reference_fit_steps: int = 500,
         reference_fit_objective: str = "coordinate",
         reference_geometry_weight: float = 1.0,
-        reference_endpoint_weight: float = 0.25) -> dict:
+        reference_endpoint_weight: float = 0.25,
+        bend_basis_kind: str = "pod") -> dict:
     """Fit frozen H0 reference and POD basis using fit-split arrays only."""
     actions = np.asarray(actions, dtype=np.float32)
     skeletons = np.asarray(skeletons, dtype=np.float32)
@@ -259,6 +260,10 @@ def fit_ishsm_priors_from_arrays(
     if reference_fit_objective not in {"coordinate", "geometry"}:
         raise ValueError(
             f"未知 H0 fit objective: {reference_fit_objective!r}")
+    if bend_basis_kind not in {"pod", "local"}:
+        raise ValueError("bend_basis_kind 必须为 pod 或 local")
+    if bend_basis_kind == "local" and n_bend_modes != n_segments:
+        raise ValueError("local 弯曲基需要 n_bend_modes=N-1")
 
     segment_lengths = np.linalg.norm(
         skeletons[:, 1:, :] - skeletons[:, :-1, :], axis=-1)
@@ -314,11 +319,18 @@ def fit_ishsm_priors_from_arrays(
     _, singular, vt = np.linalg.svd(
         bend_residual - bend_residual.mean(axis=0, keepdims=True),
         full_matrices=False)
-    basis = vt[:n_bend_modes].T
-    for mode in range(basis.shape[1]):
-        pivot = int(np.argmax(np.abs(basis[:, mode])))
-        if basis[pivot, mode] < 0:
-            basis[:, mode] *= -1
+    if bend_basis_kind == "local":
+        # Full local-angle coordinates retain a one-to-one spatial meaning:
+        # coordinate i is the bend of centerline segment i.  This is a pure
+        # reparameterization at full rank, but avoids interpreting rotated POD
+        # coefficients as physical locations.
+        basis = np.eye(n_segments, dtype=np.float32)
+    else:
+        basis = vt[:n_bend_modes].T
+        for mode in range(basis.shape[1]):
+            pivot = int(np.argmax(np.abs(basis[:, mode])))
+            if basis[pivot, mode] < 0:
+                basis[:, mode] *= -1
     energy = singular ** 2
     explained = float(energy[:n_bend_modes].sum() / max(energy.sum(), 1e-12))
     bend_scores = bend_residual @ basis
@@ -329,6 +341,7 @@ def fit_ishsm_priors_from_arrays(
     ]).astype(np.float32)
     return {
         "bend_basis": basis.astype(np.float32),
+        "bend_basis_kind": bend_basis_kind,
         "bend_explained_energy": explained,
         # Standard deviations in the fixed POD-bending / section-log-length
         # coordinates. HOV2.1 uses this immutable metric to normalize learned

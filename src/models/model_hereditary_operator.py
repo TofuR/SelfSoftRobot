@@ -103,6 +103,7 @@ class HereditaryOperatorModel(nn.Module):
         r_range=(0.02, 0.5),
         tau_range=None,
         burnin_mode="equilibrium",
+        drive_normalization="free",
         residual_scale_max=0.3,
         episode_len=40,
     ):
@@ -115,6 +116,7 @@ class HereditaryOperatorModel(nn.Module):
         if burnin_mode not in ("equilibrium", "rest"):
             raise ValueError(f"burnin_mode 须为 'equilibrium' 或 'rest'，得到 {burnin_mode!r}")
         self.burnin_mode = burnin_mode
+        self.drive_normalization = str(drive_normalization)
         # 节点/合同属性（与 state_transition 家族同槽，供检查器识别）
         self.node_order = "base_to_tip"
         self.model_contract_version = 2
@@ -127,7 +129,8 @@ class HereditaryOperatorModel(nn.Module):
         self.register_buffer('action_norm_factor', torch.tensor(1.0))
 
         # ── 算子层（src/operators，各自独立可测）──
-        self.drive = MonotoneSplineDrive(action_dim)          # e_c(a_c)
+        self.drive = MonotoneSplineDrive(
+            action_dim, output_normalization=self.drive_normalization)
         self.play = PlayBank(action_dim, n_play, r_range)     # b_{c,j}, r_j
         self.maxwell = MaxwellBank(action_dim, n_maxwell, dt,
                                    tau_range)                 # v_{c,k}, τ_k

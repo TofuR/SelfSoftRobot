@@ -30,16 +30,24 @@ class MonotoneSplineDrive(nn.Module):
         n_knots: 铰链节点数（容量上限，默认 5 —— 设计文档 §2.2 的 ≤5 节点约束）。
         action_min / action_max: 归一化动作域（实物数据合同为 [0, 1]）。
         weight_init: softplus 后的初始铰链权重（≈初始斜率量级）。
+        output_normalization: ``free`` 保留历史可学幅值；``unit_range``
+            保证 e(action_max)=1，使后续迟滞阈值具有固定尺度。
     """
 
     def __init__(self, n_channels: int, n_knots: int = 5,
                  action_min: float = 0.0, action_max: float = 1.0,
-                 weight_init: float = 0.4):
+                 weight_init: float = 0.4,
+                 output_normalization: str = "free"):
         super().__init__()
         assert n_knots >= 1, "至少一个铰链节点"
         assert action_max > action_min, "动作域必须非空"
+        if output_normalization not in {"free", "unit_range"}:
+            raise ValueError(
+                "output_normalization 必须为 free 或 unit_range")
         self.n_channels = n_channels
         self.n_knots = n_knots
+        self.action_max = float(action_max)
+        self.output_normalization = output_normalization
         knots = torch.linspace(action_min, action_max, n_knots)
         self.register_buffer("knots", knots)
         # softplus 参数化保证 w ≥ 0（公理 3: 谱非负在通道级的落实）
@@ -50,7 +58,16 @@ class MonotoneSplineDrive(nn.Module):
     @property
     def weights(self) -> torch.Tensor:
         """(C, K) 非负铰链权重（谱读出用）。"""
-        return F.softplus(self.raw_weights)
+        weights = F.softplus(self.raw_weights)
+        if self.output_normalization == "unit_range":
+            # Remove the otherwise free drive-amplitude gauge.  On the
+            # declared action domain this makes e(action_max)=1 per channel,
+            # so play thresholds and Maxwell deficits share a reproducible
+            # dimensionless scale across seeds/checkpoints.
+            spans = torch.relu(self.action_max - self.knots).to(weights)
+            endpoint = (weights * spans).sum(dim=-1, keepdim=True)
+            weights = weights / endpoint.clamp_min(1e-12)
+        return weights
 
     def forward(self, action: torch.Tensor) -> torch.Tensor:
         """计算逐通道驱动。

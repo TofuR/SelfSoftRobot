@@ -429,6 +429,8 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
             tau_range=(3.0 * float(saved_cfg.get('dt', 0.1)),
                        float(saved_cfg.get('tau_max', 2.0))),
             burnin_mode=saved_cfg.get('burnin_mode', 'equilibrium'),
+            drive_normalization=saved_cfg.get(
+                'operator_drive_normalization', 'free'),
             n_bend_modes=int(saved_cfg.get('n_bend_modes', 8)),
             section_intervals=tuple(saved_cfg.get(
                 'section_intervals', (7, 7))),
@@ -445,6 +447,7 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
             reference_knots=state_dict.get('reference_knots'),
             reference_drive_weights=
                 state_dict.get('reference_drive_weights'),
+            bend_basis_kind=saved_cfg.get('bend_basis_kind', 'pod'),
             base_position=state_dict['base_position'],
             residual_mode=residual_mode,
             bend_residual_max_rad=float(saved_cfg.get(
@@ -454,6 +457,10 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
             episode_len=int(saved_cfg.get('episode_len', 40)),
         ).to(device)
         model.load_state_dict(state_dict)
+        # Runtime code may support a newer contract than the checkpoint.
+        # Preserve the artifact's declared semantics for provenance/reporting.
+        model.model_contract_version = int(saved_cfg.get(
+            'model_contract_version', 4))
         if 'action_norm_factor' in state_dict:
             norm_factor = state_dict['action_norm_factor'].item()
 
@@ -604,6 +611,8 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
             n_maxwell=(saved_cfg or {}).get('n_maxwell', 6),
             dt=(saved_cfg or {}).get('dt', 0.1),
             burnin_mode=(saved_cfg or {}).get('burnin_mode', 'rest'),
+            drive_normalization=(saved_cfg or {}).get(
+                'operator_drive_normalization', 'free'),
             residual_scale_max=(saved_cfg or {}).get('residual_scale_max', 0.3),
             episode_len=(saved_cfg or {}).get('episode_len', 40),
         ).to(device)

@@ -9,7 +9,10 @@ import torch
 
 from scripts.training.train_transition import build_parser
 from src.models.model_hereditary_geometry import HereditaryGeometryModel
-from src.models.model_ishsm import generalized_to_skeleton
+from src.models.model_ishsm import (
+    fit_ishsm_priors_from_arrays,
+    generalized_to_skeleton,
+)
 from src.training.trainer_unified import UnifiedTrainer
 from src.utils.model_loader import load_model
 
@@ -104,6 +107,7 @@ class HereditaryGeometryContractTests(unittest.TestCase):
         args = build_parser().parse_args([
             "--mode", "hereditary_geo", "--data_dir", "dummy"])
         self.assertEqual(args.hov21_residual, "none")
+        self.assertEqual(args.operator_drive_normalization, "unit_range")
         self.assertEqual(args.n_bend_modes, 8)
         self.assertEqual(args.section_intervals, (7, 7))
 
@@ -126,6 +130,7 @@ class HereditaryGeometryContractTests(unittest.TestCase):
                 "dt": 0.1,
                 "tau_max": 2.0,
                 "burnin_mode": "equilibrium",
+                "operator_drive_normalization": "unit_range",
                 "n_bend_modes": 8,
                 "section_intervals": [7, 7],
                 "h0_reference": "fit_only_frozen_linear",
@@ -144,6 +149,31 @@ class HereditaryGeometryContractTests(unittest.TestCase):
             loaded.generalized_coordinate_scale,
             model.generalized_coordinate_scale))
         self.assertEqual(loaded.residual_mode, "memory")
+        self.assertEqual(loaded.drive_normalization, "unit_range")
+
+    def test_unit_range_drive_makes_operator_threshold_scale_identifiable(self):
+        model = _model(residual_mode="none")
+        endpoint = model.drive(torch.ones(3, model.action_dim))
+        self.assertTrue(torch.allclose(
+            endpoint, torch.ones_like(endpoint), atol=1e-6))
+
+    def test_full_local_basis_is_identity_and_rejects_compression(self):
+        actions = torch.rand(24, 4).numpy()
+        bends = 0.03 * torch.randn(24, 14)
+        lengths = 0.01 * torch.randn(24, 2)
+        skeletons = generalized_to_skeleton(
+            bends, lengths, torch.ones(14), (7, 7),
+            torch.zeros(3)).numpy()
+        priors = fit_ishsm_priors_from_arrays(
+            actions, skeletons, n_bend_modes=14,
+            section_intervals=(7, 7), bend_basis_kind="local")
+        self.assertEqual(priors["bend_basis_kind"], "local")
+        self.assertTrue(torch.equal(
+            torch.from_numpy(priors["bend_basis"]), torch.eye(14)))
+        with self.assertRaisesRegex(ValueError, "n_bend_modes=N-1"):
+            fit_ishsm_priors_from_arrays(
+                actions, skeletons, n_bend_modes=8,
+                section_intervals=(7, 7), bend_basis_kind="local")
 
     def test_bend_auxiliary_uses_declared_modal_coordinates(self):
         model = _model(residual_mode="none")

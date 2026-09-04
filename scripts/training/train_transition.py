@@ -147,6 +147,11 @@ def build_parser():
     parser.add_argument("--burnin_mode", choices=["equilibrium", "rest"], default="equilibrium",
                         help="[hereditary] 冷启动烧入方式: equilibrium=窗口首动作平衡态起烧"
                              "（F1 修复，消除慢 Maxwell 模态伪静态 aliasing）; rest=旧行为（A/B 对照）")
+    parser.add_argument(
+        "--operator_drive_normalization", choices=["free", "unit_range"],
+        default="unit_range",
+        help="[hereditary_geo] unit_range 固定每通道 e(1)=1，移除驱动幅值的"
+             "重参数化；free 仅用于旧模型 A/B")
     parser.add_argument("--residual_scale_max", type=float, default=0.3,
                         help="[hereditary] 残差幅度上限（归一化骨架单位）。F5: 修 F1 后重训，"
                              "若 residual_scale 仍钉在此上限则是真容量信号（可上调做对照实验）")
@@ -168,6 +173,10 @@ def build_parser():
     # ── ISHSM 专属（其它模式忽略）──
     parser.add_argument("--n_bend_modes", type=int, default=8,
                         help="[ishsm] 固定 POD 弯曲空间基数量")
+    parser.add_argument(
+        "--bend_basis_kind", choices=["pod", "local"], default="pod",
+        help="[hereditary_geo] pod=压缩空间基；local=每个骨架线段的局部"
+             "弯曲角（要求 n_bend_modes=N-1）")
     parser.add_argument("--section_intervals", type=_positive_int_tuple,
                         default=(7, 7),
                         help="[ishsm] 每段包含的骨架线段数，默认 7,7")
@@ -398,13 +407,15 @@ def main(argv=None):
             reference_fit_steps=args.h0_fit_steps,
             reference_fit_objective=args.h0_fit_objective,
             reference_geometry_weight=args.h0_geometry_weight,
-            reference_endpoint_weight=args.h0_endpoint_weight)
+            reference_endpoint_weight=args.h0_endpoint_weight,
+            bend_basis_kind=args.bend_basis_kind)
         model = HereditaryGeometryModel(
             action_dim=action_dim, n_nodes=n_nodes,
             window_size=temp_cfg["window_size"],
             n_play=args.n_play, n_maxwell=args.n_maxwell, dt=args.dt,
             tau_range=(3.0 * args.dt, args.tau_max),
             burnin_mode=args.burnin_mode,
+            drive_normalization=args.operator_drive_normalization,
             n_bend_modes=args.n_bend_modes,
             section_intervals=args.section_intervals,
             bend_basis=priors["bend_basis"],
@@ -418,6 +429,7 @@ def main(argv=None):
             reference_kind=priors["reference_kind"],
             reference_knots=priors["reference_knots"],
             reference_drive_weights=priors["reference_drive_weights"],
+            bend_basis_kind=priors["bend_basis_kind"],
             base_position=priors["base_position"],
             residual_mode=args.hov21_residual,
             bend_residual_max_rad=args.hov21_bend_residual_max_rad,
@@ -570,6 +582,9 @@ def main(argv=None):
             "n_maxwell": args.n_maxwell,
             "tau_max": args.tau_max,
             "burnin_mode": args.burnin_mode,
+            "operator_drive_normalization":
+                args.operator_drive_normalization,
+            "bend_basis_kind": args.bend_basis_kind,
             "n_bend_modes": args.n_bend_modes,
             "section_intervals": list(args.section_intervals),
             "h0_reference": f"fit_only_frozen_{args.h0_reference}",
