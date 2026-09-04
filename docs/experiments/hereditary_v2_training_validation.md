@@ -341,3 +341,59 @@ tmux hov21_explicit_s42_g2 -> GPU 2
 
 启动核验时两组均已完成 epoch 2 验证并写入周期 checkpoint；memory/explicit 的聚合 dev node mean
 分别为 `1.9045/1.9115 mm`。这只是早期健康信号，不用于最终模型排序。
+
+## 13. HOV2.1 正式结果与几何损失诊断
+
+HOV2.1 explicit 和 memory 均正常早停，以各自聚合 dev
+`validation.node_mean_mm` 最小的 `best_eval_model.pt` 评价：
+
+| 模型 | 参数 | continuous node / endpoint | cold-restart-40 node / endpoint |
+|---|---:|---:|---:|
+| HOV2.1 explicit 8+2 | 372 | 1.6887 / 2.9530 mm | 1.6863 / 2.9496 mm |
+| HOV2.1 memory 8+2 | 1,760 | 1.7045 / 2.9386 mm | 1.7327 / 2.9927 mm |
+| Hereditary v2 residual-0.5 | -- | **1.3366 / 2.3704 mm** | **1.3467 / 2.3765 mm** |
+
+explicit 相对 memory 在 continuous 的 `0.0158 mm` 差异区间跨零，在
+cold-restart-40 改善 `0.0464 mm [0.0189, 0.0762]`。因此神经记忆残差不作为
+论文主模型。固定 checkpoint 干预表明，去 Maxwell 使 node 误差增加
+`0.1914 mm`，去 PI 增加 `0.0278 mm`；这只是 reliance 证据，还不是重训因果消融。
+
+同一 8 维弯曲子空间的角度投影重建误差为 `1.4298 mm`，但在节点空间
+直接优化逐帧系数可达 `0.5608 mm`。因此 `1.4298 mm` 不是 8 维理论下限；
+根因是旧损失主要追逐逐点角度/长度坐标，与论文的节点空间指标错配。
+详细机器产物位于：
+
+```text
+workspace/runs/analysis/hov21_20260904_001/
+```
+
+修正后的损失消融已启动：`balanced8` 保留少量广义坐标 guardrail，
+`geometry8` 只优化几何主目标，`balanced14` 作全局部弯曲空间上界。三者当前
+仍在运行，不在本节提前写入最终数值。
+
+## 14. HOV2.2：移除驱动尺度自由度与局部曲率坐标
+
+HOV2.1 的单调驱动 `e_c(a_c)` 只限制导数非负，没有固定输出幅值。因而
+`e_c`、play 阈值、Maxwell 亏量与读出增益之间存在尺度重参数化，原始阈值/
+增益不能直接跨 seed 比较。HOV2.2 保留单调铰链形状，但固定：
+
+```math
+e_c(0)=0,\qquad e_c(1)=1,\qquad \frac{d e_c}{d a_c}\ge 0.
+```
+
+这使 play 阈值可解释为全量程伪驱动的比例，Maxwell 状态也共享固定无量纲
+坐标尺。为进一步避免将 POD 系数误解为局部物理状态，新候选使用 14 维
+恒等弯曲基：坐标 `i` 就是第 `i` 个中心线段的局部弯曲角；两个分段
+log-length 仍对应两段机器人。该改动不引入神经残差，参数量仍为 564。
+
+66 项 Hereditary/HOV/ISHSM 定向回归通过，2 epoch 真实数据 smoke 通过。正式候选
+在干净提交 `ba83ff2` 上启动：
+
+```text
+tmux: hov22_local14_unit_s42_g0
+GPU: 0
+run: workspace/runs/training/hov22_formal/hov22_local14_unit_s42_20260904_000
+```
+
+该候选是可证伪的解释性约束：只有在双协议 dev 精度不显著退化、内部驱动
+满量程严格为 1 时，才能升格为论文主模型。
