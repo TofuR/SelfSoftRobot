@@ -151,7 +151,7 @@ def build_parser():
                         help="[hereditary] 残差幅度上限（归一化骨架单位）。F5: 修 F1 后重训，"
                              "若 residual_scale 仍钉在此上限则是真容量信号（可上调做对照实验）")
     parser.add_argument(
-        "--hov21_residual", choices=["none", "memory"], default="memory",
+        "--hov21_residual", choices=["none", "memory"], default="none",
         help="[hereditary_geo] none=纯 PI/Maxwell 广义读出；memory=严格零平衡的小记忆残差")
     parser.add_argument(
         "--hov21_bend_residual_max_rad", type=float, default=0.05,

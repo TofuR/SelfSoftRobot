@@ -37,9 +37,9 @@ git status --short > "$run_dir/code_status_at_start.txt"
     --h0_reference monotone_spline --h0_knots 5 --h0_fit_steps 500 \
     --h0_fit_objective geometry --h0_geometry_weight 1.0 \
     --h0_endpoint_weight 0.25 \
-    --bend_loss_weight 0.05 --length_loss_weight 0.1 \
-    --endpoint_loss_weight 1.0 \
-    --hov21_residual memory \
+    --bend_loss_weight 0.005 --length_loss_weight 0.01 \
+    --endpoint_loss_weight 0.25 \
+    --hov21_residual none \
     --hov21_bend_residual_max_rad 0.05 \
     --hov21_length_residual_max_log 0.02 \
     --hov21_residual_bend_weight 0.1 \
@@ -70,9 +70,9 @@ python scripts/training/train_transition.py \
   --h0_reference monotone_spline --h0_knots 5 --h0_fit_steps 500 \
   --h0_fit_objective geometry --h0_geometry_weight 1.0 \
   --h0_endpoint_weight 0.25 \
-  --bend_loss_weight 0.05 --length_loss_weight 0.1 \
-  --endpoint_loss_weight 1.0 \
-  --hov21_residual memory \
+  --bend_loss_weight 0.005 --length_loss_weight 0.01 \
+  --endpoint_loss_weight 0.25 \
+  --hov21_residual none \
   --hov21_bend_residual_max_rad 0.05 \
   --hov21_length_residual_max_log 0.02 \
   --hov21_residual_bend_weight 0.1 \

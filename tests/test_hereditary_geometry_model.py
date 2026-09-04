@@ -9,6 +9,7 @@ import torch
 
 from scripts.training.train_transition import build_parser
 from src.models.model_hereditary_geometry import HereditaryGeometryModel
+from src.models.model_ishsm import generalized_to_skeleton
 from src.training.trainer_unified import UnifiedTrainer
 from src.utils.model_loader import load_model
 
@@ -102,7 +103,7 @@ class HereditaryGeometryContractTests(unittest.TestCase):
     def test_cli_exposes_hov21_as_a_hereditary_readout(self):
         args = build_parser().parse_args([
             "--mode", "hereditary_geo", "--data_dir", "dummy"])
-        self.assertEqual(args.hov21_residual, "memory")
+        self.assertEqual(args.hov21_residual, "none")
         self.assertEqual(args.n_bend_modes, 8)
         self.assertEqual(args.section_intervals, (7, 7))
 
@@ -143,6 +144,29 @@ class HereditaryGeometryContractTests(unittest.TestCase):
             loaded.generalized_coordinate_scale,
             model.generalized_coordinate_scale))
         self.assertEqual(loaded.residual_mode, "memory")
+
+    def test_bend_auxiliary_uses_declared_modal_coordinates(self):
+        model = _model(residual_mode="none")
+        # Construct a bend perturbation orthogonal to the represented POD
+        # subspace.  It must not leak into the modal-coordinate auxiliary loss.
+        candidate = torch.randn(14)
+        orthogonal = candidate - model.bend_basis @ (
+            model.bend_basis.T @ candidate)
+        orthogonal = orthogonal / orthogonal.norm()
+        pred = generalized_to_skeleton(
+            torch.zeros(1, 14), torch.zeros(1, 2),
+            model.reference_segment_lengths, model.section_intervals,
+            model.base_position)
+        gt = generalized_to_skeleton(
+            orthogonal.unsqueeze(0) * 0.02, torch.zeros(1, 2),
+            model.reference_segment_lengths, model.section_intervals,
+            model.base_position)
+
+        losses = model.compute_sequence_aux_losses(
+            pred.unsqueeze(1), gt.unsqueeze(1))
+
+        self.assertLess(float(losses["bend"]), 1e-10)
+        self.assertGreater(float(losses["endpoint"]), 0.0)
 
     def test_episode_training_backpropagates_geometry_and_residual_losses(self):
         model = _model(residual_mode="memory")

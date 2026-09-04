@@ -103,7 +103,8 @@ class HereditaryGeometryModel(HereditaryOperatorModel):
         self.length_residual_max_log = float(length_residual_max_log)
         self.spatial_propagation_direction = "generalized_geometry"
         self.gl_kernel_alignment = "current_at_window_end"
-        self.model_contract_version = 3
+        self.model_contract_version = 4
+        self.coordinate_loss_basis = "fixed_modal_fit_scale"
 
         if self.n_nodes - 1 != sum(self.section_intervals):
             raise ValueError("section_intervals 与 n_nodes 不匹配")
@@ -354,11 +355,20 @@ class HereditaryGeometryModel(HereditaryOperatorModel):
             pred, self.reference_segment_lengths, self.section_intervals)
         gt_b, gt_l, _ = skeleton_to_generalized(
             gt, self.reference_segment_lengths, self.section_intervals)
-        bend_scale = gt_b.detach().std(dim=0).clamp_min(0.02)
-        length_scale = gt_l.detach().std(dim=0).clamp_min(0.005)
+        # HOV2.1 only represents the fixed bending subspace.  Penalizing all
+        # 14 local angles with a fresh per-batch scale makes the auxiliary
+        # objective chase unrepresented directions and changes its meaning
+        # between batches.  Compare the declared modal coordinates instead,
+        # using the immutable fit-only scale stored in the checkpoint.
+        bend_delta = (pred_b - gt_b) @ self.bend_basis
+        bend_scale = self.generalized_coordinate_scale[
+            :self.n_bend_modes].to(bend_delta).clamp_min(0.02)
+        length_delta = pred_l - gt_l
+        length_scale = self.generalized_coordinate_scale[
+            self.n_bend_modes:].to(length_delta).clamp_min(0.005)
         return {
-            "bend": F.mse_loss(pred_b / bend_scale, gt_b / bend_scale),
-            "length": F.mse_loss(pred_l / length_scale, gt_l / length_scale),
+            "bend": (bend_delta / bend_scale).square().mean(),
+            "length": (length_delta / length_scale).square().mean(),
             "endpoint": F.mse_loss(
                 pred_seq[:, :, -1], gt_seq[:, :, -1]),
         }
@@ -399,6 +409,7 @@ class HereditaryGeometryModel(HereditaryOperatorModel):
             "section_intervals": self.section_intervals,
             "reference_kind": self.reference_kind,
             "residual_mode": self.residual_mode,
+            "coordinate_loss_basis": self.coordinate_loss_basis,
             "residual_coordinate_scales": (
                 self.residual_coordinate_scales.detach().cpu()
                 if self.residual_mode == "memory" else
