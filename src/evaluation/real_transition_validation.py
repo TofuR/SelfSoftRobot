@@ -14,7 +14,7 @@ from src.evaluation.transition_metrics import build_action_window
 
 
 def per_frame_rollout(model, mode, actions, positions, window_size, norm_factor,
-                      device, K=40, max_steps=None):
+                      device, K=40, max_steps=None, anchor_index=0):
     """Predict every usable row with GT-observed or windowed OpenLoop semantics."""
     if K <= 0:
         raise ValueError("OpenLoop validation K 必须为正整数")
@@ -23,6 +23,9 @@ def per_frame_rollout(model, mode, actions, positions, window_size, norm_factor,
     T = positions.shape[0]
     if max_steps is not None:
         T = min(T, max_steps)
+    anchor_index = int(anchor_index)
+    if not 0 <= anchor_index < T:
+        raise ValueError("anchor_index 必须位于 validation 范围内")
     actions_norm = actions / norm_factor
     pc_center = model.pc_center.view(3).detach().cpu().numpy()
     pc_scale = model.pc_scale.view(3).detach().cpu().numpy()
@@ -69,6 +72,36 @@ def per_frame_rollout(model, mode, actions, positions, window_size, norm_factor,
                         s_prev = s_roll
                         s_roll = out["skeleton"]
                     t += K
+            elif mode in ("ishsm", "ishsm_zero", "ishsm_periodic"):
+                # ``ishsm`` observes frame 0 once. ``ishsm_periodic`` observes
+                # one skeleton every K frames. Neither mode consumes a dense
+                # skeleton history between anchors.
+                if T >= anchor_index + 2:
+                    z_t = None
+                    last_anchor = anchor_index
+                    for t in range(anchor_index + 1, T):
+                        current_window = action_window(t)
+                        should_anchor = (
+                            z_t is None or
+                            (mode == "ishsm_periodic" and
+                             (t - 1 - anchor_index) % K == 0))
+                        if should_anchor:
+                            if mode == "ishsm_zero":
+                                z_t = model.init_z_from_action(current_window)
+                            else:
+                                observation = to_norm(positions[t - 1])
+                                if (mode == "ishsm_periodic" and z_t is not None and
+                                        hasattr(model, "assimilate_observation")):
+                                    z_t = model.assimilate_observation(
+                                        current_window, observation, z_t)
+                                else:
+                                    z_t = model.init_rollout_state(
+                                        current_window, observation)
+                            last_anchor = t - 1
+                        out = model.forward(current_window, prev_z=z_t)
+                        pred[t] = out["skeleton"].squeeze(0).cpu().numpy()
+                        k_in_window[t] = t - last_anchor - 1
+                        z_t = out["latent_z"]
             else:
                 raise ValueError(f"未知 transition validation mode: {mode!r}")
     finally:
@@ -105,11 +138,47 @@ def evaluate_native_node_metrics(
     files = sorted(glob.glob(os.path.join(str(data_dir), "*.npz")))
     if not files:
         raise FileNotFoundError(f"val 目录没有 NPZ: {data_dir}")
+    if seq_idx is None:
+        results = [evaluate_native_node_metrics(
+            model, data_dir, config, device, mode=mode,
+            window_len=window_len, max_steps=max_steps, seq_idx=index,
+            return_details=True) for index in range(len(files))]
+        units = {details["unit"] for _, details in results}
+        if len(units) != 1:
+            raise ValueError(f"validation 文件长度单位不一致: {sorted(units)}")
+        unit = units.pop()
+        rows = np.array([
+            metrics["validation.prediction_rows"] for metrics, _ in results],
+            dtype=np.float64)
+        total_rows = float(rows.sum())
+        if total_rows <= 0:
+            raise ValueError("所有 validation 序列均无模型预测行")
+        aggregated = {
+            f"validation.node_mean_{unit}": float(sum(
+                metrics[f"validation.node_mean_{unit}"] * count
+                for (metrics, _), count in zip(results, rows)) / total_rows),
+            f"validation.endpoint_{unit}": float(sum(
+                metrics[f"validation.endpoint_{unit}"] * count
+                for (metrics, _), count in zip(results, rows)) / total_rows),
+            f"validation.max_node_{unit}": float(max(
+                metrics[f"validation.max_node_{unit}"]
+                for metrics, _ in results)),
+            "validation.prediction_rows": total_rows,
+        }
+        if not return_details:
+            return aggregated
+        return aggregated, {
+            "unit": unit,
+            "sequences": [details for _, details in results],
+            "selected_npz": [details["selected_npz"] for _, details in results],
+        }
     if seq_idx < 0 or seq_idx >= len(files):
         raise IndexError(f"seq_idx 越界: {seq_idx}; files={len(files)}")
     with np.load(files[seq_idx], allow_pickle=False) as raw:
         raw_actions = raw["actions"].astype(np.float32)
         positions = raw["positions"].astype(np.float32)
+        evaluation_mask = (raw["evaluation_mask"].astype(bool)
+                           if "evaluation_mask" in raw else None)
         unit = (str(raw["state_length_unit"].item())
                 if "state_length_unit" in raw else "px")
     if not re.fullmatch(r"[A-Za-z0-9._-]+", unit):
@@ -118,6 +187,8 @@ def evaluate_native_node_metrics(
         raise ValueError(
             f"validation actions/positions 帧数不一致: "
             f"{len(raw_actions)} != {len(positions)}")
+    if evaluation_mask is not None and len(evaluation_mask) != len(positions):
+        raise ValueError("validation evaluation_mask 帧数与 positions 不一致")
 
     action_view = config.get("action_view") or {}
     channels = tuple(action_view.get(
@@ -134,13 +205,21 @@ def evaluate_native_node_metrics(
     window_size = int(config.get("temporal", {}).get(
         "window_size", getattr(model, "window_size", 40)))
     K = int(window_len or getattr(model, "episode_len", window_size))
+    anchor_index = 0
+    if (mode in ("ishsm", "ishsm_zero", "ishsm_periodic") and
+            evaluation_mask is not None and evaluation_mask.any()):
+        anchor_index = max(int(np.flatnonzero(evaluation_mask)[0]) - 1, 0)
     pred_world, k_in_window = per_frame_rollout(
         model, mode, actions, positions, window_size, norm_factor, device,
-        K=K, max_steps=max_steps)
+        K=K, max_steps=max_steps, anchor_index=anchor_index)
     T = pred_world.shape[0]
     gt_world = positions[:T].transpose(0, 2, 1)
     prediction_valid = (
-        k_in_window >= 0 if mode == "open_loop" else np.ones(T, dtype=bool))
+        k_in_window >= 0 if mode in (
+            "open_loop", "ishsm", "ishsm_zero", "ishsm_periodic")
+        else np.ones(T, dtype=bool))
+    if evaluation_mask is not None:
+        prediction_valid &= evaluation_mask[:T]
     if not prediction_valid.any():
         raise ValueError("当前 validation 范围没有模型预测行")
     node_errors = np.sqrt(
@@ -162,5 +241,7 @@ def evaluate_native_node_metrics(
         "unit": unit,
         "per_frame_node": per_frame_node,
         "prediction_valid": prediction_valid,
+        "horizon": k_in_window,
+        "anchor_index": anchor_index,
         "selected_npz": files[seq_idx],
     }

@@ -128,6 +128,15 @@ def _detect_model_type(state_dict):
     if has_z_cell and (has_state_encoder or has_delta_head):
         return 'state_transition', 0
 
+    # ISHSM has an explicit POD basis, frozen H0 reference buffers and stable
+    # trainable modal time constants.  Detect before generic fallbacks.
+    ishsm_required = {
+        'bend_basis', 'reference_segment_lengths', 'reference_bend_dirs',
+        'reference_length_dirs', 'raw_taus', 'excitation',
+    }
+    if ishsm_required.issubset(keys):
+        return 'ishsm', 0
+
     # HereditaryOperatorModel: 显式迟滞算子组（play/maxwell 算子库）。
     # 算子网格（thresholds/taus/decays）是 registered buffer，随 state_dict
     # 精确恢复，无需从 config 重建网格。
@@ -390,6 +399,52 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
         # norm_factor 从 checkpoint buffer 恢复
         if 'action_norm_factor' in state_dict:
             norm_factor = state_dict['action_norm_factor'].item()
+
+    elif model_type == 'ishsm':
+        if not saved_cfg or saved_cfg.get('model') != 'ISHSMModel':
+            raise ValueError(
+                "ISHSM checkpoint 必须有 config.json 且 model=ISHSMModel，"
+                "不能仅凭权重形状猜测几何合同")
+        from src.models.model_ishsm import ISHSMModel
+        model = ISHSMModel(
+            action_dim=action_dim,
+            n_nodes=int(saved_cfg['n_nodes']),
+            n_bend_modes=int(saved_cfg['n_bend_modes']),
+            section_intervals=tuple(saved_cfg['section_intervals']),
+            dt=float(saved_cfg['dt']),
+            tau_range=(float(saved_cfg['tau_min']),
+                       float(saved_cfg['tau_max'])),
+            use_dynamic_length=bool(saved_cfg.get(
+                'use_dynamic_length', True)),
+            use_persistent_state=bool(saved_cfg.get(
+                'use_persistent_state', False)),
+            persistence_init=float(saved_cfg.get('persistence_init', 0.1)),
+            observation_update=saved_cfg.get(
+                'observation_update', 'hard'),
+            observation_gain_init=float(saved_cfg.get(
+                'observation_gain_init', 0.25)),
+            training_reanchor_intervals=tuple(saved_cfg.get(
+                'training_reanchor_intervals', [0])),
+            tau_parameterization=saved_cfg.get(
+                'tau_parameterization', 'independent'),
+            observation_projection=saved_cfg.get(
+                'observation_projection', 'modal'),
+            tip_dls_lambda_mm2=float(saved_cfg.get(
+                'tip_dls_lambda_mm2', 1.0)),
+            reference_kind=(
+                'monotone_spline'
+                if saved_cfg.get('h0_reference') ==
+                'fit_only_frozen_monotone_spline' else 'linear'),
+            reference_knots=(state_dict.get('reference_knots')
+                             if 'reference_knots' in state_dict else None),
+            reference_drive_weights=(
+                state_dict.get('reference_drive_weights')
+                if 'reference_drive_weights' in state_dict else None),
+            episode_len=int(saved_cfg.get('episode_len', 40)),
+        ).to(device)
+        # All geometry/H0/POD buffers are part of the scientific contract.
+        model.load_state_dict(state_dict, strict=True)
+        norm_factor = model.action_norm_factor.item()
 
     elif model_type == 'state_transition':
         # StateTransitionSpatialModel — 闭环状态转移 + 可学习潜变量 z

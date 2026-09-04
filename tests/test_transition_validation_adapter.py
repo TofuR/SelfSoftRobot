@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 import torch
@@ -99,6 +100,24 @@ class TransitionValidationAdapterTest(unittest.TestCase):
         self.assertIn("validation.node_mean_mm", metrics)
         self.assertEqual(metrics["validation.prediction_rows"], 5.0)
 
+    def test_adapter_aggregates_all_sequences_for_hereditary_baseline(self):
+        phase = PhaseSpec("hereditary", episode_len=40)
+        with mock.patch(
+                "src.training.validation_adapters.evaluate_native_node_metrics",
+                return_value={"validation.node_mean_mm": 1.0}) as evaluate:
+            transition_validation_adapter(
+                model=self.model,
+                phase_spec=phase,
+                data_dir=self.data_dir,
+                epoch=1,
+                exp_dir=self.temp.name,
+                device=torch.device("cpu"),
+                config=self.config,
+            )
+
+        self.assertEqual(evaluate.call_args.kwargs["mode"], "gt")
+        self.assertIsNone(evaluate.call_args.kwargs["seq_idx"])
+
     def test_training_cli_contract_enables_validation_only_when_requested(self):
         phase = PhaseSpec("gt_transition")
         config = {}
@@ -110,6 +129,9 @@ class TransitionValidationAdapterTest(unittest.TestCase):
             validation_warmup=2,
             early_stopping_patience=4,
             allow_early_stop_before_tf_anneal=False,
+            mode="ishsm",
+            ishsm_validation_protocol="periodic_40",
+            ishsm_reanchor_interval=40,
         )
 
         data_dirs, adapters = configure_transition_validation(
@@ -124,6 +146,11 @@ class TransitionValidationAdapterTest(unittest.TestCase):
             phase.validation.early_stopping_patience_evaluations, 4)
         self.assertEqual(
             config["evaluation"]["transition_validation_max_steps"], 5)
+        self.assertEqual(
+            config["evaluation"]["ishsm_validation_protocol"],
+            "periodic_40")
+        self.assertEqual(
+            config["evaluation"]["ishsm_reanchor_interval"], 40)
 
         args.val_dir = None
         data_dirs, adapters = configure_transition_validation(args, phase, config)

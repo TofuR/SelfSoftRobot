@@ -1,4 +1,4 @@
-"""train_transition.py — 统一状态转移训练入口（--mode gt | open_loop | hereditary）。
+"""train_transition.py — 统一状态转移训练入口。
 
 gt 与 open_loop 是**同一个网络**（都派生自 StateTransitionSpatialModel，state_dict 完全
 相同），差别仅在 teacher_forcing_ratio：
@@ -52,13 +52,34 @@ from src.training.trainer_unified import UnifiedTrainer  # noqa: E402
 from src.training.validation_adapters import transition_validation_adapter  # noqa: E402
 
 
+def _positive_int_tuple(value):
+    try:
+        parsed = tuple(int(part.strip()) for part in str(value).split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("必须是逗号分隔的正整数") from exc
+    if not parsed or any(part <= 0 for part in parsed):
+        raise argparse.ArgumentTypeError("必须是逗号分隔的正整数")
+    return parsed
+
+
+def _nonnegative_int_tuple(value):
+    try:
+        parsed = tuple(int(part.strip()) for part in str(value).split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("必须是逗号分隔的非负整数") from exc
+    if not parsed or any(part < 0 for part in parsed):
+        raise argparse.ArgumentTypeError("必须是逗号分隔的非负整数")
+    return parsed
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="统一状态转移训练（gt | open_loop）")
     add_common_args(parser, data_dir_default="data/seq_rz_c2_sk")
-    parser.add_argument("--mode", choices=["gt", "open_loop", "hereditary"],
+    parser.add_argument("--mode", choices=["gt", "open_loop", "hereditary", "ishsm"],
                         default="gt",
                         help="gt=每步真实s(tf=1.0,零漂移); open_loop=窗口开环(tf退火到0,喂自身预测); "
-                             "hereditary=显式迟滞算子模型(PI play + Maxwell, 电平读出)")
+                             "hereditary=显式迟滞算子模型; "
+                             "ishsm=可观测空间基上的8+2低维迟滞状态")
     parser.add_argument("--encoder", type=str, default="fractional",
                         choices=["ema", "fractional", "gamma", "gru", "transformer", "tcn"],
                         help="Temporal encoder type")
@@ -126,7 +147,99 @@ def build_parser():
     parser.add_argument("--residual_scale_max", type=float, default=0.3,
                         help="[hereditary] 残差幅度上限（归一化骨架单位）。F5: 修 F1 后重训，"
                              "若 residual_scale 仍钉在此上限则是真容量信号（可上调做对照实验）")
+    # ── ISHSM 专属（其它模式忽略）──
+    parser.add_argument("--n_bend_modes", type=int, default=8,
+                        help="[ishsm] 固定 POD 弯曲空间基数量")
+    parser.add_argument("--section_intervals", type=_positive_int_tuple,
+                        default=(7, 7),
+                        help="[ishsm] 每段包含的骨架线段数，默认 7,7")
+    parser.add_argument("--tau_min", type=float, default=0.3,
+                        help="[ishsm] 可学习有效时间常数下界（秒）")
+    parser.add_argument("--disable_dynamic_length", action="store_true",
+                        help="[ishsm消融] 移除2个分段动态伸长状态，仅保留H0长度")
+    parser.add_argument("--bend_loss_weight", type=float, default=0.05,
+                        help="[ishsm] 广义弯曲坐标损失权重")
+    parser.add_argument("--length_loss_weight", type=float, default=0.1,
+                        help="[ishsm] 分段长度坐标损失权重")
+    parser.add_argument("--endpoint_loss_weight", type=float, default=1.0,
+                        help="[ishsm] 归一化端点重建 guardrail 权重")
+    parser.add_argument("--h0_reference", choices=["linear", "monotone_spline"],
+                        default="monotone_spline",
+                        help="[ishsm] fit-only 冻结的记忆无关参考类型")
+    parser.add_argument("--h0_knots", type=int, default=5,
+                        help="[ishsm] 单调驱动铰链节点数")
+    parser.add_argument("--h0_fit_steps", type=int, default=500,
+                        help="[ishsm] 单调 H0 的 fit-only 优化步数")
+    parser.add_argument(
+        "--h0_fit_objective", choices=["coordinate", "geometry"],
+        default="geometry",
+        help="[ishsm] H0 拟合目标；geometry 同时约束重建节点和端点")
+    parser.add_argument("--h0_geometry_weight", type=float, default=1.0,
+                        help="[ishsm] H0 重建节点相对损失权重")
+    parser.add_argument("--h0_endpoint_weight", type=float, default=0.25,
+                        help="[ishsm] H0 重建端点相对损失权重")
+    persistence = parser.add_mutually_exclusive_group()
+    persistence.add_argument(
+        "--enable_persistent_state", dest="use_persistent_state",
+        action="store_true",
+        help="[ishsm实验] 启用由观测初始化、保持到下次重锚定的形状偏置")
+    persistence.add_argument(
+        "--disable_persistent_state", dest="use_persistent_state",
+        action="store_false",
+        help="[ishsm] 禁用持久形状偏置（v2 证据支持的默认值）")
+    parser.set_defaults(use_persistent_state=False)
+    parser.add_argument("--persistence_init", type=float, default=0.1,
+                        help="[ishsm] 锚点残差初始分配到持久分量的比例")
+    parser.add_argument(
+        "--ishsm_observation_update", choices=["hard", "innovation"],
+        default="innovation",
+        help="[ishsm] 观测校正；innovation 使用两个有界弯曲/伸长增益")
+    parser.add_argument(
+        "--ishsm_observation_gain_init", type=float, default=0.25,
+        help="[ishsm] innovation 观测增益初值，必须在 (0,1)")
+    parser.add_argument(
+        "--ishsm_training_reanchor_intervals",
+        type=_nonnegative_int_tuple, default=(0, 5, 10, 20),
+        help="[ishsm] 每个训练 batch 采样的因果重锚间隔；0=只用初始锚点")
+    parser.add_argument(
+        "--ishsm_tau_parameterization",
+        choices=["independent", "shared_bending"],
+        default="shared_bending",
+        help="[ishsm] shared_bending 保留8个空间模态但共享一个弯曲时间常数")
+    parser.add_argument(
+        "--ishsm_observation_projection", choices=["modal", "tip_dls"],
+        default="tip_dls",
+        help="[ishsm] 观测到8+2状态的投影；tip_dls 在 modal 投影后用解析"
+             "端点 Jacobian 做阻尼最小二乘校正")
+    parser.add_argument(
+        "--ishsm_tip_dls_lambda_mm2", type=float, default=1.0,
+        help="[ishsm] tip_dls 阻尼系数，单位 mm^2，必须为正")
+    parser.add_argument(
+        "--ishsm_validation_protocol",
+        choices=["single_anchor", "periodic_40"], default="single_anchor",
+        help="[ishsm] validation-best 选择协议；periodic_40 每40帧重锚定一次")
+    parser.add_argument(
+        "--ishsm_reanchor_interval", type=int, default=40,
+        help="[ishsm] periodic_40 验证的重锚定帧间隔")
     return parser
+
+
+def _load_ishsm_fit_arrays(data_dir, action_channels, norm_factor):
+    """Load only the declared fit directory for frozen H0/POD estimation."""
+    from src.data.action_view import project_actions
+
+    actions, skeletons = [], []
+    paths = sorted(glob.glob(os.path.join(str(data_dir), "*.npz")))
+    if not paths:
+        raise FileNotFoundError(f"ISHSM fit 目录没有 NPZ: {data_dir}")
+    for path in paths:
+        with np.load(path, allow_pickle=False) as raw:
+            actions.append(project_actions(
+                raw["actions"], action_channels).astype(np.float32) /
+                float(norm_factor))
+            skeletons.append(
+                raw["positions"].astype(np.float32).transpose(0, 2, 1))
+    return np.concatenate(actions), np.concatenate(skeletons)
 
 
 def configure_transition_validation(args, phase_spec, config):
@@ -152,6 +265,13 @@ def configure_transition_validation(args, phase_spec, config):
     )
     config.setdefault("evaluation", {})[
         "transition_validation_max_steps"] = args.validation_max_steps
+    if getattr(args, "mode", None) == "ishsm":
+        interval = int(getattr(args, "ishsm_reanchor_interval", 40))
+        if interval <= 0:
+            raise ValueError("ISHSM validation 重锚定间隔必须为正整数")
+        config["evaluation"]["ishsm_validation_protocol"] = getattr(
+            args, "ishsm_validation_protocol", "single_anchor")
+        config["evaluation"]["ishsm_reanchor_interval"] = interval
     return (
         {phase_spec.name: args.val_dir},
         {phase_spec.name: transition_validation_adapter},
@@ -160,6 +280,20 @@ def configure_transition_validation(args, phase_spec, config):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.mode == "ishsm" and any(weight < 0 for weight in (
+            args.bend_loss_weight, args.length_loss_weight,
+            args.endpoint_loss_weight, args.h0_geometry_weight,
+            args.h0_endpoint_weight)):
+        raise ValueError("ISHSM loss/H0 objective 权重必须非负")
+    if args.mode == "ishsm":
+        if not 0.0 < args.ishsm_observation_gain_init < 1.0:
+            raise ValueError("ISHSM observation gain 初值必须在 (0,1)")
+        if args.ishsm_tip_dls_lambda_mm2 <= 0:
+            raise ValueError("ISHSM tip DLS lambda 必须为正数")
+        if (args.ishsm_observation_update == "innovation" and
+                args.use_persistent_state):
+            raise ValueError(
+                "ISHSM innovation observer 不能与旧 persistent state 同时启用")
     config = resolve_training_config(build_common_overrides(args))
     seed = config.get("optimization", {}).get("seed")
     if seed is not None:
@@ -178,6 +312,15 @@ def main(argv=None):
     n_nodes = args.n_nodes or detect_n_nodes(args.data_dir)
     temp_cfg = config["temporal"]
     hidden_dim = temp_cfg["hidden_dim"]
+
+    # Build the fit-only dataset before model construction so ISHSM's frozen
+    # H0/POD priors use exactly the same action normalization as training.
+    from src.data.dataset_spatial import StateTransitionDataset
+    norm_dataset = StateTransitionDataset(
+        args.data_dir, seq_len=temp_cfg["window_size"],
+        episode_mode=True, episode_len=args.episode_len,
+        action_channels=action_contract.model_action_channels)
+    pc_center, pc_scale = norm_dataset.get_normalization_params()
 
     # ── 按 mode 构造模型（同网络，不同 training_spec + mode buffer）──
     if args.mode == "gt":
@@ -208,6 +351,67 @@ def main(argv=None):
         model_tag = "hereditary"
         tf_info = (f"operators: J={args.n_play} plays, M={args.n_maxwell} maxwell, "
                    f"dt={args.dt}s (tf n/a — 无骨架反馈)")
+    elif args.mode == "ishsm":
+        from src.models.model_ishsm import ISHSMModel, fit_ishsm_priors_from_arrays
+        if sum(args.section_intervals) != n_nodes - 1:
+            raise ValueError(
+                f"--section_intervals={args.section_intervals} 总和必须为 "
+                f"n_nodes-1={n_nodes - 1}")
+        if not 1 <= args.n_bend_modes <= n_nodes - 1:
+            raise ValueError("--n_bend_modes 必须在 [1,n_nodes-1]")
+        if not (0 < args.tau_min <= args.tau_max):
+            raise ValueError("ISHSM 要求 0 < tau_min <= tau_max")
+        fit_actions, fit_skeletons = _load_ishsm_fit_arrays(
+            args.data_dir, action_contract.model_action_channels,
+            norm_dataset.norm_factor)
+        priors = fit_ishsm_priors_from_arrays(
+            fit_actions, fit_skeletons,
+            n_bend_modes=args.n_bend_modes,
+            section_intervals=args.section_intervals,
+            reference_kind=args.h0_reference,
+            n_reference_knots=args.h0_knots,
+            reference_fit_steps=args.h0_fit_steps,
+            reference_fit_objective=args.h0_fit_objective,
+            reference_geometry_weight=args.h0_geometry_weight,
+            reference_endpoint_weight=args.h0_endpoint_weight)
+        model = ISHSMModel(
+            action_dim=action_dim, n_nodes=n_nodes,
+            n_bend_modes=args.n_bend_modes,
+            section_intervals=args.section_intervals,
+            dt=args.dt, tau_range=(args.tau_min, args.tau_max),
+            bend_basis=priors["bend_basis"],
+            reference_segment_lengths=priors["reference_segment_lengths"],
+            reference_bend_bias=priors["reference_bend_bias"],
+            reference_bend_dirs=priors["reference_bend_dirs"],
+            reference_length_bias=priors["reference_length_bias"],
+            reference_length_dirs=priors["reference_length_dirs"],
+            reference_kind=priors["reference_kind"],
+            reference_knots=priors["reference_knots"],
+            reference_drive_weights=priors["reference_drive_weights"],
+            base_position=priors["base_position"],
+            use_dynamic_length=not args.disable_dynamic_length,
+            use_persistent_state=args.use_persistent_state,
+            persistence_init=args.persistence_init,
+            observation_update=args.ishsm_observation_update,
+            observation_gain_init=args.ishsm_observation_gain_init,
+            training_reanchor_intervals=
+                args.ishsm_training_reanchor_intervals,
+            tau_parameterization=args.ishsm_tau_parameterization,
+            observation_projection=args.ishsm_observation_projection,
+            tip_dls_lambda_mm2=args.ishsm_tip_dls_lambda_mm2,
+            episode_len=args.episode_len).to(device)
+        spec = model.training_spec
+        spec.phases[0].dense_step_weight = args.dense_step_weight
+        model_tag = "ishsm"
+        tf_info = (f"memory={model.z_dim}D over "
+                   f"{args.n_bend_modes}+{model.n_length_states} spatial coordinates, "
+                   f"tau=[{args.tau_min},{args.tau_max}]s, "
+                   f"observer={args.ishsm_observation_update}, "
+                   f"projection={args.ishsm_observation_projection}, "
+                   f"train K={args.ishsm_training_reanchor_intervals}")
+        config["loss_weights"]["bend"] = args.bend_loss_weight
+        config["loss_weights"]["length"] = args.length_loss_weight
+        config["loss_weights"]["endpoint"] = args.endpoint_loss_weight
     else:  # open_loop
         from src.models.model_open_loop_transition import OpenLoopTransitionModel
         model = OpenLoopTransitionModel(
@@ -234,6 +438,22 @@ def main(argv=None):
               f"episode_len(K): {args.episode_len}, dt: {model.dt.item():g}s")
         print(f"  Play r-grid: {[f'{r:.3f}' for r in model.play.thresholds.tolist()]}")
         print(f"  Maxwell tau-grid: {[f'{t:.2f}' for t in model.maxwell.taus.tolist()]}s")
+    elif args.mode == "ishsm":
+        print(f"  Action dim: {action_dim}, N nodes: {n_nodes}, "
+              f"state: {model.n_bend_modes}+{model.n_length_states}, "
+              f"POD fit energy: {priors['bend_explained_energy']:.4%}")
+        print(f"  Section intervals: {model.section_intervals}; "
+              f"initial taus: {[round(v, 3) for v in model.taus.tolist()]}")
+        print(f"  H0: {model.reference_kind}/{args.h0_fit_objective}, "
+              f"fit MSE: {priors['reference_fit_mse']:.6g}, "
+              f"node/tip RMSE: {priors['reference_fit_node_rmse_mm']:.4f}/"
+              f"{priors['reference_fit_endpoint_rmse_mm']:.4f} mm; persistent: "
+              f"{model.use_persistent_state}")
+        print(f"  Observer: {model.observation_update}, "
+              f"initial gains: {[round(v, 3) for v in model.observation_gains.tolist()]}; "
+              f"projection: {model.observation_projection} "
+              f"(lambda={model.tip_dls_lambda_mm2:g} mm^2); "
+              f"tau parameterization: {model.tau_parameterization}")
     else:
         print(f"  Action dim: {action_dim}, N nodes: {n_nodes}, Encoder: {args.encoder}, "
               f"z_dim: {args.z_dim}, episode_len(K): {args.episode_len}")
@@ -251,14 +471,39 @@ def main(argv=None):
         config["tau_max"] = args.tau_max
         config["burnin_mode"] = args.burnin_mode
         config["residual_scale_max"] = args.residual_scale_max
+    elif args.mode == "ishsm":
+        config.update({
+            "dt": args.dt,
+            "n_bend_modes": args.n_bend_modes,
+            "section_intervals": list(args.section_intervals),
+            "tau_min": args.tau_min,
+            "tau_max": args.tau_max,
+            "use_dynamic_length": not args.disable_dynamic_length,
+            "use_persistent_state": args.use_persistent_state,
+            "persistence_init": args.persistence_init,
+            "observation_update": args.ishsm_observation_update,
+            "observation_gain_init": args.ishsm_observation_gain_init,
+            "training_reanchor_intervals":
+                list(args.ishsm_training_reanchor_intervals),
+            "tau_parameterization": args.ishsm_tau_parameterization,
+            "observation_projection": args.ishsm_observation_projection,
+            "tip_dls_lambda_mm2": args.ishsm_tip_dls_lambda_mm2,
+            "observation_protocol": "single_anchor_or_periodic_reanchor",
+            "h0_reference": f"fit_only_frozen_{args.h0_reference}",
+            "h0_knots": args.h0_knots,
+            "h0_fit_steps": args.h0_fit_steps,
+            "h0_fit_objective": args.h0_fit_objective,
+            "h0_geometry_weight": args.h0_geometry_weight,
+            "h0_endpoint_weight": args.h0_endpoint_weight,
+            "endpoint_loss_weight": args.endpoint_loss_weight,
+            "reference_fit_mse": priors["reference_fit_mse"],
+            "reference_fit_node_rmse_mm":
+                priors["reference_fit_node_rmse_mm"],
+            "reference_fit_endpoint_rmse_mm":
+                priors["reference_fit_endpoint_rmse_mm"],
+            "bend_explained_energy": priors["bend_explained_energy"],
+        })
 
-    # ── 归一化（episode 模式数据集，与训练一致）──
-    from src.data.dataset_spatial import StateTransitionDataset
-    norm_dataset = StateTransitionDataset(
-        args.data_dir, seq_len=temp_cfg["window_size"],
-        episode_mode=True, episode_len=args.episode_len,
-        action_channels=action_contract.model_action_channels)
-    pc_center, pc_scale = norm_dataset.get_normalization_params()
     model.set_normalization(pc_center, pc_scale, norm_dataset.norm_factor)
     config["state_view"] = norm_dataset.get_state_contract()
 

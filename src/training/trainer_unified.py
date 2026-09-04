@@ -164,13 +164,32 @@ class UnifiedTrainer:
         # 中间值 → 每步独立 scheduled sampling（注意：此时速度输入 v=prev-prev_prev 会混入
         #   GT/预测帧，是标准 scheduled sampling 性质；开环变体默认 tf=0 或 staircase 退火规避）。
         losses = {}
-        z_t = self.model.init_z_from_action(action_windows[:, 0])
+        # Models with an observable state (ISHSM) initialize from the one GT
+        # anchor immediately preceding step 0.  Legacy models keep their
+        # action-only initialization contract unchanged.
+        init_from_anchor = getattr(self.model, "init_rollout_state", None)
+        if callable(init_from_anchor):
+            z_t = init_from_anchor(action_windows[:, 0], init_skeleton)
+        else:
+            z_t = self.model.init_z_from_action(action_windows[:, 0])
         s_prev = init_skeleton
         s_prev_prev = init_skeleton
         preds = []
         z_norms = []  # 监测潜变量 z 漂移（z 无 GT，跨帧演化，漂移先于 skeleton loss 失稳）
+        assimilate = getattr(self.model, "assimilate_observation", None)
+        reanchor_choices = tuple(getattr(
+            self.model, "training_reanchor_intervals", (0,)))
+        training_reanchor_interval = (
+            random.choice(reanchor_choices) if callable(assimilate) else 0)
 
         for t in range(T):
+            # Causal sparse observation: before predicting t, only the GT
+            # skeleton at t-1 may correct the state. Interval 0 retains the
+            # single-anchor trajectory and prevents a dense-GT shortcut.
+            if (t > 0 and training_reanchor_interval > 0 and
+                    t % training_reanchor_interval == 0):
+                z_t = assimilate(
+                    action_windows[:, t], gt_skeletons[:, t - 1], z_t)
             out = self.model.forward(
                 action_windows[:, t], s_prev, s_prev_prev, z_t)
             s_pred = out["skeleton"]
@@ -208,10 +227,24 @@ class UnifiedTrainer:
             spatial = ((pd - gd) ** 2).mean()
             losses["spatial_smooth"] = spatial * self._get_loss_weight("spatial_smooth", 1.0)
 
+        # Optional model-specific losses on observable generalized shape
+        # coordinates.  Keeping the hook here preserves the shared rollout and
+        # BPTT path while preventing the trainer from knowing ISHSM geometry.
+        aux_loss_fn = getattr(self.model, "compute_sequence_aux_losses", None)
+        if callable(aux_loss_fn):
+            auxiliary = aux_loss_fn(pred_seq, gt_skeletons)
+            active = set(phase_spec.active_losses)
+            for name, value in auxiliary.items():
+                if name in active:
+                    losses[name] = value * self._get_loss_weight(name, 1.0)
+
         # 监控量（不进 total，但写 loss_log.csv）：z 范数轨迹（漂移预警）+ 有效 tf_ratio。
         # 均存为 tensor——主循环 set_postfix 对每个非 total 值调 .item()，float 会崩。
         losses["z_norm_monitor"] = torch.stack(z_norms).mean()
         losses["tf_ratio_monitor"] = torch.tensor(float(tf_ratio))
+        if callable(assimilate):
+            losses["reanchor_interval_monitor"] = torch.tensor(
+                float(training_reanchor_interval))
 
         losses["total"] = self._sum_optimization_losses(losses)
         return losses
@@ -276,6 +309,10 @@ class UnifiedTrainer:
             config["action_view"] = self.config["action_view"]
         if self.config.get("state_view"):
             config["state_view"] = self.config["state_view"]
+        if self.config.get("evaluation"):
+            # Validation protocol and max-step limits are part of checkpoint
+            # selection semantics and must be recoverable from config.json.
+            config["evaluation"] = self.config["evaluation"]
         temporal = getattr(model, "temporal", None)
         if getattr(temporal, "gl_kernel_alignment", None) is not None:
             config["gl_kernel_alignment"] = temporal.gl_kernel_alignment
@@ -322,8 +359,21 @@ class UnifiedTrainer:
 
         # 模型特有合同字段透传（如 hereditary 的 dt/n_play/n_maxwell——
         # dt 必须进合同才能从 checkpoint 复现算子网格；无则跳过）
-        for key in ("dt", "n_play", "n_maxwell", "tau_max", "burnin_mode",
-                    "residual_scale_max"):
+        for key in ("dt", "n_play", "n_maxwell", "tau_min", "tau_max",
+                    "burnin_mode", "residual_scale_max", "n_bend_modes",
+                    "section_intervals", "use_dynamic_length",
+                    "use_persistent_state", "persistence_init",
+                    "observation_update", "observation_gain_init",
+                    "training_reanchor_intervals",
+                    "tau_parameterization",
+                    "observation_projection", "tip_dls_lambda_mm2",
+                    "observation_protocol", "h0_reference",
+                    "h0_knots", "h0_fit_steps", "h0_fit_objective",
+                    "h0_geometry_weight", "h0_endpoint_weight",
+                    "endpoint_loss_weight", "reference_fit_mse",
+                    "reference_fit_node_rmse_mm",
+                    "reference_fit_endpoint_rmse_mm",
+                    "bend_explained_energy"):
             if self.config.get(key) is not None:
                 config[key] = self.config[key]
 
