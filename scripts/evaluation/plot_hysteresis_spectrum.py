@@ -105,16 +105,18 @@ def main(argv=None):
     ]
     for c in range(C):
         lines.append(f"  {ch_labels[c]}: |v|={np.array2string(v[c], precision=3)}")
-    # 谱质量的粗判据（设计文档 E1 的谱版）
+    # 裸参数质量仅用于 checkpoint 审计。权重与可学习空间模态存在尺度
+    # 自由度，不能据此计算物理份额；实际贡献应在物理输出空间中评估。
     total_play = b.sum()
-    total_maxwell = v.sum()
+    total_maxwell = np.abs(v).sum()
     if total_play + total_maxwell > 0:
         play_share = total_play / (total_play + total_maxwell)
         lines += [
             "",
-            f"play/maxwell 容量占比: {play_share:.2f} / {1 - play_share:.2f}",
-            "（读法: play 份额高 → 迟滞以率无关摩擦为主；",
-            "  Maxwell 份额高 → 以粘弹蠕变为主；E1 变速率实验做最终裁决）",
+            f"play/maxwell 裸参数质量比: {play_share:.2f} / {1 - play_share:.2f}",
+            "（不可解释为材料份额或输出贡献：权重与空间模态可反向缩放，",
+            "  且不同模态可相互抵消。请用 analyze_hereditary_interpretability.py",
+            "  报告物理单位 realized contribution，并以多速率/保持实验裁决。）",
         ]
     txt = os.path.join(args.out, "spectrum_summary.txt")
     with open(txt, "w", encoding="utf-8") as f:
