@@ -175,6 +175,7 @@ class UnifiedTrainer:
         s_prev = init_skeleton
         s_prev_prev = init_skeleton
         preds = []
+        rollout_outputs = {}
         z_norms = []  # 监测潜变量 z 漂移（z 无 GT，跨帧演化，漂移先于 skeleton loss 失稳）
         assimilate = getattr(self.model, "assimilate_observation", None)
         reanchor_choices = tuple(getattr(
@@ -195,6 +196,10 @@ class UnifiedTrainer:
             s_pred = out["skeleton"]
             z_t = out["latent_z"]
             preds.append(s_pred)
+            for name, value in out.items():
+                if (name not in {"skeleton", "latent_z"} and
+                        torch.is_tensor(value)):
+                    rollout_outputs.setdefault(name, []).append(value)
             z_norms.append(z_t.norm())
 
             # scheduled sampling：决定下一步的 prev_skeleton
@@ -233,6 +238,22 @@ class UnifiedTrainer:
         aux_loss_fn = getattr(self.model, "compute_sequence_aux_losses", None)
         if callable(aux_loss_fn):
             auxiliary = aux_loss_fn(pred_seq, gt_skeletons)
+            active = set(phase_spec.active_losses)
+            for name, value in auxiliary.items():
+                if name in active:
+                    losses[name] = value * self._get_loss_weight(name, 1.0)
+
+        # Optional structured-readout regularization. Values emitted by every
+        # rollout step stay on the BPTT graph and are stacked as (B,T,...).
+        rollout_aux_loss_fn = getattr(
+            self.model, "compute_rollout_aux_losses", None)
+        if callable(rollout_aux_loss_fn):
+            stacked_outputs = {
+                name: torch.stack(values, dim=1)
+                for name, values in rollout_outputs.items()
+            }
+            auxiliary = rollout_aux_loss_fn(
+                pred_seq, gt_skeletons, stacked_outputs)
             active = set(phase_spec.active_losses)
             for name, value in auxiliary.items():
                 if name in active:
@@ -373,7 +394,9 @@ class UnifiedTrainer:
                     "endpoint_loss_weight", "reference_fit_mse",
                     "reference_fit_node_rmse_mm",
                     "reference_fit_endpoint_rmse_mm",
-                    "bend_explained_energy"):
+                    "bend_explained_energy", "generalized_coordinate_scale",
+                    "hov21_residual", "hov21_bend_residual_max_rad",
+                    "hov21_length_residual_max_log"):
             if self.config.get(key) is not None:
                 config[key] = self.config[key]
 

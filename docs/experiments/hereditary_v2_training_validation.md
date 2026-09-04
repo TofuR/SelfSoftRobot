@@ -281,3 +281,53 @@ workspace/runs/analysis/ishsm_v4/hereditary_spectrum_s42_epoch100/
 
 机器汇总：`workspace/runs/analysis/ishsm_v5_200/analysis_summary.json`。完整 ISHSM 对照、证据边界
 和当前模型选择见 `ishsm_optimization_validation_record.md`。
+
+## 12. 2026-09-04 HOV2.1：算子状态与广义几何融合
+
+HOV2.1 不恢复独立 ISHSM 动力学。它完整保留 Hereditary v2 的单调伪驱动、PI play、Maxwell
+精确 ZOH、equilibrium burn-in 和 packed operator state，只替换过度自由的 15 点坐标读出：
+
+```math
+\xi_t=\xi_{eq}(a_t)+W_{PI}q_t+W_M(h_t-e_t)
++\epsilon_{mem}(q_t,h_t-e_t),
+\qquad y_t=\mathcal G(\xi_t).
+```
+
+- `xi_eq` 是仅在 fit 上拟合并冻结的 geometry-aware monotone H0；
+- 记忆坐标为 8 个固定 POD 弯曲系数和 2 个分段 log-length；
+- `G` 使用正段长和角度累积确定性重建 15 个节点；
+- 每个 action/operator 读出方向在固定 fit-residual metric 中单位归一，标量增益非负；
+- `epsilon_mem` 不读取动作或骨架，只读取 PI/Maxwell 状态，并用
+  `f(memory)-f(0)` 构造性保证 `epsilon_mem(0,0)=0`；
+- 弯曲和伸长残差分别受 `0.05 rad`、`0.02 log-length` 硬上界与物理坐标损失约束；
+- 模型不再包含自由 `static_bias/static_dirs`、局部点位移 mode bank 或 15 点 residual MLP。
+
+实现入口：
+
+```text
+src/models/model_hereditary_geometry.py
+scripts/training/train_transition.py --mode hereditary_geo
+scripts/experiments/run_hov21_training.sh
+```
+
+2 epoch 真实数据 smoke 已完成：
+
+```text
+workspace/runs/training/hov21_smoke/hov21_memory_s42_20260904_000
+```
+
+退出码为 0，产生 `TRAINING_COMPLETE`、validation-best checkpoint，并将聚合 dev node mean 从
+epoch 1 的 `2.1343 mm` 改善到 epoch 2 的 `2.1261 mm`。该 smoke 使用 20-step H0，仅验证完整
+管线，不参与正式精度比较。当前定向回归为 72 项通过。
+
+正式 seed-42 因果比较锁定为同一 fit/dev、200 epoch 上限、相同 H0/PI/Maxwell/几何合同：
+
+| 运行 | 唯一变量 | GPU | 目录 |
+|---|---|---:|---|
+| HOV2.1 memory | 小型零平衡记忆残差 | 1 | `workspace/runs/training/hov21_formal/hov21_memory_s42_20260904_000` |
+| HOV2.1 explicit | `--hov21_residual none` | 2 | `workspace/runs/training/hov21_formal/hov21_explicit_s42_20260904_000` |
+
+两者按聚合 dev `validation.node_mean_mm` 保存 `best_eval_model.pt`，同时报告 endpoint。已有同数据
+200-epoch Hereditary v2 residual-0.5 作为精度基线，不重复训练。若 memory 未稳定优于 explicit，
+论文主模型应删除神经记忆残差；若二者都明显落后 HOV2，则说明固定 8+2 几何读出造成可量化的
+解释性--精度代价，而不是 PI/Maxwell 状态递推失效。

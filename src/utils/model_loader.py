@@ -128,6 +128,14 @@ def _detect_model_type(state_dict):
     if has_z_cell and (has_state_encoder or has_delta_head):
         return 'state_transition', 0
 
+    # HOV2.1 retains hereditary PI/Maxwell banks but replaces the free point
+    # readout with a fixed POD/generalized-coordinate geometry decoder.
+    if ({'bend_basis', 'generalized_coordinate_scale',
+         'pi_mode_directions_raw', 'maxwell_mode_directions_raw'} <= keys and
+            any(k.startswith('play.') for k in keys) and
+            any(k.startswith('maxwell.') for k in keys)):
+        return 'hereditary_geometry', 0
+
     # ISHSM has an explicit POD basis, frozen H0 reference buffers and stable
     # trainable modal time constants.  Detect before generic fallbacks.
     ishsm_required = {
@@ -397,6 +405,55 @@ def load_model(checkpoint_path, data_dir=None, device='cpu', window_size=None):
 
         model.load_state_dict(state_dict, strict=False)
         # norm_factor 从 checkpoint buffer 恢复
+        if 'action_norm_factor' in state_dict:
+            norm_factor = state_dict['action_norm_factor'].item()
+
+    elif model_type == 'hereditary_geometry':
+        if (not saved_cfg or
+                saved_cfg.get('model') != 'HereditaryGeometryModel'):
+            raise ValueError(
+                "HOV2.1 checkpoint 必须有 config.json 且 "
+                "model=HereditaryGeometryModel")
+        from src.models.model_hereditary_geometry import HereditaryGeometryModel
+        h0_reference = str(saved_cfg.get(
+            'h0_reference', 'fit_only_frozen_linear'))
+        reference_kind = h0_reference.removeprefix('fit_only_frozen_')
+        residual_mode = saved_cfg.get('hov21_residual', 'memory')
+        model = HereditaryGeometryModel(
+            action_dim=action_dim,
+            n_nodes=int(saved_cfg['n_nodes']),
+            window_size=window_size,
+            n_play=int(saved_cfg.get('n_play', 2)),
+            n_maxwell=int(saved_cfg.get('n_maxwell', 6)),
+            dt=float(saved_cfg.get('dt', 0.1)),
+            tau_range=(3.0 * float(saved_cfg.get('dt', 0.1)),
+                       float(saved_cfg.get('tau_max', 2.0))),
+            burnin_mode=saved_cfg.get('burnin_mode', 'equilibrium'),
+            n_bend_modes=int(saved_cfg.get('n_bend_modes', 8)),
+            section_intervals=tuple(saved_cfg.get(
+                'section_intervals', (7, 7))),
+            bend_basis=state_dict['bend_basis'],
+            generalized_coordinate_scale=
+                state_dict['generalized_coordinate_scale'],
+            reference_segment_lengths=
+                state_dict['reference_segment_lengths'],
+            reference_bend_bias=state_dict['reference_bend_bias'],
+            reference_bend_dirs=state_dict['reference_bend_dirs'],
+            reference_length_bias=state_dict['reference_length_bias'],
+            reference_length_dirs=state_dict['reference_length_dirs'],
+            reference_kind=reference_kind,
+            reference_knots=state_dict.get('reference_knots'),
+            reference_drive_weights=
+                state_dict.get('reference_drive_weights'),
+            base_position=state_dict['base_position'],
+            residual_mode=residual_mode,
+            bend_residual_max_rad=float(saved_cfg.get(
+                'hov21_bend_residual_max_rad', 0.05)),
+            length_residual_max_log=float(saved_cfg.get(
+                'hov21_length_residual_max_log', 0.02)),
+            episode_len=int(saved_cfg.get('episode_len', 40)),
+        ).to(device)
+        model.load_state_dict(state_dict)
         if 'action_norm_factor' in state_dict:
             norm_factor = state_dict['action_norm_factor'].item()
 

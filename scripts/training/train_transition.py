@@ -75,10 +75,13 @@ def _nonnegative_int_tuple(value):
 def build_parser():
     parser = argparse.ArgumentParser(description="统一状态转移训练（gt | open_loop）")
     add_common_args(parser, data_dir_default="data/seq_rz_c2_sk")
-    parser.add_argument("--mode", choices=["gt", "open_loop", "hereditary", "ishsm"],
+    parser.add_argument("--mode", choices=[
+                            "gt", "open_loop", "hereditary",
+                            "hereditary_geo", "ishsm"],
                         default="gt",
                         help="gt=每步真实s(tf=1.0,零漂移); open_loop=窗口开环(tf退火到0,喂自身预测); "
                              "hereditary=显式迟滞算子模型; "
+                             "hereditary_geo=HOV2.1 算子状态+广义坐标几何读出; "
                              "ishsm=可观测空间基上的8+2低维迟滞状态")
     parser.add_argument("--encoder", type=str, default="fractional",
                         choices=["ema", "fractional", "gamma", "gru", "transformer", "tcn"],
@@ -147,6 +150,21 @@ def build_parser():
     parser.add_argument("--residual_scale_max", type=float, default=0.3,
                         help="[hereditary] 残差幅度上限（归一化骨架单位）。F5: 修 F1 后重训，"
                              "若 residual_scale 仍钉在此上限则是真容量信号（可上调做对照实验）")
+    parser.add_argument(
+        "--hov21_residual", choices=["none", "memory"], default="memory",
+        help="[hereditary_geo] none=纯 PI/Maxwell 广义读出；memory=严格零平衡的小记忆残差")
+    parser.add_argument(
+        "--hov21_bend_residual_max_rad", type=float, default=0.05,
+        help="[hereditary_geo] 每个 POD 弯曲系数的记忆残差硬上界（rad）")
+    parser.add_argument(
+        "--hov21_length_residual_max_log", type=float, default=0.02,
+        help="[hereditary_geo] 每段 log-length 记忆残差硬上界")
+    parser.add_argument(
+        "--hov21_residual_bend_weight", type=float, default=0.1,
+        help="[hereditary_geo] 物理弯曲记忆残差平方惩罚权重")
+    parser.add_argument(
+        "--hov21_residual_length_weight", type=float, default=0.1,
+        help="[hereditary_geo] log-length 记忆残差平方惩罚权重")
     # ── ISHSM 专属（其它模式忽略）──
     parser.add_argument("--n_bend_modes", type=int, default=8,
                         help="[ishsm] 固定 POD 弯曲空间基数量")
@@ -280,11 +298,19 @@ def configure_transition_validation(args, phase_spec, config):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    if args.mode == "ishsm" and any(weight < 0 for weight in (
+    if args.mode in {"ishsm", "hereditary_geo"} and any(weight < 0 for weight in (
             args.bend_loss_weight, args.length_loss_weight,
             args.endpoint_loss_weight, args.h0_geometry_weight,
             args.h0_endpoint_weight)):
-        raise ValueError("ISHSM loss/H0 objective 权重必须非负")
+        raise ValueError("广义几何 loss/H0 objective 权重必须非负")
+    if args.mode == "hereditary_geo":
+        if args.hov21_bend_residual_max_rad <= 0:
+            raise ValueError("HOV2.1 bend residual 上界必须为正")
+        if args.hov21_length_residual_max_log <= 0:
+            raise ValueError("HOV2.1 length residual 上界必须为正")
+        if (args.hov21_residual_bend_weight < 0 or
+                args.hov21_residual_length_weight < 0):
+            raise ValueError("HOV2.1 residual loss 权重必须非负")
     if args.mode == "ishsm":
         if not 0.0 < args.ishsm_observation_gain_init < 1.0:
             raise ValueError("ISHSM observation gain 初值必须在 (0,1)")
@@ -351,6 +377,66 @@ def main(argv=None):
         model_tag = "hereditary"
         tf_info = (f"operators: J={args.n_play} plays, M={args.n_maxwell} maxwell, "
                    f"dt={args.dt}s (tf n/a — 无骨架反馈)")
+    elif args.mode == "hereditary_geo":
+        from src.models.model_hereditary_geometry import HereditaryGeometryModel
+        from src.models.model_ishsm import fit_ishsm_priors_from_arrays
+        if sum(args.section_intervals) != n_nodes - 1:
+            raise ValueError(
+                f"--section_intervals={args.section_intervals} 总和必须为 "
+                f"n_nodes-1={n_nodes - 1}")
+        if not 1 <= args.n_bend_modes <= n_nodes - 1:
+            raise ValueError("--n_bend_modes 必须在 [1,n_nodes-1]")
+        fit_actions, fit_skeletons = _load_ishsm_fit_arrays(
+            args.data_dir, action_contract.model_action_channels,
+            norm_dataset.norm_factor)
+        priors = fit_ishsm_priors_from_arrays(
+            fit_actions, fit_skeletons,
+            n_bend_modes=args.n_bend_modes,
+            section_intervals=args.section_intervals,
+            reference_kind=args.h0_reference,
+            n_reference_knots=args.h0_knots,
+            reference_fit_steps=args.h0_fit_steps,
+            reference_fit_objective=args.h0_fit_objective,
+            reference_geometry_weight=args.h0_geometry_weight,
+            reference_endpoint_weight=args.h0_endpoint_weight)
+        model = HereditaryGeometryModel(
+            action_dim=action_dim, n_nodes=n_nodes,
+            window_size=temp_cfg["window_size"],
+            n_play=args.n_play, n_maxwell=args.n_maxwell, dt=args.dt,
+            tau_range=(3.0 * args.dt, args.tau_max),
+            burnin_mode=args.burnin_mode,
+            n_bend_modes=args.n_bend_modes,
+            section_intervals=args.section_intervals,
+            bend_basis=priors["bend_basis"],
+            generalized_coordinate_scale=
+                priors["generalized_coordinate_scale"],
+            reference_segment_lengths=priors["reference_segment_lengths"],
+            reference_bend_bias=priors["reference_bend_bias"],
+            reference_bend_dirs=priors["reference_bend_dirs"],
+            reference_length_bias=priors["reference_length_bias"],
+            reference_length_dirs=priors["reference_length_dirs"],
+            reference_kind=priors["reference_kind"],
+            reference_knots=priors["reference_knots"],
+            reference_drive_weights=priors["reference_drive_weights"],
+            base_position=priors["base_position"],
+            residual_mode=args.hov21_residual,
+            bend_residual_max_rad=args.hov21_bend_residual_max_rad,
+            length_residual_max_log=args.hov21_length_residual_max_log,
+            episode_len=args.episode_len).to(device)
+        spec = model.training_spec
+        spec.phases[0].dense_step_weight = args.dense_step_weight
+        model_tag = "hereditary_geometry"
+        tf_info = (
+            f"HOV2.1 operators J={args.n_play}, M={args.n_maxwell}; "
+            f"geometry={args.n_bend_modes}+{len(args.section_intervals)}; "
+            f"residual={args.hov21_residual}")
+        config["loss_weights"].update({
+            "bend": args.bend_loss_weight,
+            "length": args.length_loss_weight,
+            "endpoint": args.endpoint_loss_weight,
+            "residual_bend": args.hov21_residual_bend_weight,
+            "residual_length": args.hov21_residual_length_weight,
+        })
     elif args.mode == "ishsm":
         from src.models.model_ishsm import ISHSMModel, fit_ishsm_priors_from_arrays
         if sum(args.section_intervals) != n_nodes - 1:
@@ -433,11 +519,17 @@ def main(argv=None):
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"\nModel: {model_tag}（mode={args.mode}）")
-    if args.mode == "hereditary":
+    if args.mode in {"hereditary", "hereditary_geo"}:
         print(f"  Action dim: {action_dim}, N nodes: {n_nodes}, "
               f"episode_len(K): {args.episode_len}, dt: {model.dt.item():g}s")
         print(f"  Play r-grid: {[f'{r:.3f}' for r in model.play.thresholds.tolist()]}")
         print(f"  Maxwell tau-grid: {[f'{t:.2f}' for t in model.maxwell.taus.tolist()]}s")
+        if args.mode == "hereditary_geo":
+            print(f"  Geometry: {model.n_bend_modes}+{model.n_sections}, "
+                  f"POD fit energy: {priors['bend_explained_energy']:.4%}")
+            print(f"  H0: {model.reference_kind}/{args.h0_fit_objective}, "
+                  f"node/tip RMSE: {priors['reference_fit_node_rmse_mm']:.4f}/"
+                  f"{priors['reference_fit_endpoint_rmse_mm']:.4f} mm")
     elif args.mode == "ishsm":
         print(f"  Action dim: {action_dim}, N nodes: {n_nodes}, "
               f"state: {model.n_bend_modes}+{model.n_length_states}, "
@@ -471,6 +563,35 @@ def main(argv=None):
         config["tau_max"] = args.tau_max
         config["burnin_mode"] = args.burnin_mode
         config["residual_scale_max"] = args.residual_scale_max
+    elif args.mode == "hereditary_geo":
+        config.update({
+            "dt": args.dt,
+            "n_play": args.n_play,
+            "n_maxwell": args.n_maxwell,
+            "tau_max": args.tau_max,
+            "burnin_mode": args.burnin_mode,
+            "n_bend_modes": args.n_bend_modes,
+            "section_intervals": list(args.section_intervals),
+            "h0_reference": f"fit_only_frozen_{args.h0_reference}",
+            "h0_knots": args.h0_knots,
+            "h0_fit_steps": args.h0_fit_steps,
+            "h0_fit_objective": args.h0_fit_objective,
+            "h0_geometry_weight": args.h0_geometry_weight,
+            "h0_endpoint_weight": args.h0_endpoint_weight,
+            "reference_fit_mse": priors["reference_fit_mse"],
+            "reference_fit_node_rmse_mm":
+                priors["reference_fit_node_rmse_mm"],
+            "reference_fit_endpoint_rmse_mm":
+                priors["reference_fit_endpoint_rmse_mm"],
+            "bend_explained_energy": priors["bend_explained_energy"],
+            "generalized_coordinate_scale":
+                priors["generalized_coordinate_scale"].tolist(),
+            "hov21_residual": args.hov21_residual,
+            "hov21_bend_residual_max_rad":
+                args.hov21_bend_residual_max_rad,
+            "hov21_length_residual_max_log":
+                args.hov21_length_residual_max_log,
+        })
     elif args.mode == "ishsm":
         config.update({
             "dt": args.dt,

@@ -34,8 +34,8 @@ def main(argv=None):
 
     info = load_model(args.checkpoint, device="cpu")
     model = info["model"]
-    assert type(model).__name__ == "HereditaryOperatorModel", (
-        f"checkpoint 不是 HereditaryOperatorModel: {type(model).__name__}")
+    assert hasattr(model, "hysteresis_report"), (
+        f"checkpoint 不提供迟滞谱合同: {type(model).__name__}")
 
     rep = model.hysteresis_report()
     r = rep["play_thresholds"].numpy()          # (J,)
@@ -79,7 +79,7 @@ def main(argv=None):
     axes[1].set_xscale("log")
     axes[1].legend(fontsize=8)
     axes[1].grid(alpha=0.3)
-    fig.suptitle("HereditaryOperatorModel hysteresis fingerprint")
+    fig.suptitle(f"{type(model).__name__} hysteresis fingerprint")
     fig.tight_layout()
     png = os.path.join(args.out, "hysteresis_spectrum.png")
     fig.savefig(png, dpi=150)

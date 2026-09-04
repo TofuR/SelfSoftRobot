@@ -321,9 +321,19 @@ def fit_ishsm_priors_from_arrays(
             basis[:, mode] *= -1
     energy = singular ** 2
     explained = float(energy[:n_bend_modes].sum() / max(energy.sum(), 1e-12))
+    bend_scores = bend_residual @ basis
+    length_residual = residual[:, n_segments:]
+    generalized_scale = np.concatenate([
+        np.maximum(bend_scores.std(axis=0), 0.02),
+        np.maximum(length_residual.std(axis=0), 0.005),
+    ]).astype(np.float32)
     return {
         "bend_basis": basis.astype(np.float32),
         "bend_explained_energy": explained,
+        # Standard deviations in the fixed POD-bending / section-log-length
+        # coordinates. HOV2.1 uses this immutable metric to normalize learned
+        # readout directions without changing the ISHSM state update.
+        "generalized_coordinate_scale": generalized_scale,
         "reference_segment_lengths": reference_lengths,
         "reference_bend_bias": np.asarray(bend_bias, dtype=np.float32),
         "reference_bend_dirs": np.asarray(bend_dirs, dtype=np.float32),
