@@ -331,3 +331,13 @@ epoch 1 的 `2.1343 mm` 改善到 epoch 2 的 `2.1261 mm`。该 smoke 使用 20-
 200-epoch Hereditary v2 residual-0.5 作为精度基线，不重复训练。若 memory 未稳定优于 explicit，
 论文主模型应删除神经记忆残差；若二者都明显落后 HOV2，则说明固定 8+2 几何读出造成可量化的
 解释性--精度代价，而不是 PI/Maxwell 状态递推失效。
+
+正式训练已在提交 `495b8b1` 的干净工作树上启动，两个 run 的 `code_status_at_start.txt` 均为空：
+
+```text
+tmux hov21_memory_s42_g1   -> GPU 1
+tmux hov21_explicit_s42_g2 -> GPU 2
+```
+
+启动核验时两组均已完成 epoch 2 验证并写入周期 checkpoint；memory/explicit 的聚合 dev node mean
+分别为 `1.9045/1.9115 mm`。这只是早期健康信号，不用于最终模型排序。
