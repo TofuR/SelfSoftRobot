@@ -379,7 +379,7 @@ class CaptureWindow(QMainWindow):
         self.btn_browse = QPushButton("…"); self.btn_browse.setFixedWidth(34); self.btn_browse.clicked.connect(self._on_browse); g.addWidget(self.btn_browse, 0, 3)
         g.addWidget(QLabel("模式"), 1, 0); self.cb_mode = QComboBox()
         self.cb_mode.addItems(["手动录制 (Manual)", "自动随机游走 (Random)",
-                               "自动往返扫描 (Sweep)", "actions6.csv 回放 (Replay)"])
+                               "自动往返扫描 (Sweep)", "CSV 按行回放 (Replay)"])
         g.addWidget(self.cb_mode, 1, 1, 1, 2)
         self.cb_ts = QCheckBox("自动时间戳命名"); self.cb_ts.setChecked(True); g.addWidget(self.cb_ts, 1, 3)
         g.addWidget(QLabel("动作间隔(s)"), 2, 0); self.sb_interval = QDoubleSpinBox(); self.sb_interval.setRange(0.05, 5.0); self.sb_interval.setSingleStep(0.05); self.sb_interval.setValue(0.20); g.addWidget(self.sb_interval, 2, 1)
@@ -387,6 +387,8 @@ class CaptureWindow(QMainWindow):
         g.addWidget(QLabel("random seed"), 3, 0); self.sb_seed = QSpinBox(); self.sb_seed.setRange(0, 2147483647); self.sb_seed.setValue(0); self.sb_seed.setSpecialValueText("自动"); g.addWidget(self.sb_seed, 3, 1)
         g.addWidget(QLabel("预生成步数"), 3, 2); self.sb_steps = QSpinBox(); self.sb_steps.setRange(0, 1000000); self.sb_steps.setValue(0); self.sb_steps.setSpecialValueText("在线"); g.addWidget(self.sb_steps, 3, 3)
         g.addWidget(QLabel("Replay 文件"), 4, 0); self.le_replay = QLineEdit(""); g.addWidget(self.le_replay, 4, 1, 1, 2)
+        self.le_replay.setToolTip("支持 c0..c5 或 t_sec,c0..c5，单位 kPa；忽略时间列，按动作间隔逐行执行。超出 min/max 拒绝启动；结束保持最后命令。")
+        self.sb_interval.setToolTip("Replay 每行执行一次；改变此间隔可采集同一序列的不同速率。rise/fall 限速仍生效。")
         self.btn_replay = QPushButton("…"); self.btn_replay.setFixedWidth(34); self.btn_replay.clicked.connect(self._on_browse_replay); g.addWidget(self.btn_replay, 4, 3)
         g.addWidget(QLabel("最大 frame age(s)"), 5, 0)
         self.sb_max_frame_age = QDoubleSpinBox(); self.sb_max_frame_age.setRange(0.0, 60.0)

@@ -39,6 +39,23 @@ python main_capture.py --group1 COM3 --group2 COM46 --ndi COM9
    rise/fall 速率上限（kPa/s，填 0 表示不限速），Random 可填 seed 和预生成步数，Replay 选择已有 `actions6.csv`。
 6. **■ 停止采集** → **⚡ 生成 npz**（自动把 `cam0...camN` 全部传给 `capture_to_npz`）/ **📋 导出汇总 CSV**。
 
+Replay 按 CSV **每行气压**执行，使用 GUI「动作间隔(s)」，忽略 CSV 时间列。
+支持无表头六列 `c0..c5`，或旧 `t_sec,c0..c5` 七列文件；有表头时须使用上述名称。
+单位为 kPa，不能直接输入归一化四维动作或 `commands.csv`。非法数值、列数、
+设备范围外气压、超出 GUI min/max 的原始值或映射值都会在启动前拒绝，并报告位置。
+当前命令也须在 min/max 内（若 min>0，先手动准备到范围内）。
+
+同一文件分别设置 0.2 s、0.1 s 即可进行不同速率采集；每行一次下发、一次抓帧，
+第一行在一个间隔后开始。重复气压行用于持续采样保持段；改变间隔也会同比改变保持段时长。
+`settle` 自动限制为小于动作间隔；GUI 间隔在开始时固定，本次录制中修改不生效。
+原有 rise/fall 限速仍生效，比较 `commands.csv` 的 requested 与 action_command 判断是否改变轨迹。
+回放实际读取的气压表另存为 `replay_actions.csv`，其 SHA-256 和间隔写入 `meta.json`。
+
+最后一行完成采样后自动结束并写元信息；**结束/停止录制保持最后命令**，需要释放时点击「全部归零」，
+也可在协议末尾明确安排零压行。录制中修改 min/max 若使剩余序列或当前命令超限，会停止并归零。
+图像须在当前命令之后到达，跨命令或过期帧不写入；这仍是主机接收时间检查，
+不是硬件曝光同步。Qt 调度存在抖动，实际速率应以 `commands.csv` 为准。
+
 来源约束对 Manual/Random/Sweep/Replay 全部生效。权威合同写入
 `meta.json.channel_source6`，`channel_equalities` 作为旧工具兼容派生字段；
 `commands.csv` 同时保存约束前 `proposed0..5`、约束后 `requested0..5`、最终

@@ -30,6 +30,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import os
@@ -185,6 +186,8 @@ class ValveRecorder(QObject):
         self._driver = None
         self._replay = None
         self._replay_done = False
+        self._run_token = object()
+        self._last_command_time = 0.0
         self._pending_commands = {}
         self._ndi_count = 1
         self._max_frame_age = 0.5
@@ -265,6 +268,18 @@ class ValveRecorder(QObject):
     def update_ranges(self, lows6, highs6):
         """录制中实时改范围（random/sweep 下一拍生效）。未在录制 / 手动模式 → 无害 no-op。
         recorder 住 GUI 线程，`_on_tick` 也在该线程读 driver → 无竞争。"""
+        if self.recording and self._replay is not None:
+            try:
+                self._replay.validate_ranges(lows6, highs6, self._channel_sources)
+                if any(not lo <= value <= hi for lo, value, hi in
+                       zip(lows6, self.controller.last_command, highs6)):
+                    raise ValueError("当前命令超出新 min/max")
+            except ValueError as error:
+                self.log.emit(f"⚠ 回放范围修改无效，停止并归零：{error}")
+                self.stop_recording()
+                self.controller.zero_all()
+                return
+            self._meta.update(lo6=list(lows6), hi6=list(highs6))
         if self._driver is None:
             return
         lo = [float(x) for x in list(lows6)[:N_CHAN]]
@@ -327,6 +342,8 @@ class ValveRecorder(QObject):
         self._active_channel = int(active_channel)
         self._channel_sources = sources
         self._channel_equalities = equalities
+        self._run_token = object()
+        self._last_command_time = 0.0
         self._pending_commands.clear()
         self._replay_done = False
         self._max_frame_age = max(0.0, float(max_frame_age))
@@ -347,12 +364,17 @@ class ValveRecorder(QObject):
         if mode == "replay":
             if not replay_path:
                 self.log.emit("⚠ replay 模式缺少 actions6.csv。")
-                return
+                return False
             try:
                 self._replay = ReplayDriver(replay_path)
+                self._replay.validate_ranges(lo, hi, sources)
+                if any(not a <= value <= b for a, value, b in
+                       zip(lo, self.controller.last_command, hi)):
+                    raise ValueError("当前命令超出 min/max；请先手动设置到范围内再开始回放")
             except Exception as e:
                 self.log.emit(f"⚠ replay 文件无效：{e}")
-                return
+                self._replay = None
+                return False
 
         os.makedirs(os.path.dirname(seq_dir), exist_ok=True)
         try:
@@ -363,6 +385,14 @@ class ValveRecorder(QObject):
         for camera_dir in self._cam_dirs:
             os.mkdir(camera_dir)
         self.seq_dir = seq_dir
+        replay_hash = ""
+        if self._replay is not None:
+            protocol = "c0,c1,c2,c3,c4,c5\n" + "".join(
+                ",".join(repr(value) for value in action) + "\n"
+                for action in self._replay.actions)
+            with open(os.path.join(seq_dir, "replay_actions.csv"), "w", encoding="utf-8", newline="") as stream:
+                stream.write(protocol)
+            replay_hash = hashlib.sha256(protocol.encode("utf-8")).hexdigest()
 
         self._f_frame = open(os.path.join(seq_dir, "frame_times.txt"), "w")
         self._f_act6 = open(os.path.join(seq_dir, "actions6.csv"), "w", newline="")
@@ -409,6 +439,10 @@ class ValveRecorder(QObject):
             "ndi_count": self._ndi_count,
             "random_seed": random_seed,
             "pre_generate_steps": int(pre_generate_steps),
+            "replay_actions_sha256": replay_hash,
+            "replay_timing": "gui_interval_ignore_csv_time",
+            "replay_terminal_policy": "hold_last_command",
+            "replay_action_count": len(self._replay.actions) if self._replay else 0,
             "replay_path": os.path.abspath(replay_path) if replay_path else "",
             "required_groups": sorted(int(g) for g in (required_groups or [])),
             "max_frame_age": self._max_frame_age,
@@ -450,10 +484,18 @@ class ValveRecorder(QObject):
         if not self.recording:
             return
         if self._replay is not None:
+            if any(not lo <= value <= hi for lo, value, hi in
+                   zip(self._meta["lo6"], self.controller.last_command, self._meta["hi6"])):
+                self.log.emit("⚠ 当前命令超出回放 min/max，停止并归零。")
+                self.stop_recording()
+                self.controller.zero_all()
+                return
             action = self._replay.next_action()
             if action is None:
                 self._replay_done = True
-                QTimer.singleShot(int(max(100, (self._settle_s + 0.3) * 1000)), self.stop_recording)
+                token = self._run_token
+                QTimer.singleShot(300, lambda: self.stop_recording()
+                                  if self.recording and self._run_token is token else None)
                 return
         else:
             action = self._driver.next_action() if self._driver is not None else list(self._manual_target)
@@ -482,14 +524,18 @@ class ValveRecorder(QObject):
             self.log.emit(f"⚠ applied6 等值残差 {residuals} 超限，停止采集。")
             self.stop_recording()
             return
-        # 安排 settle 后抓取（同一 action 向量 → (action_i, frame_i) 精确配对）
+        self._last_command_time = self._pending_commands[command_id]["t_command"]
+        token = self._run_token
+        sent_at = self._last_command_time
+        # 仅接收该命令之后到达且未跨入下一命令的缓存帧。
         QTimer.singleShot(int(round(self._settle_s * 1000)),
-                           lambda a=applied, cid=command_id: self._on_grab(a, cid))
+                           lambda a=applied, cid=command_id: self._on_grab(a, cid)
+                           if self._run_token is token and self._last_command_time == sent_at else None)
         QTimer.singleShot(300, lambda cid=command_id: self._finalize_command(cid))
         if self._replay is not None:
             delay = self._replay.next_delay(self._action_interval_s)
             if delay is not None:
-                self._clock.start(int(round(delay * 1000)))
+                self._clock.start(max(1, math.ceil((sent_at + delay - time.monotonic()) * 1000)))
         else:
             self._clock.start(int(round(self._action_interval_s * 1000)))
 
@@ -497,6 +543,12 @@ class ValveRecorder(QObject):
     def _on_grab(self, action, command_id):
         """settle 后：取缓存最新 frame/ndi，与 action 同索引落盘。"""
         if not self.recording:
+            return
+        record = self._pending_commands.get(command_id)
+        # finalize 可能早于较长的 settle；命令时间独立保存在抓取绑定中。
+        if record is not None and record["t_command"] < self._last_command_time:
+            return
+        if list(action) != self.controller.last_command:
             return
         now_abs = time.monotonic()
         t_grab = max(0.0, now_abs - self.t0)
@@ -507,7 +559,8 @@ class ValveRecorder(QObject):
         frame_ages = [max(0.0, now_abs - t) if t > 0 else float("inf")
                       for t in self._frame_ts]
         bad_cameras = [i for i, (frame, age) in enumerate(zip(frames, frame_ages))
-                       if frame is None or age > self._max_frame_age]
+                       if frame is None or age > self._max_frame_age
+                       or self._frame_ts[i] <= self._last_command_time]
         if cv2 is None or bad_cameras:
             if not self._warned_no_frame:
                 self._warned_no_frame = True
@@ -603,6 +656,7 @@ class ValveRecorder(QObject):
         if not self.recording:
             return
         self.recording = False
+        self._run_token = object()
         self._clock.stop()
         self._driver = None
         self._replay = None
@@ -617,14 +671,14 @@ class ValveRecorder(QObject):
                 pass
         self._f_frame = self._f_act6 = self._f_ndi = self._f_cmd = self._f_sample = None
         self._act6_writer = self._cmd_writer = self._sample_writer = None
-        self._meta.update(stop_iso=_now_iso(), frames=int(frames))
+        self._meta.update(stop_iso=_now_iso(), frames=int(frames), replay_completed=self._replay_done)
         try:
             with open(os.path.join(self.seq_dir, "meta.json"), "w") as fh:
                 json.dump(self._meta, fh, indent=2, ensure_ascii=False)
         except Exception as e:
             self.log.emit(f"meta.json 写入失败: {e}")
         self.recording_stopped.emit(self.seq_dir, frames)
-        self.log.emit(f"停止录制，共 {frames} 拍（帧）-> {self.seq_dir}")
+        self.log.emit(f"停止录制，共 {frames} 拍（帧）-> {self.seq_dir}；保持最后命令，需要释放请点击全部归零。")
 
     # ---------------- 生产者槽（更新缓存 + 推预览）----------------
     @pyqtSlot(int, np.ndarray, float)
@@ -648,6 +702,7 @@ class ValveRecorder(QObject):
 
     @pyqtSlot(list, float)
     def _on_action(self, action: list, t_abs: float):
+        self._last_command_time = float(t_abs)
         # 仅推 GUI 实时曲线；csv 在 _on_grab 写（避免双写）
         self.pressure_status.emit(list(action)[:N_CHAN])
 

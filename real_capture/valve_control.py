@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import csv
 import itertools
+import math
 import random
 import time
 from array import array
@@ -38,6 +39,8 @@ def _clamp6(vec) -> List[float]:
     v = [float(x) for x in list(vec)[:N_CHAN]]
     if len(v) < N_CHAN:
         v += [P_MIN] * (N_CHAN - len(v))
+    if not all(math.isfinite(x) for x in v):
+        raise ValueError("气压必须是有限数值")
     return [max(P_MIN, min(P_MAX, x)) for x in v]
 
 
@@ -155,22 +158,36 @@ class PressureSlewLimiter:
 
 
 def load_action_sequence(path: str):
-    """加载旧/新 actions6.csv，返回相对时间和六通道动作。"""
-    rows = []
-    with open(path, newline="", encoding="utf-8") as f:
-        for row in csv.reader(f):
-            try:
-                values = [float(x) for x in row[:7]]
-            except (TypeError, ValueError):
+    """读取六列气压或 t_sec+c0..c5；时间列忽略，返回行下标和动作。
+
+    不跳过坏数据、不裁剪气压。只接受明确的表头/列数，防止将 commands.csv
+    的命令 ID、时间和状态误当作气压。
+    """
+    actions = []
+    width = None
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        for line, row in enumerate(csv.reader(f), 1):
+            if not row or all(not cell.strip() for cell in row):
                 continue
-            if len(values) == 7:
-                rows.append(values)
-    if not rows:
-        raise ValueError(f"actions6.csv 没有有效的 7 列数值记录: {path}")
-    times = [max(0.0, float(r[0]) - float(rows[0][0])) for r in rows]
-    if any(b <= a for a, b in zip(times, times[1:])):
-        raise ValueError("actions6.csv 时间戳必须严格递增")
-    return times, [_clamp6(r[1:7]) for r in rows]
+            row = [cell.strip() for cell in row]
+            if width is None:
+                width = len(row)
+                if row in ([f"c{i}" for i in range(6)],
+                           ["t_sec", *[f"c{i}" for i in range(6)]]):
+                    continue
+            if width not in (6, 7) or len(row) != width:
+                raise ValueError(f"CSV 第 {line} 行必须为六列气压或时间+六列气压")
+            try:
+                action = [float(x) for x in row[-6:]]
+            except ValueError as error:
+                raise ValueError(f"CSV 第 {line} 行气压不是数值；表头须为 c0..c5 或 t_sec,c0..c5") from error
+            for i, value in enumerate(action):
+                if not math.isfinite(value) or not P_MIN <= value <= P_MAX:
+                    raise ValueError(f"CSV 第 {line} 行 ch{i} 气压 {value} 不在有限范围 [{P_MIN}, {P_MAX}] kPa")
+            actions.append(action)
+    if not actions:
+        raise ValueError("CSV 没有气压记录")
+    return list(range(len(actions))), actions
 
 
 class ValveController(QObject):
@@ -576,7 +593,7 @@ class ValveDriver(QObject):
 
 
 class ReplayDriver:
-    """按 actions6.csv 的相对时间顺序回放六维动作。"""
+    """按行回放六维动作；每行间隔由 GUI 指定，与 CSV 时间列无关。"""
 
     def __init__(self, path: str):
         self.path = path
@@ -590,9 +607,18 @@ class ReplayDriver:
         self.index += 1
         return list(action)
 
+    def validate_ranges(self, lows, highs, sources=None):
+        lo, hi = list(lows), list(highs)
+        if len(lo) != N_CHAN or len(hi) != N_CHAN:
+            raise ValueError("min/max 必须各有六个值")
+        for i, (a, b) in enumerate(zip(lo, hi)):
+            if not (math.isfinite(a) and math.isfinite(b) and P_MIN <= a <= b <= P_MAX):
+                raise ValueError(f"ch{i} min/max 无效")
+        for row, action in enumerate(self.actions[self.index:], self.index + 1):
+            projected = apply_channel_sources(action, sources)
+            for i, value in enumerate(action):
+                if not lo[i] <= value <= hi[i] or not lo[i] <= projected[i] <= hi[i]:
+                    raise ValueError(f"动作第 {row} 行 ch{i}: 原值 {value}, 映射值 {projected[i]} 超出 [{lo[i]}, {hi[i]}] kPa")
+
     def next_delay(self, default_s=0.2):
-        if self.index == 0:
-            return max(0.02, float(default_s))
-        if self.index >= len(self.times):
-            return None
-        return max(0.02, self.times[self.index] - self.times[self.index - 1])
+        return max(0.02, float(default_s))

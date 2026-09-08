@@ -2,7 +2,7 @@
 title: ICRA 活跃论文索引
 kind: paper-index
 status: active
-updated: 2026-09-01
+updated: 2026-09-08
 scope: active manuscript structure, claims, and experiment placeholders
 supersedes: []
 superseded_by: null
@@ -11,7 +11,13 @@ sources:
   - ../overview/status.md
 ---
 
-# ICRA 论文规划 · 软体机器人整体形态自建模(非马尔可夫记忆视角)
+# ICRA 论文规划 · 部分观测下的全身形状控制
+
+> **2026-09-08 研究方向更新：**以部分观测控制框架为主线，无观测段由 hereditary 模型预测连续运动，新观测到来后进行状态校正和动作更新。保留历史与重新初始化作为实验比较，不作为引言动机。
+>
+> 当前唯一设计：[遮挡下 hereditary 两重校正](../designs/2026-09-08_partial_observation_hereditary_control.md)，待审阅后实施；第一重保留并校正历史，第二重比较预计算映射与一次局部优化对剩余序列的修订。[v6 中文初稿](manuscript_partial_observation_v6_zh.md)仍属旧设置，尚未同步此方案；结果保留占位。
+>
+> 下方 2026-08 阶段的定位、首次主张和文献判断仅保留供追溯，不作为本次方向与贡献依据；当前方法和文献边界以以上设计及稿件为准。
 
 > **日期**:2026-08-09 · 分支 `feat/real-data-transition`
 > **状态**:调研完成(两个并行 workflow 核实 100+ 篇文献)+ 科学问题重构完成 + 添加项与实验计划已定

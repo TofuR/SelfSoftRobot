@@ -2,7 +2,7 @@
 title: SelfSoftRobot 文档地图
 kind: map
 status: active
-updated: 2026-09-01
+updated: 2026-09-08
 scope: canonical documentation navigation and ownership
 supersedes: []
 superseded_by: null
@@ -58,6 +58,7 @@ python scripts/maintenance/check_docs_governance.py
 ## 设计 (`designs/`)
 | 文档 | 说明 |
 |---|---|
+| [`designs/2026-09-08_partial_observation_hereditary_control.md`](designs/2026-09-08_partial_observation_hereditary_control.md) | **遮挡控制唯一设计（待审阅）**：保留历史的状态校正＋剩余序列修正；并列保留预计算映射与一次局部优化，含公式、时序、比较实验及文献讨论 |
 | [`designs/2026-08-29_hereditary_operator_model.md`](designs/2026-08-29_hereditary_operator_model.md) | **HereditaryOperatorModel v2 设计与实现边界**：PI play + 广义 Maxwell + 局部模态读出、验证协议和文献边界 |
 | [`designs/2026-08-31_repository_organization_refactor.md`](designs/2026-08-31_repository_organization_refactor.md) | **仓库整理与重构提案**：统一数据/运行路径、manifest 谱系、训练验证与早停共识、文档治理及分阶段迁移验收 |
 
