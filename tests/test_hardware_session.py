@@ -54,6 +54,63 @@ class HardwareSessionTest(unittest.TestCase):
     def setUpClass(cls):
         app()
 
+    def test_disconnected_group_config_does_not_rebuild_connected_controller(self):
+        from dataclasses import replace
+        session=HardwareSession();controller=session.prepare_valves();session.connect_prepared_valves((1,))
+        changed=replace(session.profile,group2_port='COM99')
+        session.apply_disconnected_config(changed)
+        self.assertIs(session.valve_controller,controller)
+        self.assertEqual(session.profile.group2_port,'COM99')
+        with self.assertRaises(HardwareSessionError):session.apply_disconnected_config(replace(changed,group1_port='COM98'))
+        self.assertEqual(session.profile,changed);session.shutdown()
+
+    def test_dispatch_uses_latest_filter_and_zero_bypasses_it(self):
+        import threading,time
+        session=HardwareSession();controller=session.prepare_valves();session.connect_prepared_valves((1,2))
+        transport=session.create_transport((1,2));receipts=[]
+        controller.configure_safety([0.]*6,[0.]*6)
+        def transact(fn):
+            worker=threading.Thread(target=lambda:receipts.append(fn()));worker.start()
+            end=time.monotonic()+2
+            while worker.is_alive() and time.monotonic()<end:app().processEvents();time.sleep(.001)
+            worker.join(1);self.assertFalse(worker.is_alive())
+            self.assertEqual(receipts[-1].status,'ack');return receipts[-1]
+        transport.command_filter=lambda action:[min(value,3.) for value in action]
+        receipt=transact(lambda:transport.send([10.]*6,(1,2),.5))
+        self.assertEqual(receipt.requested6,(10.,)*6);self.assertEqual(receipt.applied6,(3.,)*6)
+        transport.command_filter=lambda action:(_ for _ in ()).throw(ValueError('normal commands blocked'))
+        zero=transact(lambda:transport.zero(.5));self.assertEqual(zero.applied6,(0.,)*6)
+        transport.close();session.shutdown()
+
+    def test_optional_ndi_buffer_has_monotonic_samples_and_rejects_old_epoch(self):
+        session=HardwareSession();session._ndi_epoch=2
+        session._buffer_ndi([1.]*11,10.,1);session._buffer_ndi([2.]*11,11.,2)
+        samples=session.evaluation_samples(10.5,12.)
+        self.assertEqual(samples['samples'],[(11.,[2.]*11)])
+        self.assertFalse(samples['connected'])
+        session._on_ndi_data([1.]*11,12.,1)
+        self.assertEqual(session.states['ndi'],DeviceState.OFF)
+        session._on_camera_error(0,'old camera',session.camera_epoch-1)
+        self.assertEqual(session.states['camera'],DeviceState.OFF)
+        samples['samples'][0][1][0]=99
+        self.assertEqual(session.evaluation_samples(0,12.)['samples'][0][1][0],2.)
+
+    def test_capture_buffer_owns_pixels_and_invalidates_old_generation(self):
+        import numpy as np
+        session = HardwareSession()
+        frame = np.ones((4,5,3),dtype=np.uint8)
+        epoch = session.camera_epoch
+        session._buffer_frame(0,frame,1.,epoch)
+        frame[:] = 9
+        first,stamp = session.latest_camera_frame(0)
+        self.assertEqual(stamp,1.)
+        self.assertTrue(np.all(first==1))
+        first[:] = 7
+        self.assertTrue(np.all(session.latest_camera_frame(0)[0]==1))
+        session.stop_cameras()
+        session._buffer_frame(0,frame,2.,epoch)
+        self.assertIsNone(session.latest_camera_frame(0))
+
     def test_mock_valve_uses_controller_and_becomes_ready(self):
         session = HardwareSession()
         session.apply_profile(HardwareProfile.all_mock())

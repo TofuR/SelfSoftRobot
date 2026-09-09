@@ -2,7 +2,7 @@
 title: SelfSoftRobot 项目状态快照
 kind: overview
 status: active
-updated: 2026-09-01
+updated: 2026-09-10
 scope: active research line, engineering migration, evidence boundaries
 supersedes: []
 superseded_by: null
@@ -16,7 +16,23 @@ sources:
 > “现在到哪了 + 接下来做什么”。本页是唯一当前状态入口；具体参数和数值以 dataset/run manifest 与实验记录为准。
 > 文献详见 [`../background/literature.md`](../background/literature.md); 模型架构详见 [`project_help.md`](project_help.md); 研究方向详见 [`../directions/`](../directions/)。
 
-## 0. 2026-09-01 当前结论
+## 0. 2026-09-09 部分观测回放与反馈加速
+
+- 已在 `feat/partial-observation-replay` 开展固定图像遮挡的上实机前验证：运动窗口选择、原始命令/图像配对、hereditary 非推进读出、状态校正、B 全剩余后缀优化与可视化回放。
+- 两条输出分别为“假设执行修订动作并注入录制图像”的流程诊断，以及始终使用原采集动作的预测对照。前者不提供新动作的真实响应证据。
+- 已实现向量化图像前端、批量 B、显式导数 B 和预计算 A。80 帧窗口上默认显式 B 两次单线程完整反馈计算 P95 为 48.1/58.5 ms、最大 54.6/139.2 ms；复测有一次超过 100 ms，两次均低于 200 ms。A 更快但仅接受 16/79 次后缀修订。四线程和繁忙 GPU 探测未带来进一步收益。
+- 当前实现、计时边界及数值分支敏感性见[回放验证记录](../experiments/partial_observation_replay_validation.md)。尾部抖动、相机/通信延迟、异步执行整合和实机控制验证仍待处理；离线计算结果不等于实机整周期保证。
+
+### 工作台接入
+
+- 2026-09-10：反馈改为独立快照、按模型周期截止整体提交或丢弃，后台任务与图像保存队列有容量上限；新增逐步时延/完整序列修订审计及初始规划参数弹窗。最终虚拟 GUI 40 步中 39 次按期提交、1 次超时丢弃；初始规划 274.2 ms，实际发令间隔 P95/最大 116.3/121.0 ms，仍非严格 100 ms。可选 NDI、全遮挡停止及独立包流程均有测试，详见接入验证记录。
+
+- `real_validation` 默认改为设备模型 → 部署预热 → 目标规划 → 执行记录四页；独立六腔调压/限制、非零输入状态估计与质量预热、自动时域搜索、轨迹/压力预览和手动接管已接入。加载不发压力，不记录准备动作。旧 OpenLoop 仅在显式兼容入口启用，可导出含 HTML 图解的自包含 PC 包。
+- 四步虚拟设备 GUI 已完成较大弯曲目标的 40 条动作 ACK、40 帧反馈、36 次后缀更新、手动接管和最后归零（redesigned_006）；虚拟发令间隔 P95/最大 126.7/139.4 ms。已修复阀端实际限速后剩余动作的接续约束。相机缓冲与旧 OpenLoop 回归均已检查；真实硬件未连接，实际负压和避障未支持。操作与证据见[接入验证记录](../experiments/hereditary_real_validation_integration.md)。
+
+- 2026-09-10：验证 GUI 恢复可选 NDI，增加自动 SDK/UVC 相机和最多 16 个软件遮挡矩形；每次执行独立保存压力、原图/反馈图、NDI 与时间关联。已验证有/无 NDI 的 40 步虚拟运行和全幅遮挡 3 次失效后归零，真实硬件仍未连接。
+
+## 0.1 2026-09-01 既有路线快照
 
 - 部署研究主线是少观测/有遮挡条件下的 windowed OpenLoop；GTObserved 用于上界、诊断和验证，不作为部署主张。
 - HereditaryOperatorModel v2 已实现，用显式 PI/Maxwell 状态研究迟滞份额和可解释性；它是灰盒运动学模型，不等同于材料谱或 Cosserat 材料模型。
@@ -25,7 +41,7 @@ sources:
 - `real_capture` 与 `real_validation` 继续分离；NDI 只作独立 endpoint 评价，不能成为模型或 planner 输入。
 - 尚未完成：15 条历史 dataset 引用审计、废弃工作树审计、文档逐份归档。
 
-## 0.1 文档治理健康与删除区
+## 0.2 文档治理健康与删除区
 
 治理角色已经固定：`CLAUDE.md` 是约束面、`docs/README.md` 是地图、本页是当前
 状态、`docs/maintenance/README.md` 是重要历史。旧 `docs/HANDOFF.md` 是

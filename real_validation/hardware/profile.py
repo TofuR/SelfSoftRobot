@@ -26,6 +26,8 @@ class HardwareProfile:
     camera_backend: BackendMode = BackendMode.MOCK
     camera_count: int = 1
     camera_serials: tuple[str, ...] = ()
+    camera_driver: str = 'auto'
+    camera_sources: tuple[int, ...] = ()
     valve_backend: BackendMode = BackendMode.MOCK
     group1_port: str = "COM3"
     group2_port: str = "COM46"
@@ -39,6 +41,12 @@ class HardwareProfile:
         object.__setattr__(self, "camera_backend", BackendMode(self.camera_backend))
         object.__setattr__(self, "valve_backend", BackendMode(self.valve_backend))
         object.__setattr__(self, "ndi_backend", BackendMode(self.ndi_backend))
+        if self.camera_driver not in ('auto','realsense','opencv'):raise ValueError('unknown camera driver')
+        sources=tuple(self.camera_sources)
+        if any(isinstance(v,bool) or not isinstance(v,int) or v<0 for v in sources) or len(set(sources))!=len(sources):raise ValueError('UVC 索引需为不重复的非负整数')
+        if sources and len(sources)!=self.camera_count:raise ValueError('UVC 索引数量必须等于相机数量')
+        if self.camera_driver=='opencv' and self.camera_serials:raise ValueError('UVC 使用设备索引，请清空 RealSense serials')
+        object.__setattr__(self,'camera_sources',sources)
         serials = tuple(str(value).strip() for value in self.camera_serials
                         if str(value).strip())
         if len(set(serials)) != len(serials):

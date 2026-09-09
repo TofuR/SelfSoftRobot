@@ -1,10 +1,12 @@
 # 实机验证工作台 GUI 使用指南
 
+> 2026-09-09 默认 GUI 已改为四步 Hereditary 实验流程，见 [当前实验指南](HEREDITARY_GUIDE.md) 及其中的 HTML 图解。本文保留旧 OpenLoop 五页操作，仅通过 `python -m real_validation.main --legacy-openloop` 启用。
+
 > 对应设计文档:`docs/experiments/real_robot_validation_workbench_todo.md`、`docs/superpowers/specs/2026-07-28-real-validation-task-layer-ik-design.md`。
 
 ## 0. 启动与运行配置
 
-**启动**:在 `real_validation/` 目录内 `python main.py`(或 Windows 双击 run_gui.bat)。
+**本文旧流程启动**：在 `real_validation/` 目录内 `python main.py --legacy-openloop`。默认启动与双击启动进入新的四步流程。
 
 启动后先在 Setup 选择并点击**应用配置**:
 

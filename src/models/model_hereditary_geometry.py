@@ -318,9 +318,24 @@ class HereditaryGeometryModel(HereditaryOperatorModel):
             p, h = self._burn_in(action_window[:, :-1])
         else:
             p, h = self._unpack_state(prev_z)
+        return self.step_state(action, self._pack_state(p, h))
+
+    def step_state(self, action: torch.Tensor, state: torch.Tensor) -> dict:
+        """Consume one model interval; return a new state without mutating input."""
+        p, h = self._unpack_state(state)
         drive = self.drive(action)
         p, q = self.play.step(p, drive)
         h = self.maxwell.step(h, drive)
+        return self._state_output(action, p, h, q, drive)
+
+    def observe_state(self, action: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
+        """Read an already advanced state using its last issued action, without stepping."""
+        p, h = self._unpack_state(state)
+        drive = self.drive(action)
+        q = drive.unsqueeze(-1) - p
+        return self._state_output(action, p, h, q, drive)["skeleton"]
+
+    def _state_output(self, action, p, h, q, drive):
         deficit = h - drive.unsqueeze(-1)
 
         pi, maxwell, pi_components, maxwell_components = \

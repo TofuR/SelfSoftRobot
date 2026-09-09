@@ -176,3 +176,54 @@ def assert_camera_fingerprint(descriptor_fingerprint: dict[str, Any] | None,
     if mismatches:
         raise CameraHardwareError("相机指纹不匹配(可能与训练采集位姿不一致): "
                                   + "; ".join(mismatches))
+
+
+class OpenCVCam(QThread):
+    """UVC/local video-device capture through OpenCV's platform backend."""
+    frame_ready = pyqtSignal(np.ndarray, float)
+    error = pyqtSignal(str)
+
+    def __init__(self, source=0, width=640, height=480, fps=30, parent=None):
+        super().__init__(parent)
+        self.source=source;self.width=width;self.height=height;self.fps=fps
+        self._running=True
+
+    def run(self):
+        import cv2
+        capture=None
+        try:
+            capture=cv2.VideoCapture(self.source)
+            if not capture.isOpened():raise RuntimeError(f'无法打开摄像头 {self.source}')
+            capture.set(cv2.CAP_PROP_FRAME_WIDTH,self.width)
+            capture.set(cv2.CAP_PROP_FRAME_HEIGHT,self.height)
+            capture.set(cv2.CAP_PROP_FPS,self.fps)
+            failures=0
+            while self._running:
+                ok,frame=capture.read()
+                if not ok or frame is None:
+                    failures+=1
+                    if failures>=3:raise RuntimeError('连续三次取帧失败')
+                    self.msleep(20);continue
+                failures=0
+                self.frame_ready.emit(np.ascontiguousarray(frame).copy(),time.monotonic())
+        except Exception as error:self.error.emit(f'UVC/OpenCV 采集异常: {error}')
+        finally:
+            if capture is not None:capture.release()
+
+    def stop(self):
+        self._running=False;self.quit()
+        if not self.wait(3000):self.error.emit('摄像头驱动读取未退出，请检查设备；禁止自动重连')
+
+
+def camera_specs(profile):
+    """Resolve once at connection. Never switch devices after a capture failure."""
+    if profile.camera_backend.value=='mock':return 'mock',[None]*profile.camera_count
+    driver=profile.camera_driver
+    if driver in ('auto','realsense'):
+        # Explicit serials mean an explicit RealSense request, never UVC fallback.
+        serials=list(profile.camera_serials) or RealSenseCam.list_devices()
+        if driver=='realsense' or serials:
+            if len(serials)<profile.camera_count:raise CameraHardwareError('RealSense 数量不足；检查设备和 pyrealsense2 SDK')
+            return 'realsense',serials[:profile.camera_count]
+    sources=list(profile.camera_sources) or list(range(profile.camera_count))
+    return 'opencv',sources

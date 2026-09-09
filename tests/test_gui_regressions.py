@@ -108,7 +108,7 @@ class SceneSummaryRegressionTest(unittest.TestCase):
 
     def test_add_target_and_obstacle_writes_scene_summary(self):
         from real_validation.gui.main_window import ValidationWindow
-        window = ValidationWindow()
+        window = ValidationWindow(workflow="legacy")
         window.session = ExperimentSession.create(
             tempfile.mkdtemp(prefix="gui_regress_"))
         try:
@@ -133,7 +133,7 @@ class SceneSummaryRegressionTest(unittest.TestCase):
         # 打磨:数值添加(_set_target/_add_obstacle)后,主显示原语与
         # scene_editor 列表必须同步更新(原先只有工具点加才刷新)。
         from real_validation.gui.main_window import ValidationWindow
-        window = ValidationWindow()
+        window = ValidationWindow(workflow="legacy")
         window.session = ExperimentSession.create(
             tempfile.mkdtemp(prefix="gui_regress_sync_"))
         try:
@@ -160,7 +160,7 @@ class SceneSummaryRegressionTest(unittest.TestCase):
         import numpy as np
         from PyQt5.QtCore import QPointF
         from real_validation.gui.main_window import ValidationWindow
-        window = ValidationWindow()
+        window = ValidationWindow(workflow="legacy")
         window.session = ExperimentSession.create(
             tempfile.mkdtemp(prefix="gui_regress_skel_"))
         try:
@@ -198,7 +198,7 @@ class SceneSummaryRegressionTest(unittest.TestCase):
 
     def test_new_target_replaces_old_target_but_keeps_obstacles(self):
         from real_validation.gui.main_window import ValidationWindow
-        window = ValidationWindow()
+        window = ValidationWindow(workflow="legacy")
         window.session = ExperimentSession.create(
             tempfile.mkdtemp(prefix="gui_single_target_"))
         try:
@@ -222,7 +222,7 @@ class SceneSummaryRegressionTest(unittest.TestCase):
 
     def test_explicit_finish_commits_skeleton_as_one_scene_object(self):
         from real_validation.gui.main_window import ValidationWindow
-        window = ValidationWindow()
+        window = ValidationWindow(workflow="legacy")
         window.session = ExperimentSession.create(
             tempfile.mkdtemp(prefix="gui_finish_skeleton_"))
         try:
@@ -250,7 +250,7 @@ class PostExecutionObservationTest(unittest.TestCase):
         from types import SimpleNamespace
         from real_validation.gui.main_window import ValidationWindow
 
-        window = ValidationWindow()
+        window = ValidationWindow(workflow="legacy")
         window.session = ExperimentSession.create(
             tempfile.mkdtemp(prefix="gui_post_observe_"))
         try:
@@ -353,7 +353,7 @@ class MainWindowLayoutTest(unittest.TestCase):
         # 收紧:主显示区必须在顶层水平 splitter 的 index 1(可视化面板)子树内。
         # index 0 = 左 Tab 控制台(布局重构:控制台移左、摄像头右上面板,对齐 real_capture)。
         from real_validation.gui.main_window import ValidationWindow
-        w = ValidationWindow()
+        w = ValidationWindow(workflow="legacy")
         try:
             self.assertTrue(hasattr(w, "main_split"), "应暴露顶层 splitter 为 main_split")
             self.assertIsInstance(w.main_split, QSplitter)
@@ -369,7 +369,7 @@ class MainWindowLayoutTest(unittest.TestCase):
 
     def test_setup_has_no_horizontal_overflow_at_default_size(self):
         from real_validation.gui.main_window import ValidationWindow
-        w = ValidationWindow(); w.show(); QApplication.processEvents()
+        w = ValidationWindow(workflow="legacy"); w.show(); QApplication.processEvents()
         try:
             setup_scroll = w.tabs.widget(0)
             self.assertEqual(setup_scroll.horizontalScrollBar().maximum(), 0)
@@ -388,7 +388,7 @@ class HardwareLifecycleGuiTest(unittest.TestCase):
 
     def test_setup_exposes_three_independent_backends(self):
         from real_validation.gui.main_window import ValidationWindow
-        w = ValidationWindow()
+        w = ValidationWindow(workflow="legacy")
         try:
             self.assertEqual(w.hw_camera_backend.count(), 3)
             self.assertEqual(w.hw_valve_backend.count(), 2)
@@ -399,7 +399,7 @@ class HardwareLifecycleGuiTest(unittest.TestCase):
 
     def test_edited_profile_must_be_applied_before_connect(self):
         from real_validation.gui.main_window import ValidationWindow
-        w = ValidationWindow()
+        w = ValidationWindow(workflow="legacy")
         try:
             current = w.hardware.profile.valve_backend.value
             target = w.hw_valve_backend.findData("mock" if current == "real" else "real")
@@ -411,7 +411,7 @@ class HardwareLifecycleGuiTest(unittest.TestCase):
 
     def test_device_badges_are_independent_and_resume_is_absent(self):
         from real_validation.gui.main_window import ValidationWindow
-        w = ValidationWindow(); w.show(); QApplication.processEvents()
+        w = ValidationWindow(workflow="legacy"); w.show(); QApplication.processEvents()
         try:
             valve_before = w.device_badges["valve"].text()
             w._on_device_state("camera", "error", "no camera")
@@ -423,7 +423,7 @@ class HardwareLifecycleGuiTest(unittest.TestCase):
 
     def test_execution_label_follows_applied_valve_backend(self):
         from real_validation.gui.main_window import ValidationWindow
-        w = ValidationWindow()
+        w = ValidationWindow(workflow="legacy")
         try:
             w._refresh()
             expected = ("执行真机计划" if
@@ -437,7 +437,7 @@ class HardwareLifecycleGuiTest(unittest.TestCase):
         from types import SimpleNamespace
         from real_validation.gui.main_window import ValidationWindow
         from real_validation.hardware.profile import HardwareProfile
-        w = ValidationWindow()
+        w = ValidationWindow(workflow="legacy")
         w.session = ExperimentSession.create(tempfile.mkdtemp(prefix="gui_anchor_gate_"))
         w.runtime = SimpleNamespace(
             descriptor=SimpleNamespace(n_nodes=15, action_scale_kpa=(150.0,)),
@@ -466,7 +466,7 @@ class CompactLayoutTest(unittest.TestCase):
     def test_safety_flat_grid_has_all_six_channels(self):
         """安全对话框:6 通道 × 5 参数，不再常驻 Setup 挤占空间。"""
         from real_validation.gui.main_window import ValidationWindow
-        w = ValidationWindow()
+        w = ValidationWindow(workflow="legacy")
         try:
             self.assertEqual(len(w._safety_cells), 6)        # 6 通道
             for row in w._safety_cells:
@@ -479,7 +479,7 @@ class CompactLayoutTest(unittest.TestCase):
 
     def test_model_summary_height_capped(self):
         from real_validation.gui.main_window import ValidationWindow
-        w = ValidationWindow()
+        w = ValidationWindow(workflow="legacy")
         try:
             self.assertLessEqual(w.model_summary.maximumHeight(), 110)
         finally:
@@ -487,7 +487,7 @@ class CompactLayoutTest(unittest.TestCase):
 
     def test_plan_summary_height_capped(self):
         from real_validation.gui.main_window import ValidationWindow
-        w = ValidationWindow()
+        w = ValidationWindow(workflow="legacy")
         try:
             self.assertLessEqual(w.plan_summary.maximumHeight(), 90)
         finally:
@@ -495,7 +495,7 @@ class CompactLayoutTest(unittest.TestCase):
 
     def test_plan_page_exposes_distance_based_horizon(self):
         from real_validation.gui.main_window import ValidationWindow
-        w = ValidationWindow()
+        w = ValidationWindow(workflow="legacy")
         try:
             self.assertEqual(w.plan_k.value(), 40)
             self.assertEqual(w.plan_auto_k.text(), "按目标距离自动K")
@@ -504,7 +504,7 @@ class CompactLayoutTest(unittest.TestCase):
 
     def test_window_default_size(self):
         from real_validation.gui.main_window import ValidationWindow
-        w = ValidationWindow()
+        w = ValidationWindow(workflow="legacy")
         try:
             self.assertEqual(w.size().width(), 1400)
             self.assertEqual(w.size().height(), 860)

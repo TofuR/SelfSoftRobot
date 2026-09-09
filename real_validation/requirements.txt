@@ -3,4 +3,8 @@ numpy>=1.20
 torch>=2.0
 PyQt5>=5.15
 pyqtgraph>=0.13
+scipy>=1.10
+opencv-python>=4.5
+threadpoolctl>=3.1
+scikit-image>=0.20
 # 在线感知另见 requirements-perception.txt（opencv-python / scipy）

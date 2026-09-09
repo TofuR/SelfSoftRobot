@@ -41,6 +41,7 @@ class QtValveTransport(QObject):
         self._pending: dict[str, _PendingCommand] = {}
         self._lock = threading.Lock()
         self._closed = False
+        self.command_filter = None
         self._request.connect(self._issue_on_qt_thread, Qt.QueuedConnection)
         controller.communication_result.connect(self._on_communication_result)
 
@@ -95,6 +96,8 @@ class QtValveTransport(QObject):
             return
         pending.required_groups = required
         try:
+            if self.command_filter is not None and not bypass_rate:
+                action6 = self.command_filter(action6)
             _, applied, t_command = self.controller.set_pressures(
                 action6, command_id=command_id, bypass_rate=bool(bypass_rate),
                 required_groups=required)

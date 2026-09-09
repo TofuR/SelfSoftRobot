@@ -2,7 +2,7 @@
 title: 遮挡下 hereditary 两重校正控制设计
 kind: design
 status: draft
-updated: 2026-09-08
+updated: 2026-09-09
 scope: deployment state, partial image measurements, two-stage feedback, and existing-data validation plan before implementation
 supersedes: []
 superseded_by: null
@@ -20,6 +20,8 @@ sources:
 ---
 
 # 遮挡下 hereditary 两重校正控制设计
+
+> 实施进展（2026-09-09）：已在新分支完成固定图像方块遮挡、状态校正、B 后缀优化及 A 预计算的已有数据串行回放。显式导数 B 的完整反馈计算两次单线程 P95 48.1/58.5 ms、最大 54.6/139.2 ms，复测出现一次超过 100 ms；A 更快但接受更新较少，细节及 CPU/GPU 对照见[回放验证记录](../experiments/partial_observation_replay_validation.md)。下文“待实施/本次未运行”描述设计形成时的状态；当前代码、命令和结果以该记录及 run 产物为准。实机整周期与闭环效果仍待验证。
 
 阅读顺序：第 2 节说明实机流程和必要内存，第 3 节说明初始化、图像匹配和误差，第 4–5 节说明两重校正，第 6 节处理延迟，第 8.4 节给出下一轮已有数据实验。公式统一使用 `$...$` 与独立行的 `$$...$$`，编号写在公式外，避免依赖 LaTeX 编号扩展；预览器仍需支持数学渲染。
 

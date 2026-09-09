@@ -1,6 +1,8 @@
 # Real Robot Validation Workbench
 
-> **GUI 使用指南见 [`GUI_GUIDE.md`](GUI_GUIDE.md)** —— 五页功能、使用顺序、标准操作流程、当前能力边界。
+> **默认四步 Hereditary / Analytic B 入口：[`HEREDITARY_GUIDE.md`](HEREDITARY_GUIDE.md)** —— 紧凑设备连接、全局六腔调压与限制、非零压力部署预热、画笔目标与轨迹预览、部分图像反馈、软件多区域遮挡、可选 NDI 和 SDK/UVC 相机；初始规划参数弹窗；反馈按周期期限提交或丢弃，执行记录包含原图、压力/NDI、逐步时延及序列修订。
+
+> **旧 OpenLoop 指南见 [`GUI_GUIDE.md`](GUI_GUIDE.md)** —— 用 `--legacy-openloop` 显式启用，下文的数据契约与旧模型部署说明对应该兼容路线。当前四步实验及 HTML 图解见上方指南。
 
 该目录提供独立于采集 GUI 的模型部署与真实控制工作台：
 
@@ -15,7 +17,7 @@
 - 相机像素、ROI 局部像素与机器人毫米坐标的可追溯正反变换；
 - 执行后真实形态目标残差、前向预测误差和下一窗口 Anchor；
 - Qt 真阀线程桥接、只读 run replay 和基础离线评价；
-- 五阶段 GUI 骨架。
+- 默认四阶段 Hereditary GUI 与独立的旧五阶段兼容入口。
 
 ## 搬到 PC
 

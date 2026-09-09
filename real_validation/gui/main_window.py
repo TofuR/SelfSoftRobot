@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
     QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
-    QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget,
+    QSpinBox, QSplitter, QStackedWidget, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from ..execution.executor import PlanExecutor
@@ -204,9 +204,10 @@ class _PlanningThread(QThread):
 
 
 class ValidationWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, *, workflow="hereditary"):
         super().__init__()
-        self.setWindowTitle("SelfSoftRobot · OpenLoop 实机验证工作台")
+        self.hereditary_workflow = workflow != "legacy"
+        self.setWindowTitle("SelfSoftRobot · 实机验证工作台")
         self.resize(1400, 860)
         self.session: ExperimentSession | None = None
         self.runtime: ModelRuntime | None = None
@@ -266,6 +267,7 @@ class ValidationWindow(QMainWindow):
         safety_bar.addWidget(self.model_badge)
         for badge in self.device_badges.values():
             safety_bar.addWidget(badge)
+
         safety_bar.addWidget(self.zero_button)
         safety_bar.addWidget(self.abort_button)
         layout.addLayout(safety_bar)
@@ -286,15 +288,40 @@ class ValidationWindow(QMainWindow):
         self.tabs.addTab(self._plan_page(), "3 Plan")
         self.tabs.addTab(self._execute_page(), "4 Execute")
         self.tabs.addTab(self._results_page(), "5 Results")
+        from .hereditary_panel import HereditaryPanel
+        self.hereditary_panel = HereditaryPanel(self)
+        if self.hereditary_workflow:
+            # Keep legacy controllers available for archived experiments, outside
+            # the default experiment route. Shared hardware widgets have one owner.
+            self.legacy_tabs = self.tabs
+            self.legacy_tabs.setParent(self)
+            self.legacy_tabs.hide()
+            setup = self.legacy_tabs.widget(0)
+            self.legacy_tabs.removeTab(0)
+            self.tabs = QTabWidget()
+            setup.setParent(self.legacy_tabs);setup.hide()
+            self.tabs.addTab(self._scroll_page(self._hereditary_setup()), "1 设备模型")
+            for page, title in zip(self.hereditary_panel.pages[1:],
+                                   ("2 部署预热", "3 目标规划", "4 执行记录")):
+                self.tabs.addTab(self._scroll_page(page), title)
+        self.hereditary_panel.hide()
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.main_split.addWidget(self.tabs)
 
         # 右:主工作区。相机占主要面积，曲线和日志按需切换。
         viz = QWidget()
         vl = QVBoxLayout(viz); vl.setContentsMargins(6, 6, 6, 6); vl.setSpacing(6)
-        vl.addWidget(self.main_display, 5)
+        self.camera_stack = QStackedWidget()
+        self.camera_stack.addWidget(self.main_display)
+        self.camera_stack.addWidget(self.hereditary_panel.canvas)
+        if self.hereditary_workflow:
+            self.camera_stack.setCurrentIndex(1)
+            vl.addWidget(self.hereditary_panel.state_label)
+            vl.addWidget(self.hereditary_panel.display_controls)
+        vl.addWidget(self.camera_stack, 5)
         cam_bar = QHBoxLayout(); cam_bar.setSpacing(6)
-        cam_bar.addWidget(QLabel("显示图层")); cam_bar.addSpacing(4)
+        if not self.hereditary_workflow: cam_bar.addWidget(QLabel("显示图层"))
+        cam_bar.addSpacing(4)
         self.layer_checks = {}
         for key, label in (("skeleton", "骨架"), ("scene", "场景"),
                            ("predicted", "预测"), ("actual", "实际"), ("ndi", "NDI")):
@@ -304,6 +331,7 @@ class ValidationWindow(QMainWindow):
                 lambda checked, k=key: self.main_display.set_layer_visible(k, checked))
             self.layer_checks[key] = cb
             cam_bar.addWidget(cb)
+            cb.setVisible(not self.hereditary_workflow)
         cam_bar.addStretch()
         vl.addLayout(cam_bar)
         self.press_plot = pg.PlotWidget(title="气压命令 (kPa · 6 通道)")
@@ -325,6 +353,7 @@ class ValidationWindow(QMainWindow):
         self.viz_tabs.addTab(self.press_plot, "动作曲线")
         self.viz_tabs.addTab(self.ndi_plot, "NDI 评价")
         self.viz_tabs.addTab(self.log_box, "运行日志")
+        if self.hereditary_workflow: self.viz_tabs.setTabVisible(1, False)
         self.viz_tabs.setMaximumHeight(230)
         vl.addWidget(self.viz_tabs, 2)
         self.main_info = QLabel("相机: OFF | 骨架: - | NDI: OFF")
@@ -346,6 +375,26 @@ class ValidationWindow(QMainWindow):
         sa.setWidget(page)
         return sa
 
+    def _hereditary_setup(self):
+        page=QWidget();root=QVBoxLayout(page);root.setSpacing(8)
+        root.addWidget(self.hereditary_panel.pages[0])
+        devices=QGroupBox('设备连接');grid=QGridLayout(devices)
+        grid.addWidget(QLabel('模式'),0,0);grid.addWidget(self.hw_profile_preset,0,1,1,3)
+        grid.addWidget(QLabel('组1'),1,0);grid.addWidget(self.hw_g1,1,1);grid.addWidget(self.hw_conn1_btn,1,2);grid.addWidget(self.hw_g1_status,1,3)
+        grid.addWidget(QLabel('组2'),2,0);grid.addWidget(self.hw_g2,2,1);grid.addWidget(self.hw_conn2_btn,2,2);grid.addWidget(self.hw_g2_status,2,3)
+        grid.addWidget(QLabel('相机'),3,0);grid.addWidget(self.hw_camera_view,3,1);grid.addWidget(self.camera_btn,3,2,1,2)
+        grid.addWidget(QLabel('相机驱动'),4,0);grid.addWidget(self.hw_camera_driver,4,1,1,3)
+        root.addWidget(devices)
+        ndi=QGroupBox('NDI（可选，只记录评价，不参与控制）');ng=QGridLayout(ndi)
+        for j,widget in enumerate((self.hw_ndi_backend,self.hw_ndi_port,self.hw_ndi_count,self.hw_ndi_btn)):ng.addWidget(widget,0,j)
+        self.ndi_hint=QLabel('不连接 NDI 也可部署和执行；连接后保存所有探头数据。');self.ndi_hint.setWordWrap(True);ng.addWidget(self.ndi_hint,1,0,1,4);root.addWidget(ndi)
+        advanced=QGroupBox('高级连接与保存设置');advanced.setCheckable(True);advanced.setChecked(False);form=QFormLayout(advanced)
+        for label,widget in [('相机 backend',self.hw_camera_backend),('阀 backend',self.hw_valve_backend),('相机数量',self.hw_camera_count),('相机 serials',self.hw_camera_serials),('UVC 索引（逗号分隔）',self.hw_camera_sources),('波特率',self.hw_baud),('从站',self.hw_slave),('保存根目录',self.run_root)]:form.addRow(label,widget)
+        def visible(value):
+            for i in range(form.count()):form.itemAt(i).widget().setVisible(value)
+        advanced.toggled.connect(visible);visible(False);root.addWidget(advanced)
+        root.addStretch();return page
+
     def _setup_page(self) -> QWidget:
         """按真实实验前后依赖排列：建立实验→应用模式→连设备→加载模型。"""
         page = QWidget(); root = QVBoxLayout(page); root.setSpacing(10)
@@ -361,9 +410,11 @@ class ValidationWindow(QMainWindow):
         create.clicked.connect(self._new_session)
         replay = QPushButton("打开 Run（只读回放）"); replay.clicked.connect(self._open_replay)
         row.addWidget(create); row.addWidget(replay); row.addStretch(); exp.addLayout(row)
+        if self.hereditary_workflow:
+            create.hide(); replay.hide()
         root.addWidget(gb_exp)
 
-        gb_profile = QGroupBox("运行配置（须先应用）")
+        gb_profile = QGroupBox("设备模式" if self.hereditary_workflow else "运行配置（须先应用）")
         profile_layout = QVBoxLayout(gb_profile)
         row = QHBoxLayout(); row.addWidget(QLabel("预设"))
         self.hw_profile_preset = QComboBox()
@@ -378,6 +429,9 @@ class ValidationWindow(QMainWindow):
         profile_layout.addLayout(row)
         self.hw_profile_hint = QLabel("配置只在设备全部断开时可更改；任何真机失败都不会回退 Mock。")
         self.hw_profile_hint.setWordWrap(True); profile_layout.addWidget(self.hw_profile_hint)
+        if self.hereditary_workflow:
+            self.hw_apply_profile_btn.hide()
+            self.hw_profile_hint.setText('连接按钮自动校验配置；全 Mock 与真机共用入口。已连接设备的参数需先断开对应设备。')
         root.addWidget(gb_profile)
 
         def backend_combo(include_disabled=True):
@@ -392,6 +446,11 @@ class ValidationWindow(QMainWindow):
         gb_camera = QGroupBox("相机（Anchor / 场景观察）")
         camera = QVBoxLayout(gb_camera); camera.setSpacing(6)
         self.hw_camera_backend = backend_combo()
+        self.hw_camera_driver=QComboBox()
+        for label,value in [('自动：优先 RealSense SDK','auto'),('RealSense SDK','realsense'),('普通摄像头 UVC / OpenCV','opencv')]:self.hw_camera_driver.addItem(label,value)
+        self.hw_camera_driver.currentIndexChanged.connect(self._on_profile_control_edited)
+        self.hw_camera_sources=QLineEdit();self.hw_camera_sources.setPlaceholderText('留空从 0 开始；例如 0,1')
+        self.hw_camera_sources.textChanged.connect(self._on_profile_control_edited)
         self.hw_camera_count = QSpinBox(); self.hw_camera_count.setRange(1, 8); self.hw_camera_count.setValue(1)
         self.hw_camera_count.valueChanged.connect(self._on_profile_control_edited)
         self.hw_camera_serials = QLineEdit(); self.hw_camera_serials.setPlaceholderText("可留空自动枚举；多台用逗号分隔唯一 serial")
@@ -426,10 +485,19 @@ class ValidationWindow(QMainWindow):
         self.hw_g1_status = QLabel("未连"); self.hw_g2_status = QLabel("未连")
         self.hw_disconn_btn = QPushButton("断开全部"); self.hw_disconn_btn.setObjectName("danger")
         self.hw_disconn_btn.clicked.connect(self._disconnect_valve)
+        if self.hereditary_workflow:self.hw_disconn_btn.hide()
         row.addWidget(self.hw_conn1_btn); row.addWidget(self.hw_g1_status)
         row.addWidget(self.hw_conn2_btn); row.addWidget(self.hw_g2_status)
         row.addWidget(self.hw_disconn_btn); row.addStretch(); valve.addLayout(row)
         root.addWidget(gb_valve)
+        if self.hereditary_workflow:
+            advanced=QGroupBox('高级连接设置');advanced.setCheckable(True);advanced.setChecked(False)
+            form=QFormLayout(advanced)
+            for label,widget in [('相机 backend',self.hw_camera_backend),('阀 backend',self.hw_valve_backend),('相机数量',self.hw_camera_count),('相机 serials',self.hw_camera_serials),('波特率',self.hw_baud),('从站',self.hw_slave)]:
+                form.addRow(label,widget)
+            def show_advanced(visible):
+                for i in range(form.count()):form.itemAt(i).widget().setVisible(visible)
+            advanced.toggled.connect(show_advanced);show_advanced(False);root.addWidget(advanced)
 
         gb_ndi = QGroupBox("NDI（隐藏评价流，不输入 Planner）")
         ndi_layout = QVBoxLayout(gb_ndi); ndi_layout.setSpacing(6)
@@ -442,6 +510,7 @@ class ValidationWindow(QMainWindow):
         row.addWidget(QLabel("串口")); row.addWidget(self.hw_ndi_port)
         row.addWidget(QLabel("探头")); row.addWidget(self.hw_ndi_count)
         row.addWidget(self.hw_ndi_btn); row.addStretch(); ndi_layout.addLayout(row)
+        gb_ndi.setVisible(not self.hereditary_workflow)
         root.addWidget(gb_ndi)
 
         # ---- 卡3:模型与部署契约(紧凑行)----
@@ -468,14 +537,21 @@ class ValidationWindow(QMainWindow):
         self.model_summary = QPlainTextEdit(); self.model_summary.setReadOnly(True)
         self.model_summary.setMaximumHeight(80)
         m.addWidget(self.model_summary)
+        gb_model.setVisible(not self.hereditary_workflow)
         root.addWidget(gb_model)
 
         self.safety_dialog = SafetyPolicyDialog(self)
+        if self.hereditary_workflow:
+            grid=self.safety_dialog.layout().itemAt(1).layout()
+            for row in range(7): grid.itemAtPosition(row,5).widget().hide()
+            self.safety_dialog.layout().itemAt(0).widget().setText('压力 kPa，变化率 kPa/s；与部署包取交集。初始保持压力在第 2 步设置。')
         self._safety_cells = self.safety_dialog.cells
         self.safety_dialog.buttons.button(QDialogButtonBox.Apply).clicked.connect(self._apply_safety)
         safety_button = QPushButton("安全配置…（六通道 kPa / kPa·s⁻¹）")
+        self.safety_button = safety_button
         safety_button.clicked.connect(self.safety_dialog.show)
         root.addWidget(safety_button)
+        if self.hereditary_workflow:safety_button.hide()
         root.addStretch()
         self._sync_profile_controls()
         return page
@@ -701,8 +777,14 @@ class ValidationWindow(QMainWindow):
         return page
 
     def _on_tab_changed(self, index: int) -> None:
+        if self.hereditary_workflow:
+            self.hereditary_panel.leave_drawing()
+        if hasattr(self, "camera_stack"):
+            self.camera_stack.setCurrentIndex(1 if self.hereditary_workflow else 0)
+        if self.hereditary_workflow and getattr(self, "hereditary_panel", None) and self.hereditary_panel.runtime:
+            self.model_badge.setText("Hereditary · 4 输入 / Analytic B")
         """Observe 页(index 1)激活 → 右上面板主摄像头可交互(锚定点选);其它页纯显示。"""
-        is_observe = (index == 1)
+        is_observe = (index == 1 and not self.hereditary_workflow)
         self.main_display.set_read_only(not is_observe)
         if not is_observe:
             self.main_display.set_tool("select")
@@ -1019,6 +1101,7 @@ class ValidationWindow(QMainWindow):
             name=str(self.hw_profile_preset.currentData() or "custom"),
             camera_backend=str(self.hw_camera_backend.currentData()),
             camera_count=self.hw_camera_count.value(), camera_serials=serials,
+            camera_driver=str(self.hw_camera_driver.currentData()),camera_sources=tuple(int(v.strip()) for v in self.hw_camera_sources.text().split(',') if v.strip()),
             valve_backend=str(self.hw_valve_backend.currentData()),
             group1_port=self.hw_g1.text().strip(), group2_port=self.hw_g2.text().strip(),
             baudrate=self.hw_baud.value(), slave_addr=self.hw_slave.value(),
@@ -1047,7 +1130,9 @@ class ValidationWindow(QMainWindow):
 
     def _require_ui_profile_applied(self) -> None:
         if self._profile_from_ui() != self.hardware.profile:
-            raise RuntimeError("硬件参数已更改，请先点击“应用配置”")
+            if self.hereditary_workflow:
+                self.hardware.apply_disconnected_config(self._profile_from_ui());self._save_hardware_config()
+            else:raise RuntimeError("硬件参数已更改，请先点击“应用配置”")
 
     def _on_profile_preset_changed(self, _index: int) -> None:
         if getattr(self, "_syncing_profile", False):
@@ -1096,6 +1181,20 @@ class ValidationWindow(QMainWindow):
         self.hw_baud.setEnabled(unlocked and valve_backend == BackendMode.REAL)
         self.hw_slave.setEnabled(unlocked and valve_backend == BackendMode.REAL)
         self.hw_ndi_port.setEnabled(unlocked and ndi_backend == BackendMode.REAL)
+        if self.hereditary_workflow:
+            controller=self.hardware.valve_controller;groups=set() if controller is None else set(controller.connected_groups)
+            self.hw_camera_backend.setEnabled(not self.hardware.cameras)
+            self.hw_camera_count.setEnabled(not self.hardware.cameras)
+            self.hw_camera_serials.setEnabled(not self.hardware.cameras and camera_backend==BackendMode.REAL)
+            self.hw_g1.setEnabled(1 not in groups and valve_backend==BackendMode.REAL)
+            self.hw_g2.setEnabled(2 not in groups and valve_backend==BackendMode.REAL)
+            for widget in (self.hw_valve_backend,self.hw_baud,self.hw_slave):widget.setEnabled(controller is None)
+        self.hw_camera_driver.setEnabled(not self.hardware.cameras and camera_backend==BackendMode.REAL)
+        self.hw_camera_sources.setEnabled(not self.hardware.cameras and camera_backend==BackendMode.REAL)
+        if self.hereditary_workflow:
+            ndi_idle=self.hardware.ndi_thread is None
+            self.hw_ndi_backend.setEnabled(ndi_idle);self.hw_ndi_count.setEnabled(ndi_idle)
+            self.hw_ndi_port.setEnabled(ndi_idle and ndi_backend==BackendMode.REAL)
         self.hw_apply_profile_btn.setEnabled(unlocked)
         self.camera_btn.setEnabled(camera_backend != BackendMode.DISABLED)
         self.hw_ndi_btn.setEnabled(ndi_backend != BackendMode.DISABLED)
@@ -1148,6 +1247,8 @@ class ValidationWindow(QMainWindow):
 
     def _stop_camera(self) -> None:
         self.hardware.stop_cameras()
+        if self.hereditary_workflow and self.hardware.valve_controller is not None and not self.hardware.valve_controller.connected_groups:
+            self.hardware.disconnect_valves(zero=False)
         self._camera_frames.clear()
         self._camera_frame_times.clear()
         self._latest_frame = None
@@ -1161,7 +1262,9 @@ class ValidationWindow(QMainWindow):
         import numpy as np
         try:
             self._require_ui_profile_applied()
-            self.hardware.start_cameras()
+            if self.hereditary_workflow and self.hardware.profile.camera_backend==BackendMode.MOCK:
+                self.hereditary_panel.start_mock_camera()
+            else:self.hardware.start_cameras()
             self.main_display.set_frame(self._latest_frame if self._latest_frame is not None
                                         else np.zeros((240, 320, 3)))
         except Exception as error:
@@ -1174,6 +1277,9 @@ class ValidationWindow(QMainWindow):
         self._latest_frame = bgr
         self._latest_frame_timestamp = (float(timestamp) if timestamp is not None
                                         else time.monotonic())
+        if (getattr(self, "hereditary_panel", None)
+                and (self.hereditary_panel.active or self.hereditary_workflow)):
+            return  # Hereditary owns the visible canvas and its own image observer.
         self._refresh_anchor_controls()
         self.main_display.set_frame(bgr)                       # 主显示区(唯一画面)
         setup = self.session.validation_setup if self.session is not None else None
@@ -1234,6 +1340,11 @@ class ValidationWindow(QMainWindow):
         profile = self.hardware.profile
         cam_src = f"{profile.camera_backend.value.upper()}×{profile.camera_count}"
         cam_show = f"#{self._current_cam_index + 1}" if self._current_cam_index > 0 else ""
+        if self.hereditary_workflow:
+            r=self.hereditary_panel.runtime
+            nodes='未加载' if r is None else str(r.engine.n_nodes)
+            self.main_info.setText(f"相机: {cam_src}{cam_show} | 模型节点: {nodes} | 图像证据与预测分别记录")
+            return
         nodes = "?"
         if self.runtime is not None:
             nodes = str(self.runtime.descriptor.n_nodes)
@@ -1720,6 +1831,16 @@ class ValidationWindow(QMainWindow):
         self._update_main_info()
 
     def _apply_safety(self) -> None:
+        if self.hereditary_workflow:
+            panel=self.hereditary_panel
+            try:
+                if panel.runtime is None: raise ValueError('请先加载模型')
+                values=np.asarray([[cell.value() for cell in row] for row in self._safety_cells])[:,:4]
+                panel.runtime.configure_limits(*values.T)
+                panel.invalidate_plan();panel.message('六腔安全范围已应用，旧计划已失效')
+            except Exception as error:
+                panel.fail(error)
+            return
         if not self.session:
             self._error("请先 New Experiment")
             return
@@ -1751,6 +1872,17 @@ class ValidationWindow(QMainWindow):
         if self._valve_connect_thread and self._valve_connect_thread.isRunning():
             return
         try:
+            panel=getattr(self,'hereditary_panel',None)
+            if self.hereditary_workflow and panel:
+                if panel.active:raise ValueError('请先结束调压或自动运动，再断开设备')
+                controller=self.hardware.valve_controller
+                if controller and gid in controller.connected_groups:
+                    controller.disconnect_group(gid);panel.ack6[(gid-1)*3:gid*3]=np.nan
+                    if panel.runtime:panel.runtime.ready=False;panel.runtime.initialized=False;panel.runtime.alignment_confirmed=False
+                    panel.invalidate_plan()
+                    if not controller.connected_groups and not self.hardware.cameras:self.hardware.disconnect_valves(zero=False)
+                    else:self.hardware._set_state('valve',DeviceState.READY if controller.connected_groups else DeviceState.OFF,'阀组连接已更新')
+                    self._refresh_valve_status();return
             self._require_ui_profile_applied()
             if self.hardware.profile.valve_backend == BackendMode.REAL:
                 port = {1: self.hardware.profile.group1_port,
@@ -1785,6 +1917,9 @@ class ValidationWindow(QMainWindow):
             lbl.setText("已连" if ok else "未连")
             lbl.setStyleSheet("color:#38A169;font-size:11px;" if ok else "color:#888;font-size:11px;")
         self.valve_controller = controller
+        if self.hereditary_workflow:
+            self.hw_conn1_btn.setText('断开组1' if g1 else '连接组1');self.hw_conn2_btn.setText('断开组2' if g2 else '连接组2')
+            self._sync_profile_controls()
         self._refresh()
 
     def _disconnect_valve(self) -> None:
@@ -1824,6 +1959,8 @@ class ValidationWindow(QMainWindow):
         首次收到数据才把状态转绿(真实连接成功),否则保持"连接中/失败"。
         """
         self._push_ndi(data, _t)
+        if hasattr(self,'ndi_hint'):
+            self.ndi_hint.setText(f'NDI 最近收帧；{len(data)//11} 探头。数据单独保存，不输入模型。')
         if data and not getattr(self, "_ndi_confirmed", False):
             self._ndi_confirmed = True
             self._update_main_info()
@@ -2471,6 +2608,9 @@ class ValidationWindow(QMainWindow):
             self._refresh()
 
     def _abort(self) -> None:
+        if hasattr(self, "hereditary_panel") and self.hereditary_panel.active:
+            self.hereditary_panel.stop()
+            return
         if not self.session or self.session.state not in {
                 SessionState.EXECUTING, SessionState.PAUSED, SessionState.ARMED}:
             return
@@ -2483,6 +2623,10 @@ class ValidationWindow(QMainWindow):
         self._refresh()
 
     def _zero(self) -> None:
+        if (hasattr(self, "hereditary_panel") and self.hereditary_panel.runtime is not None
+                and (self.hereditary_panel.active or self.hereditary_workflow)):
+            self.hereditary_panel.stop()
+            return
         if not self.session:
             return
         if self.session.state in {SessionState.ARMED, SessionState.EXECUTING,
@@ -2559,6 +2703,8 @@ class ValidationWindow(QMainWindow):
                 self._set_combo_data(self.hw_valve_backend, profile.valve_backend.value)
                 self._set_combo_data(self.hw_ndi_backend, profile.ndi_backend.value)
                 self.hw_camera_count.setValue(profile.camera_count)
+                self._set_combo_data(self.hw_camera_driver,profile.camera_driver)
+                self.hw_camera_sources.setText(','.join(str(v) for v in profile.camera_sources))
                 self.hw_camera_serials.setText(",".join(profile.camera_serials))
                 self.hw_g1.setText(profile.group1_port); self.hw_g2.setText(profile.group2_port)
                 self.hw_baud.setValue(profile.baudrate); self.hw_slave.setValue(profile.slave_addr)
@@ -2566,6 +2712,10 @@ class ValidationWindow(QMainWindow):
             finally:
                 self._syncing_profile = False
             self._sync_profile_controls()
+            if self.hereditary_workflow and 'chambers' in value:
+                self.hereditary_panel.saved_chambers=value['chambers']
+                for row,values in zip(self.hereditary_panel.chambers.limits,value['chambers']['limits']):
+                    for box,v in zip(row,values):box.setValue(v)
         except Exception as error:
             self._log(f"WARN: 加载硬件配置失败 {error}")
 
@@ -2573,7 +2723,11 @@ class ValidationWindow(QMainWindow):
         path = APP_DIR / "config" / "hardware.json"
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_json(path, {"profile": self._profile_from_ui().to_dict()})
+            value={"profile": self._profile_from_ui().to_dict()}
+            panel=getattr(self,'hereditary_panel',None)
+            if self.hereditary_workflow and panel:
+                value['chambers']={'mapping':[c.currentData() for c in panel.mapping], 'limits':[[c.value() for c in row] for row in panel.chambers.limits]}
+            atomic_write_json(path,value)
         except Exception as error:
             self._log(f"WARN: 保存硬件配置失败 {error}")
 
@@ -2581,6 +2735,11 @@ class ValidationWindow(QMainWindow):
         state = self.session.state.value if self.session else "no_session"
         run = self.session.run_dir.name if self.session else "-"
         self.state_label.setText(f"Run: {run}    State: {state}")
+        if (getattr(self, "hereditary_panel", None) and self.hereditary_workflow
+                and self.hereditary_panel.runtime is not None):
+            panel=self.hereditary_panel
+            phase='处理中' if panel.busy else ('待执行' if panel.armed else {'preparation':'准备','initial_hold':'初始保持','planning':'规划','control':'控制中','final_hold':'末位保持','stopped':'已归零'}.get(panel.runtime.phase,panel.runtime.phase))
+            self.state_label.setText(f"实验 {panel.runtime.run_dir.name[-6:]} · {phase} · 历史 #{panel.runtime.history_epoch}")
         color = STATE_BADGE_COLORS.get(state, STATE_BADGE_COLORS["no_session"])
         self.state_label.setStyleSheet(
             f"background:{CARD};border:2px solid {color};border-radius:12px;"
@@ -2600,9 +2759,15 @@ class ValidationWindow(QMainWindow):
         executing = bool((self.session and self.session.state in {
             SessionState.EXECUTING, SessionState.PAUSED, SessionState.ARMED})
             or worker_active)
-        self.tabs.setTabEnabled(0, not executing)
-        self.tabs.setTabEnabled(1, not executing)
-        self.tabs.setTabEnabled(2, not executing)
+        hereditary_active = bool(getattr(self, "hereditary_panel", None)
+                                  and self.hereditary_panel.active)
+        if hasattr(self, "safety_dialog"):
+            self.safety_dialog.setEnabled(not hereditary_active and not executing)
+        if self.hereditary_workflow:
+            self.tabs.tabBar().setEnabled(not hereditary_active)
+            self.tabs.widget(0).setEnabled(not hereditary_active)
+        else:
+            for i in range(3): self.tabs.setTabEnabled(i, not executing)
         self._refresh_anchor_controls()
 
     def _log(self, message: str) -> None:
@@ -2615,6 +2780,18 @@ class ValidationWindow(QMainWindow):
         QMessageBox.critical(self, "实机验证工作台", message)
 
     def closeEvent(self, event) -> None:
+        panel = getattr(self, "hereditary_panel", None)
+        if panel is not None:
+            if panel.runtime is not None and panel.runtime.initialized and not panel.busy:
+                panel.stop()
+            job = panel.shutdown()
+            deadline = time.monotonic() + 4.0
+            while job and job.isRunning() and time.monotonic() < deadline:
+                QApplication.processEvents(); job.wait(20)
+            if job and job.isRunning():
+                event.ignore()
+                self._log("Hereditary worker 尚未结束，等待停止后再关闭")
+                return
         if self.session and self.session.state in {
                 SessionState.ARMED, SessionState.EXECUTING, SessionState.PAUSED}:
             self._abort()
@@ -2642,7 +2819,7 @@ def main() -> int:
     # 默认真实相机 ×1(真实是正常系统);无硬件调试时在 Setup 页把『相机』框填 0 用 Mock。
     app = QApplication(sys.argv)
     app.setStyleSheet(QSS)
-    window = ValidationWindow()
+    window = ValidationWindow(workflow="legacy" if "--legacy-openloop" in sys.argv else "hereditary")
     window.show()
     return app.exec_()
 

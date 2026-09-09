@@ -7,8 +7,10 @@ Mock/Real 选择和安全关闭，不重新实现硬件协议。
 from __future__ import annotations
 
 import time
+import threading
+from collections import deque
 
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt5.QtCore import QObject, Qt, pyqtSignal
 
 from .profile import BackendMode, DeviceState, HardwareProfile
 
@@ -28,6 +30,11 @@ class HardwareSession(QObject):
         super().__init__(parent)
         self.profile = HardwareProfile.all_mock()
         self.cameras = []
+        self.camera_epoch = 0
+        self._frame_lock = threading.Lock()
+        self._raw_frames = {}
+        self._ndi_lock=threading.Lock();self._ndi_samples=deque(maxlen=60000);self._ndi_epoch=0
+        self.camera_driver_active=None
         self.ndi_thread = None
         self.valve_controller = None
         self.last_applied6 = (0.0,) * 6
@@ -61,53 +68,89 @@ class HardwareSession(QObject):
         return bool(self.cameras or self.ndi_thread is not None
                     or self.valve_controller is not None)
 
+    def apply_disconnected_config(self, profile):
+        """Change only settings belonging to disconnected devices/groups."""
+        old=self.profile
+        changed={key for key,value in old.to_dict().items() if value!=profile.to_dict()[key]}-{'name'}
+        if not self.any_running:
+            self.apply_profile(profile);return
+        if self.cameras and changed & {'camera_backend','camera_count','camera_serials','camera_driver','camera_sources'}:
+            raise HardwareSessionError('请先断开相机再更改其参数')
+        c=self.valve_controller
+        if c is not None:
+            if changed & {'valve_backend','baudrate','slave_addr'}:
+                raise HardwareSessionError('阀控制器已创建，请断开全部设备后更改 backend/串口协议')
+            for gid,key in ((1,'group1_port'),(2,'group2_port')):
+                if key in changed and gid in c.connected_groups:raise HardwareSessionError(f'请先断开组{gid}')
+        if self.ndi_thread is not None and changed & {'ndi_backend','ndi_port','ndi_count'}:
+            raise HardwareSessionError('请先断开 NDI')
+        if c is not None and hasattr(c,'group_ports'):
+            c.group_ports={1:profile.group1_port,2:profile.group2_port}
+        self.profile=profile
+
     def start_cameras(self) -> None:
         backend = self.profile.camera_backend
         if backend == BackendMode.DISABLED:
             raise HardwareSessionError("相机已禁用")
         if self.cameras:
             raise HardwareSessionError("相机已启动")
-        from .camera import RealSenseCam
-        count = self.profile.camera_count
-        if backend == BackendMode.MOCK:
-            serials = [None] * count
-        else:
-            serials = list(self.profile.camera_serials)
-            if not serials:
-                serials = RealSenseCam.list_devices()[:count]
-            if len(serials) != count:
-                self._set_state("camera", DeviceState.ERROR,
-                                f"请求 {count} 台，只发现 {len(serials)} 台")
-                raise HardwareSessionError(self.messages["camera"])
-            if len(set(serials)) != len(serials):
-                raise HardwareSessionError("RealSense serial 重复")
+        from .camera import RealSenseCam,OpenCVCam,camera_specs
+        count=self.profile.camera_count
+        driver,serials=camera_specs(self.profile);self.camera_driver_active=driver
+        self.log.emit(f'相机使用 {driver}: {serials}；仅采集彩色图像')
         self._set_state("camera", DeviceState.CONNECTING,
                         f"启动 {backend.value.upper()} ×{count}")
         try:
             for index, serial in enumerate(serials):
-                camera = RealSenseCam(mock=(backend == BackendMode.MOCK), serial=serial)
+                camera = OpenCVCam(source=serial) if driver=='opencv' else RealSenseCam(mock=(backend == BackendMode.MOCK), serial=serial)
+                self.bind_frame_buffer(camera, index)
                 camera.frame_ready.connect(
-                    lambda image, stamp, idx=index: self._on_camera_frame(idx, image, stamp))
+                    lambda image, stamp, idx=index, epoch=self.camera_epoch: self._on_camera_frame(idx, image, stamp, epoch))
                 camera.error.connect(
-                    lambda message, idx=index: self._on_camera_error(idx, message))
+                    lambda message, idx=index, epoch=self.camera_epoch: self._on_camera_error(idx, message, epoch))
                 self.cameras.append(camera)
             for camera in self.cameras:
                 camera.start()
-            self._set_state("camera", DeviceState.READY,
-                            f"{backend.value.upper()} ×{count}")
+            # Real devices become READY only after an actual frame arrives.
+            if backend==BackendMode.MOCK:self._set_state("camera",DeviceState.READY,f'MOCK ×{count}')
         except Exception:
             self.stop_cameras()
             raise
 
-    def _on_camera_frame(self, index: int, image, timestamp: float) -> None:
+    def _on_camera_frame(self, index: int, image, timestamp: float, epoch=None) -> None:
+        if epoch is not None and epoch!=self.camera_epoch:return
+        if self.states['camera']==DeviceState.CONNECTING:
+            with self._frame_lock:complete=len(self._raw_frames)>=len(self.cameras)
+            if complete:self._set_state('camera',DeviceState.READY,f'{self.camera_driver_active} ×{len(self.cameras)}')
         self.camera_frame.emit(int(index), image, float(timestamp))
 
-    def _on_camera_error(self, index: int, message: str) -> None:
+    def bind_frame_buffer(self, camera, index: int) -> None:
+        epoch = self.camera_epoch
+        # Ingress runs in the capture emitter thread; no QWidget work here.
+        camera.frame_ready.connect(
+            lambda image, stamp, idx=index, generation=epoch:
+                self._buffer_frame(idx, image, stamp, generation), Qt.DirectConnection)
+
+    def _buffer_frame(self, index, image, timestamp, epoch) -> None:
+        with self._frame_lock:
+            if epoch == self.camera_epoch:
+                self._raw_frames[int(index)] = (image.copy(), float(timestamp))
+
+    def latest_camera_frame(self, index: int):
+        with self._frame_lock:
+            value = self._raw_frames.get(int(index))
+            return None if value is None else (value[0].copy(), value[1])
+
+    def _on_camera_error(self, index: int, message: str, epoch=None) -> None:
+        if epoch is not None and epoch!=self.camera_epoch:return
         self._set_state("camera", DeviceState.ERROR,
                         f"cam{index}: {message}")
         self.log.emit(f"相机 cam{index} 错误: {message}")
 
     def stop_cameras(self) -> None:
+        with self._frame_lock:
+            self.camera_epoch += 1
+            self._raw_frames.clear()
         cameras, self.cameras = list(self.cameras), []
         for camera in cameras:
             try:
@@ -193,9 +236,11 @@ class HardwareSession(QObject):
         thread = (MockNdiThread(ndi_count=self.profile.ndi_count)
                   if backend == BackendMode.MOCK else
                   NdiThread(self.profile.ndi_port, ndi_count=self.profile.ndi_count))
-        thread.ndi_data.connect(self._on_ndi_data)
+        self._ndi_epoch+=1;epoch=self._ndi_epoch
+        thread.ndi_data.connect(lambda values,stamp:self._buffer_ndi(values,stamp,epoch),Qt.DirectConnection)
+        thread.ndi_data.connect(lambda values,stamp:self._on_ndi_data(values,stamp,epoch))
         if hasattr(thread, "error"):
-            thread.error.connect(self._on_ndi_error)
+            thread.error.connect(lambda message:self._on_ndi_error(message,epoch))
         self.ndi_thread = thread
         self._set_state("ndi", DeviceState.CONNECTING,
                         f"启动 {backend.value.upper()} ×{self.profile.ndi_count}")
@@ -204,17 +249,35 @@ class HardwareSession(QObject):
             self._set_state("ndi", DeviceState.READY,
                             f"MOCK ×{self.profile.ndi_count}")
 
-    def _on_ndi_data(self, values: list, timestamp: float) -> None:
+    def _buffer_ndi(self,values,timestamp,epoch):
+        with self._ndi_lock:
+            if epoch==self._ndi_epoch:self._ndi_samples.append((float(timestamp),list(values)))
+
+    def evaluation_samples(self,started,ended):
+        with self._ndi_lock:
+            samples=[(stamp,list(values)) for stamp,values in self._ndi_samples if started<=stamp<=ended]
+            oldest=self._ndi_samples[0][0] if self._ndi_samples else None
+        return dict(backend=self.profile.ndi_backend.value,state=self.states['ndi'].value,
+                    connected=self.ndi_thread is not None,samples=samples,
+                    buffer_oldest=oldest,probe_count=self.profile.ndi_count)
+
+    def camera_frames(self):
+        with self._frame_lock:return {i:(frame.copy(),stamp) for i,(frame,stamp) in self._raw_frames.items()}
+
+    def _on_ndi_data(self, values: list, timestamp: float, epoch=None) -> None:
+        if epoch is not None and epoch!=self._ndi_epoch:return
         if self.states["ndi"] != DeviceState.READY:
             self._set_state("ndi", DeviceState.READY,
                             f"{self.profile.ndi_backend.value.upper()} ×{self.profile.ndi_count}")
         self.ndi_data.emit(list(values), float(timestamp))
 
-    def _on_ndi_error(self, message: str) -> None:
+    def _on_ndi_error(self, message: str, epoch=None) -> None:
+        if epoch is not None and epoch!=self._ndi_epoch:return
         self._set_state("ndi", DeviceState.ERROR, str(message))
         self.log.emit(f"NDI 错误: {message}")
 
     def stop_ndi(self) -> None:
+        self._ndi_epoch+=1
         thread, self.ndi_thread = self.ndi_thread, None
         if thread is not None:
             try:
@@ -243,6 +306,7 @@ class HardwareSession(QObject):
     def snapshot(self) -> dict:
         return {
             "profile": self.profile.to_dict(),
+            "camera_driver_active": self.camera_driver_active,
             "states": {key: value.value for key, value in self.states.items()},
             "messages": dict(self.messages),
             "last_applied6": list(self.last_applied6),
