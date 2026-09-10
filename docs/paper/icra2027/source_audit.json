@@ -1,0 +1,154 @@
+{
+  "date": "2026-09-10",
+  "code_baseline": "bd6ee3280e724d0162c10edc8bd1e3f9b97eb356",
+  "review_type": "Focused narrative synthesis of previously collected primary sources",
+  "remote_publication_status_refreshed": false,
+  "reference_count": 14,
+  "sources": [
+    {
+      "reference": 1,
+      "source_id": "almanzor2023",
+      "title": "Static Shape Control of Soft Continuum Robots Using Deep Visual Inverse Kinematic Models",
+      "url": "https://doi.org/10.1109/TRO.2023.3275375",
+      "local_source": "docs/papers/Almanzor 等 - 2023 - Static shape control of soft continuum robots using deep visual inverse kinematic models.pdf",
+      "sha256": "2b9630677b305b745acf9006df6f0e5bfd5875d73a2fc054227854c5424b9881",
+      "checked_scope_from_preparation": "本地出版PDF引言、实验及结论",
+      "current_review": "Title, author metadata and selected opening text; technical scope from prepared source card"
+    },
+    {
+      "reference": 2,
+      "source_id": "yu2026",
+      "title": "Shape-Interpretable Visual Self-Modeling Enables Geometry-Aware Continuum Robot Control",
+      "url": "https://arxiv.org/html/2603.01751",
+      "local_source": "workspace/reports/paper_preparation_20260910_000/sources/yu2026.html",
+      "sha256": "5e5b8b20ccde3b0face1bbcd2157fc40dcbfcd83aa4a8f93a19fec62a520dc18",
+      "checked_scope_from_preparation": "I；IV-B–F；V",
+      "current_review": "Selected introduction paragraphs and author/title metadata"
+    },
+    {
+      "reference": 3,
+      "source_id": "chen2022",
+      "title": "Fully body visual self-modeling of robot morphologies",
+      "url": "https://doi.org/10.1126/scirobotics.abn1944",
+      "local_source": "docs/papers/Chen 等 - 2022 - Fully body visual self-modeling of robot morphologies.pdf",
+      "sha256": "c3ecc067b7bbc0ac25b905fbd12302122eb058ae44f80b876ea4ac5a25f754df",
+      "checked_scope_from_preparation": "本地出版PDF摘要、引言、结果及讨论",
+      "current_review": "Title, author metadata and selected opening text; technical scope from prepared source card"
+    },
+    {
+      "reference": 4,
+      "source_id": "softnerf2024",
+      "title": "SoftNeRF: A Self-Modeling Soft Robot Plugin for Various Tasks",
+      "url": "https://doi.org/10.1109/IROS58592.2024.10801344",
+      "local_source": "docs/papers/Shan 等 - 2024 - SoftNeRF A self-modeling soft robot plugin for various tasks.pdf",
+      "sha256": "e04513b3119ad178b300428d978ddf5aded297bb203736399d852bfc532928fd",
+      "checked_scope_from_preparation": "本地出版PDF摘要、引言、方法及实验",
+      "current_review": "Title, author metadata and selected opening text; technical scope from prepared source card"
+    },
+    {
+      "reference": 5,
+      "source_id": "aft2025",
+      "title": "AFT: Appearance-Based Feature Tracking for Markerless and Training-Free Shape Reconstruction of Soft Robots",
+      "url": "https://arxiv.org/html/2511.18215",
+      "local_source": "workspace/reports/paper_preparation_20260910_000/sources/aft2025.html",
+      "sha256": "91b1beccf7cf4d317bae09372008996b0ec8ef300dadb0bb12d6a872b96bdf78",
+      "checked_scope_from_preparation": "I；IV-C–G；Table II",
+      "current_review": "Selected introduction paragraphs and author/title metadata"
+    },
+    {
+      "reference": 6,
+      "source_id": "chen2025",
+      "title": "Hysteresis-Aware Neural Network Modeling and Whole-Body Reinforcement Learning Control of Soft Robots",
+      "url": "https://arxiv.org/html/2504.13582",
+      "local_source": "workspace/reports/paper_preparation_20260910_000/sources/chen2025.html",
+      "sha256": "e63f5efdaf3f082d2bb38766405b0bdc2853cc873daa2a2a677724f7f7845639",
+      "checked_scope_from_preparation": "I；III；V-A",
+      "current_review": "Selected introduction paragraphs and author/title metadata"
+    },
+    {
+      "reference": 7,
+      "source_id": "park2024",
+      "title": "Hysteresis Compensation of Flexible Continuum Manipulator Using RGBD Sensing and Temporal Convolutional Network",
+      "url": "https://arxiv.org/html/2402.11319",
+      "local_source": "workspace/reports/paper_preparation_20260910_000/sources/park2024.html",
+      "sha256": "71be2a4b6f03c27d24cac199d5b72abdcc5968941acefa6d850e20c7372f1c86",
+      "checked_scope_from_preparation": "I；方法与实验章节",
+      "current_review": "Selected introduction paragraphs and author/title metadata"
+    },
+    {
+      "reference": 8,
+      "source_id": "schafke2024",
+      "title": "Learning-Based Nonlinear Model Predictive Control of Articulated Soft Robots Using Recurrent Neural Networks",
+      "url": "https://arxiv.org/html/2411.05616",
+      "local_source": "workspace/reports/paper_preparation_20260910_000/sources/schafke2024.html",
+      "sha256": "c1e11451d01a5d21e1e3f22eae65f185333c159e268f6783a926405eddaa0962",
+      "checked_scope_from_preparation": "I；III；IV-C",
+      "current_review": "Selected introduction paragraphs and author/title metadata"
+    },
+    {
+      "reference": 9,
+      "source_id": "krauss2026",
+      "title": "Accurate Open-Loop Control of a Soft Continuum Robot Through Visually Learned Latent Representations",
+      "url": "https://arxiv.org/html/2603.19655",
+      "local_source": "workspace/reports/paper_preparation_20260910_000/sources/krauss2026.html",
+      "sha256": "03e38bf1bdd29b42143ba2b9f1558254b3f9d179e2b80983178d26ee8dde2b2f",
+      "checked_scope_from_preparation": "I；III；IV",
+      "current_review": "Selected introduction paragraphs and author/title metadata"
+    },
+    {
+      "reference": 10,
+      "source_id": "wang2025",
+      "title": "Estimating Continuum Robot Shape under External Loading using Spatiotemporal Neural Networks",
+      "url": "https://arxiv.org/html/2510.22339",
+      "local_source": "workspace/reports/paper_preparation_20260910_000/sources/wang2025.html",
+      "sha256": "be57507b0f0825ade9a9b4ae1e0188bc180e8c7f37dc8101883fd680a27e567a",
+      "checked_scope_from_preparation": "Abstract；I；III-A–C",
+      "current_review": "Selected introduction paragraphs and author/title metadata"
+    },
+    {
+      "reference": 11,
+      "source_id": "zheng2025",
+      "title": "Estimating Dynamic Soft Continuum Robot States From Boundaries",
+      "url": "https://arxiv.org/html/2505.04491",
+      "local_source": "workspace/reports/paper_preparation_20260910_000/sources/zheng2025.html",
+      "sha256": "0bc47d74d7d4298800cafc2cef5c49abc8c1bcca0d8470e16521bb5af0c8c9f5",
+      "checked_scope_from_preparation": "I；VI–VIII；Conclusion",
+      "current_review": "Selected introduction paragraphs and author/title metadata"
+    },
+    {
+      "reference": 12,
+      "source_id": "herrmann2026",
+      "title": "Discrete Geometric Modeling and Extended State Estimation of Continuum Robots",
+      "url": "https://arxiv.org/html/2606.21205",
+      "local_source": "workspace/reports/paper_preparation_20260910_000/sources/herrmann2026.html",
+      "sha256": "a8e5fbecf7bd6222bc17747b426ff2a8733dd9a8fe9c5718164283de30358bda",
+      "checked_scope_from_preparation": "Abstract；I；3；4.1–4.3",
+      "current_review": "Title, author metadata and selected opening text; technical scope from prepared source card"
+    },
+    {
+      "reference": 13,
+      "source_id": "tang2026",
+      "title": "A general soft robotic controller inspired by neuronal structural and plastic synapses that adapts to diverse arms, tasks, and perturbations",
+      "url": "https://doi.org/10.1126/sciadv.aea3712",
+      "local_source": "docs/papers/Tang 等 - 2026 - A general soft robotic controller inspired by neuronal structural and plastic synapses that adapts t.pdf",
+      "sha256": "0ac3759a1715c795c660d85978a551a643bb0f5afd4ea2cc94bc80d7c43301b4",
+      "checked_scope_from_preparation": "本地出版PDF摘要、引言、实验与讨论",
+      "current_review": "Title, author metadata and selected opening text; technical scope from prepared source card"
+    },
+    {
+      "reference": 14,
+      "source_id": "xu2026",
+      "title": "Safety-Aware Adaptive Visual Servoing of Soft Robots through Online Shape-Force Transformation",
+      "url": "https://doi.org/10.1109/TRO.2026.3706564",
+      "local_source": "docs/papers/Xu 等 - 2026 - Safety-aware adaptive visual servoing of soft robots through online shape-force transformation.pdf",
+      "sha256": "8a8ea28487d6adeca231b681e4363ddde64e83cc012270f58030f38fa911a279",
+      "checked_scope_from_preparation": "本地接受稿引言、方法与实验",
+      "current_review": "Title, author metadata and selected opening text; technical scope from prepared source card"
+    }
+  ],
+  "limitations": [
+    "Hash verification confirms local source identity, not independent reproduction of paper results.",
+    "Current manuscript experimental outcomes are placeholders and prospective hypotheses.",
+    "Final publication metadata and software citations require freezing before submission."
+  ]
+}
