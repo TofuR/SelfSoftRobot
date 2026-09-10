@@ -1,0 +1,490 @@
+[
+  {
+    "paper": "krauss2026",
+    "title": "Krauss 2026：视觉潜动力学开环控制",
+    "anchor": "S1.p1",
+    "url": "https://arxiv.org/html/2603.19655#S1.p1",
+    "topic": "视频中的低维潜动力学已经能够由数据学习。",
+    "role": "建立领域进展"
+  },
+  {
+    "paper": "krauss2026",
+    "title": "Krauss 2026：视觉潜动力学开环控制",
+    "anchor": "S1.p2",
+    "url": "https://arxiv.org/html/2603.19655#S1.p2",
+    "topic": "软连续体的高维变形使解析建模困难，已有快速替代模型。",
+    "role": "把通用进展落到机器人问题"
+  },
+  {
+    "paper": "krauss2026",
+    "title": "Krauss 2026：视觉潜动力学开环控制",
+    "anchor": "S1.p3",
+    "url": "https://arxiv.org/html/2603.19655#S1.p3",
+    "topic": "低阶物理表示与数据驱动潜动力学提供了另一条控制路线。",
+    "role": "分类梳理已有方法"
+  },
+  {
+    "paper": "krauss2026",
+    "title": "Krauss 2026：视觉潜动力学开环控制",
+    "anchor": "S1.p4",
+    "url": "https://arxiv.org/html/2603.19655#S1.p4",
+    "topic": "潜表示还需要可解释性和泛化依据，作者前作给出可视振荡器表示。",
+    "role": "承接自身前作而非凭空引入方法"
+  },
+  {
+    "paper": "krauss2026",
+    "title": "Krauss 2026：视觉潜动力学开环控制",
+    "anchor": "S1.p5",
+    "url": "https://arxiv.org/html/2603.19655#S1.p5",
+    "topic": "开环误差会随预测累积，使潜轨迹离开有效数据流形。",
+    "role": "具体失败机制"
+  },
+  {
+    "paper": "krauss2026",
+    "title": "Krauss 2026：视觉潜动力学开环控制",
+    "anchor": "S1.p6",
+    "url": "https://arxiv.org/html/2603.19655#S1.p6",
+    "topic": "作者将缺口限定为可靠的显式潜动力学开环控制和可用目标设计。",
+    "role": "聚焦问题；其首次判断仍是作者主张"
+  },
+  {
+    "paper": "krauss2026",
+    "title": "Krauss 2026：视觉潜动力学开环控制",
+    "anchor": "S1.p7",
+    "url": "https://arxiv.org/html/2603.19655#S1.p7",
+    "topic": "本文同时处理表示解释、无反馈可靠控制和未见目标生成。",
+    "role": "将缺口变成设计目标"
+  },
+  {
+    "paper": "krauss2026",
+    "title": "Krauss 2026：视觉潜动力学开环控制",
+    "anchor": "S1.I1.i1.p1",
+    "url": "https://arxiv.org/html/2603.19655#S1.I1.i1.p1",
+    "topic": "以真实机器人比较、仿真压力测试和训练消融支撑控制方案。",
+    "role": "贡献列表①，不重复计为正文自然段"
+  },
+  {
+    "paper": "krauss2026",
+    "title": "Krauss 2026：视觉潜动力学开环控制",
+    "anchor": "S1.I1.i2.p1",
+    "url": "https://arxiv.org/html/2603.19655#S1.I1.i2.p1",
+    "topic": "提供交互式模拟器生成目标状态与轨迹。",
+    "role": "贡献列表②"
+  },
+  {
+    "paper": "yu2026",
+    "title": "Yu 2026：形状可解释自建模与几何控制",
+    "anchor": "S1.p1",
+    "url": "https://arxiv.org/html/2603.01751#S1.p1",
+    "topic": "连续体形态带来适应能力，同时使感知、建模与控制困难。",
+    "role": "领域场景"
+  },
+  {
+    "paper": "yu2026",
+    "title": "Yu 2026：形状可解释自建模与几何控制",
+    "anchor": "S1.p2",
+    "url": "https://arxiv.org/html/2603.01751#S1.p2",
+    "topic": "末端控制已取得解析和数据驱动方面的进展。",
+    "role": "先承认已有能力"
+  },
+  {
+    "paper": "yu2026",
+    "title": "Yu 2026：形状可解释自建模与几何控制",
+    "anchor": "S1.p3",
+    "url": "https://arxiv.org/html/2603.01751#S1.p3",
+    "topic": "只控制末端不足以完成需要调节臂身的任务。",
+    "role": "明确目标变量变化"
+  },
+  {
+    "paper": "yu2026",
+    "title": "Yu 2026：形状可解释自建模与几何控制",
+    "anchor": "S1.p4",
+    "url": "https://arxiv.org/html/2603.01751#S1.p4",
+    "topic": "按形状表示把方法分成物理模型、离散点和视觉端到端三类。",
+    "role": "组织相关工作，不按作者流水账"
+  },
+  {
+    "paper": "yu2026",
+    "title": "Yu 2026：形状可解释自建模与几何控制",
+    "anchor": "S1.p5",
+    "url": "https://arxiv.org/html/2603.01751#S1.p5",
+    "topic": "作者把共同问题归结为缺少可解释、可学习、能用于控制的全身表示。",
+    "role": "抽取跨类别问题；范围需审慎"
+  },
+  {
+    "paper": "yu2026",
+    "title": "Yu 2026：形状可解释自建模与几何控制",
+    "anchor": "S1.p6",
+    "url": "https://arxiv.org/html/2603.01751#S1.p6",
+    "topic": "通过多视角曲线表示、NODE和混合控制连接自建模与任务。",
+    "role": "给出机制路线"
+  },
+  {
+    "paper": "yu2026",
+    "title": "Yu 2026：形状可解释自建模与几何控制",
+    "anchor": "S1.p7",
+    "url": "https://arxiv.org/html/2603.01751#S1.p7",
+    "topic": "从物理依赖、标记依赖和形状可解释性三个维度说明差异。",
+    "role": "将方法对应回前述分类"
+  },
+  {
+    "paper": "yu2026",
+    "title": "Yu 2026：形状可解释自建模与几何控制",
+    "anchor": "S1.p8",
+    "url": "https://arxiv.org/html/2603.01751#S1.p8",
+    "topic": "贡献由表示、形状位置控制和真实任务验证构成。",
+    "role": "贡献收束"
+  },
+  {
+    "paper": "aft2025",
+    "title": "Yuan 等 AFT 2025：自然外观特征与遮挡重建",
+    "anchor": "S1.p1",
+    "url": "https://arxiv.org/html/2511.18215#S1.p1",
+    "topic": "连续大变形使可靠且易部署的形状感知成为关键需求。",
+    "role": "把应用收敛到感知任务"
+  },
+  {
+    "paper": "aft2025",
+    "title": "Yuan 等 AFT 2025：自然外观特征与遮挡重建",
+    "anchor": "S1.p2",
+    "url": "https://arxiv.org/html/2511.18215#S1.p2",
+    "topic": "嵌入传感的布线和制造代价推动非接触视觉方案。",
+    "role": "解释传感选择"
+  },
+  {
+    "paper": "aft2025",
+    "title": "Yuan 等 AFT 2025：自然外观特征与遮挡重建",
+    "anchor": "S1.p3",
+    "url": "https://arxiv.org/html/2511.18215#S1.p3",
+    "topic": "视觉方法通常先获取三维/轮廓，再通过模型匹配恢复形状。",
+    "role": "明确现有处理链"
+  },
+  {
+    "paper": "aft2025",
+    "title": "Yuan 等 AFT 2025：自然外观特征与遮挡重建",
+    "anchor": "S1.p4",
+    "url": "https://arxiv.org/html/2511.18215#S1.p4",
+    "topic": "形状模型和优化范式不同，精度、耗时与训练数据需求各有代价。",
+    "role": "用两个轴组织方法"
+  },
+  {
+    "paper": "aft2025",
+    "title": "Yuan 等 AFT 2025：自然外观特征与遮挡重建",
+    "anchor": "S1.p5",
+    "url": "https://arxiv.org/html/2511.18215#S1.p5",
+    "topic": "相机位置、背景、标注和遮挡要求限制快速部署。",
+    "role": "提出具体部署瓶颈"
+  },
+  {
+    "paper": "aft2025",
+    "title": "Yuan 等 AFT 2025：自然外观特征与遮挡重建",
+    "anchor": "S1.p6",
+    "url": "https://arxiv.org/html/2511.18215#S1.p6",
+    "topic": "人工标记可改善对应，但遮挡、形变和制作维护仍有问题。",
+    "role": "推演直观替代方案及不足"
+  },
+  {
+    "paper": "aft2025",
+    "title": "Yuan 等 AFT 2025：自然外观特征与遮挡重建",
+    "anchor": "S1.p7",
+    "url": "https://arxiv.org/html/2511.18215#S1.p7",
+    "topic": "自然表面纹理可充当大量可区分特征，使部分遮挡后仍有匹配证据。",
+    "role": "方法直觉与机制"
+  },
+  {
+    "paper": "aft2025",
+    "title": "Yuan 等 AFT 2025：自然外观特征与遮挡重建",
+    "anchor": "S1.p8",
+    "url": "https://arxiv.org/html/2511.18215#S1.p8",
+    "topic": "用层次匹配和全局几何优化，从初始参考与单RGB-D恢复形状并验证反馈控制。",
+    "role": "贡献与适用条件"
+  },
+  {
+    "paper": "aft2025",
+    "title": "Yuan 等 AFT 2025：自然外观特征与遮挡重建",
+    "anchor": "S1.p9",
+    "url": "https://arxiv.org/html/2511.18215#S1.p9",
+    "topic": "后续章节分别展开参考建立、在线重建、实验和总结。",
+    "role": "文章导航"
+  },
+  {
+    "paper": "chen2025",
+    "title": "Chen 2025：迟滞感知全身模型与强化学习",
+    "anchor": "S1.p1",
+    "url": "https://arxiv.org/html/2504.13582#S1.p1",
+    "topic": "软体结构适合人体交互和手术等柔顺任务。",
+    "role": "建立应用需求"
+  },
+  {
+    "paper": "chen2025",
+    "title": "Chen 2025：迟滞感知全身模型与强化学习",
+    "anchor": "S1.p2",
+    "url": "https://arxiv.org/html/2504.13582#S1.p2",
+    "topic": "材料/结构差异及迟滞增加准确建模和控制难度。",
+    "role": "提炼模型挑战"
+  },
+  {
+    "paper": "chen2025",
+    "title": "Chen 2025：迟滞感知全身模型与强化学习",
+    "anchor": "S1.p3",
+    "url": "https://arxiv.org/html/2504.13582#S1.p3",
+    "topic": "解析假设受结构复杂性限制，数据驱动拟合成为可行方向。",
+    "role": "方法背景"
+  },
+  {
+    "paper": "chen2025",
+    "title": "Chen 2025：迟滞感知全身模型与强化学习",
+    "anchor": "S1.p4",
+    "url": "https://arxiv.org/html/2504.13582#S1.p4",
+    "topic": "相同输入在不同路径有不同形状，且复杂任务要求全身建模。",
+    "role": "把历史与全身两个问题连接起来"
+  },
+  {
+    "paper": "chen2025",
+    "title": "Chen 2025：迟滞感知全身模型与强化学习",
+    "anchor": "S1.p5",
+    "url": "https://arxiv.org/html/2504.13582#S1.p5",
+    "topic": "高维欠驱动形态映射推动学习控制策略，真实任务仍需要准确全身模型。",
+    "role": "从模型过渡到控制"
+  },
+  {
+    "paper": "chen2025",
+    "title": "Chen 2025：迟滞感知全身模型与强化学习",
+    "anchor": "S1.p6",
+    "url": "https://arxiv.org/html/2504.13582#S1.p6",
+    "topic": "提出三腔手术软机器人、迟滞感知网络和全身RL框架。",
+    "role": "具体解决方案"
+  },
+  {
+    "paper": "chen2025",
+    "title": "Chen 2025：迟滞感知全身模型与强化学习",
+    "anchor": "S1.p7",
+    "url": "https://arxiv.org/html/2504.13582#S1.p7",
+    "topic": "接下来概括本文贡献。",
+    "role": "列表引导，不赋予额外科学主张"
+  },
+  {
+    "paper": "chen2025",
+    "title": "Chen 2025：迟滞感知全身模型与强化学习",
+    "anchor": "S1.I1.i1.p1",
+    "url": "https://arxiv.org/html/2504.13582#S1.I1.i1.p1",
+    "topic": "机器人系统与sim-to-real-to-sim流程构成验证平台。",
+    "role": "贡献列表①"
+  },
+  {
+    "paper": "chen2025",
+    "title": "Chen 2025：迟滞感知全身模型与强化学习",
+    "anchor": "S1.I1.i2.p1",
+    "url": "https://arxiv.org/html/2504.13582#S1.I1.i2.p1",
+    "topic": "加入气压方向特征预测全身形状与姿态。",
+    "role": "贡献列表②"
+  },
+  {
+    "paper": "chen2025",
+    "title": "Chen 2025：迟滞感知全身模型与强化学习",
+    "anchor": "S1.I1.i3.p1",
+    "url": "https://arxiv.org/html/2504.13582#S1.I1.i3.p1",
+    "topic": "用学得模型建立并行环境训练全身策略。",
+    "role": "贡献列表③"
+  },
+  {
+    "paper": "zheng2025",
+    "title": "Zheng 2025：从物理边界估计动态全状态",
+    "anchor": "S1.p1",
+    "url": "https://arxiv.org/html/2505.04491#S1.p1",
+    "topic": "细长柔性机器人适用于受限空间任务。",
+    "role": "场景动机"
+  },
+  {
+    "paper": "zheng2025",
+    "title": "Zheng 2025：从物理边界估计动态全状态",
+    "anchor": "S1.p2",
+    "url": "https://arxiv.org/html/2505.04491#S1.p2",
+    "topic": "连续体状态沿弧长和时间分布，状态估计比刚体复杂。",
+    "role": "明确状态及维数"
+  },
+  {
+    "paper": "zheng2025",
+    "title": "Zheng 2025：从物理边界估计动态全状态",
+    "anchor": "S1.p3",
+    "url": "https://arxiv.org/html/2505.04491#S1.p3",
+    "topic": "离散传感与模型融合已能在准静态条件推断连续形状。",
+    "role": "承认稀疏观测研究基础"
+  },
+  {
+    "paper": "zheng2025",
+    "title": "Zheng 2025：从物理边界估计动态全状态",
+    "anchor": "S1.p4",
+    "url": "https://arxiv.org/html/2505.04491#S1.p4",
+    "topic": "动态运动需要动态模型，已有降阶和直接PDE观察器。",
+    "role": "限定增量到动态估计"
+  },
+  {
+    "paper": "zheng2025",
+    "title": "Zheng 2025：从物理边界估计动态全状态",
+    "anchor": "S1.p5",
+    "url": "https://arxiv.org/html/2505.04491#S1.p5",
+    "topic": "以基座力矩/力误差构造观察器，分析增益并验证边界测量组合。",
+    "role": "机制、理论问题与验证一体提出"
+  },
+  {
+    "paper": "zheng2025",
+    "title": "Zheng 2025：从物理边界估计动态全状态",
+    "anchor": "S1.p6",
+    "url": "https://arxiv.org/html/2505.04491#S1.p6",
+    "topic": "按静态/动态、模型、传感和可恢复状态列差异，并明确相对前作的扩展。",
+    "role": "用比较表界定贡献"
+  },
+  {
+    "paper": "zheng2025",
+    "title": "Zheng 2025：从物理边界估计动态全状态",
+    "anchor": "S1.p7",
+    "url": "https://arxiv.org/html/2505.04491#S1.p7",
+    "topic": "动态未知外力的联合估计仍是后续问题。",
+    "role": "主动说明未解问题"
+  },
+  {
+    "paper": "schafke2024",
+    "title": "Schäfke 2024：递归神经模型与NMPC",
+    "anchor": "S1.p1",
+    "url": "https://arxiv.org/html/2411.05616#S1.p1",
+    "topic": "复杂几何和粘弹性/迟滞使多自由度软机器人难以控制。",
+    "role": "模型与控制困难"
+  },
+  {
+    "paper": "schafke2024",
+    "title": "Schäfke 2024：递归神经模型与NMPC",
+    "anchor": "S1.p2",
+    "url": "https://arxiv.org/html/2411.05616#S1.p2",
+    "topic": "输入输出学习可减少人工建模并在系统变化后重训。",
+    "role": "方法选择动机"
+  },
+  {
+    "paper": "schafke2024",
+    "title": "Schäfke 2024：递归神经模型与NMPC",
+    "anchor": "S1.p3",
+    "url": "https://arxiv.org/html/2411.05616#S1.p3",
+    "topic": "以GRU/LSTM动力学实现多自由度NMPC，并交代文章结构。",
+    "role": "提出路线"
+  },
+  {
+    "paper": "schafke2024",
+    "title": "Schäfke 2024：递归神经模型与NMPC",
+    "anchor": "S1.SS1.p1",
+    "url": "https://arxiv.org/html/2411.05616#S1.SS1.p1",
+    "topic": "MPC适合约束控制，而动力学准确性是其前提。",
+    "role": "相关工作：控制结构"
+  },
+  {
+    "paper": "schafke2024",
+    "title": "Schäfke 2024：递归神经模型与NMPC",
+    "anchor": "S1.SS1.p2",
+    "url": "https://arxiv.org/html/2411.05616#S1.SS1.p2",
+    "topic": "静态/短状态FNN已有控制实践，但历史效应仍需考虑。",
+    "role": "相关工作：无显式递归模型"
+  },
+  {
+    "paper": "schafke2024",
+    "title": "Schäfke 2024：递归神经模型与NMPC",
+    "anchor": "S1.SS1.p3",
+    "url": "https://arxiv.org/html/2411.05616#S1.SS1.p3",
+    "topic": "RNN可表达时序和迟滞，但模型收益还需要反馈控制证据。",
+    "role": "相关工作：递归路线"
+  },
+  {
+    "paper": "schafke2024",
+    "title": "Schäfke 2024：递归神经模型与NMPC",
+    "anchor": "S1.SS1.p4",
+    "url": "https://arxiv.org/html/2411.05616#S1.SS1.p4",
+    "topic": "短预测时域对隐藏状态初始化特别敏感。",
+    "role": "抓住容易忽略的工程科学问题"
+  },
+  {
+    "paper": "schafke2024",
+    "title": "Schäfke 2024：递归神经模型与NMPC",
+    "anchor": "S1.SS2.p1",
+    "url": "https://arxiv.org/html/2411.05616#S1.SS2.p1",
+    "topic": "以模型调参、隐藏状态处理、实机NMPC与开源实现填补所述问题。",
+    "role": "贡献"
+  },
+  {
+    "paper": "park2024",
+    "title": "Park 2024：RGB-D测量与TCN迟滞补偿",
+    "anchor": "S1.p1",
+    "url": "https://arxiv.org/html/2402.11319#S1.p1",
+    "topic": "自然腔道内镜任务需要在小尺寸下增加运动自由度。",
+    "role": "应用与机构需求"
+  },
+  {
+    "paper": "park2024",
+    "title": "Park 2024：RGB-D测量与TCN迟滞补偿",
+    "anchor": "S1.p2",
+    "url": "https://arxiv.org/html/2402.11319#S1.p2",
+    "topic": "长柔性缆线的摩擦、伸长、回差与耦合降低控制精度。",
+    "role": "明确迟滞来源"
+  },
+  {
+    "paper": "park2024",
+    "title": "Park 2024：RGB-D测量与TCN迟滞补偿",
+    "anchor": "S1.p3",
+    "url": "https://arxiv.org/html/2402.11319#S1.p3",
+    "topic": "双段机构与运动学设计解决部分结构限制。",
+    "role": "第一个设计分支"
+  },
+  {
+    "paper": "park2024",
+    "title": "Park 2024：RGB-D测量与TCN迟滞补偿",
+    "anchor": "S1.p4",
+    "url": "https://arxiv.org/html/2402.11319#S1.p4",
+    "topic": "用RGB-D和7个标记采集姿态，对比结构及历史长度后用TCN校准指令。",
+    "role": "第二个设计分支与实验因素"
+  },
+  {
+    "paper": "park2024",
+    "title": "Park 2024：RGB-D测量与TCN迟滞补偿",
+    "anchor": "S1.p5",
+    "url": "https://arxiv.org/html/2402.11319#S1.p5",
+    "topic": "通过机构、测量、补偿算法和三条未见轨迹概括贡献。",
+    "role": "闭合到可检验任务"
+  },
+  {
+    "paper": "shen2022",
+    "title": "Shen 2022 ACID：部分视觉与动作条件形变动力学",
+    "anchor": "S1.p1",
+    "url": "https://arxiv.org/html/2203.06856#S1.p1",
+    "topic": "可变形物体任务需要同时感知形状和预测动作后的变化。",
+    "role": "用任务连接感知与动力学"
+  },
+  {
+    "paper": "shen2022",
+    "title": "Shen 2022 ACID：部分视觉与动作条件形变动力学",
+    "anchor": "S1.p2",
+    "url": "https://arxiv.org/html/2203.06856#S1.p2",
+    "topic": "已有模型难以从部分原始视觉推断三维体积及动作条件动态。",
+    "role": "按观测与预测需求归纳缺口"
+  },
+  {
+    "paper": "shen2022",
+    "title": "Shen 2022 ACID：部分视觉与动作条件形变动力学",
+    "anchor": "S1.p3",
+    "url": "https://arxiv.org/html/2203.06856#S1.p3",
+    "topic": "以隐式几何、流场和对应嵌入联合表示形变动态。",
+    "role": "方法与各组成部分的职责"
+  },
+  {
+    "paper": "shen2022",
+    "title": "Shen 2022 ACID：部分视觉与动作条件形变动力学",
+    "anchor": "S1.p4",
+    "url": "https://arxiv.org/html/2203.06856#S1.p4",
+    "topic": "建立包含多种可变形玩具与动作轨迹的仿真数据系统。",
+    "role": "说明证据与训练来源"
+  },
+  {
+    "paper": "shen2022",
+    "title": "Shen 2022 ACID：部分视觉与动作条件形变动力学",
+    "anchor": "S1.p5",
+    "url": "https://arxiv.org/html/2203.06856#S1.p5",
+    "topic": "依次报告几何、动态、对应和操作成功率，再展示真实物体迁移。",
+    "role": "从表示指标到任务收益的实验链"
+  }
+]

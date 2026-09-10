@@ -2,7 +2,7 @@
 title: 文献证据与阶段草稿区
 kind: literature-index
 status: active
-updated: 2026-09-01
+updated: 2026-09-10
 scope: literature evidence, source copies, deep-reading notes, and dated draft inputs
 supersedes: []
 superseded_by: null
@@ -13,10 +13,13 @@ sources:
 
 # docs/papers 文献与草稿输入
 
+当前分类阅读入口：[遮挡与部分观测控制文献工作台](review_partial_observation_20260910/README.md)；71条索引记录、21篇原文指定章节核对、8篇引言逐段拆解，重复与待核条目分开标识。
+
 本目录不是活跃论文正文。唯一活跃 manuscript 树是 [`../paper/`](../paper/README.md)。
 
 | 内容 | 角色 | 使用规则 |
 |---|---|---|
+| `review_partial_observation_20260910/` | 分类索引、原文核对及引言分析 | 当前写作优先使用这里标明核对范围的结论 |
 | `notes/` | 单篇文献证据笔记 | 引用具体结果前仍需核对原文和笔记的证据等级 |
 | `understanding/` | 深读与研究发散 | 作为分析输入，不直接拥有项目当前结论 |
 | `literature_*.md`、dated survey/map | 阶段性综述与检索记录 | 长期综述由 [`../background/literature.md`](../background/literature.md) 汇总 |

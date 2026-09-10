@@ -1,0 +1,1593 @@
+{
+  "updated": "2026-09-10",
+  "scope": "66 existing note records plus 5 distinct local PDF records; not a systematic exhaustive review",
+  "verification_labels": {
+    "primary_checked": "原文指定章节已核",
+    "note_only": "仅旧笔记待复核",
+    "identity_pending": "身份待核",
+    "duplicate_alias": "重复旧笔记别名"
+  },
+  "clusters": {
+    "G1": "视觉自建模与全身表示",
+    "G2": "历史、迟滞与动力学",
+    "G3": "部分观测、形状传感与观察器",
+    "G4": "预测、视觉与自适应控制",
+    "G5": "约束、接触与安全",
+    "G6": "效率、不确定性与表示工具",
+    "G7": "综述与方法规范"
+  },
+  "records": [
+    {
+      "id": "n00",
+      "title": "Learning High-Fidelity Robot Self-Model with Articulated 3D Gaussian Splatting",
+      "year": "2025",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G1",
+      "cluster_name": "视觉自建模与全身表示",
+      "tags": [
+        "视觉自建模与全身表示"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://arxiv.org/abs/2503.05398",
+      "other_urls": [
+        "https://doi.org/10.1177/02783649251396980"
+      ],
+      "note": "../notes/notes_3dgs_self_modeling_2025.md",
+      "alias_of": "",
+      "where_used": "RW1：形状表示与自建模",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "aft2025",
+      "title": "AFT: Appearance-Based Feature Tracking for Markerless and Training-Free Shape Reconstruction of Soft Robots",
+      "year": "2025",
+      "metadata_basis": "原文核对指定章节",
+      "cluster": "G3",
+      "cluster_name": "部分观测、形状传感与观察器",
+      "tags": [
+        "单RGB-D",
+        "遮挡",
+        "形状重建",
+        "全身闭环"
+      ],
+      "priority": "P1 核心",
+      "verification": "primary_checked",
+      "primary_url": "https://arxiv.org/abs/2511.18215",
+      "other_urls": [],
+      "note": "../notes/notes_aft2025_markerless_shape_tracking.md",
+      "alias_of": "",
+      "where_used": "引言第3段；RW3；重建反馈对照",
+      "caveat": "遮挡重建与闭环控制在不同实验节，不能自动合并成物理遮挡闭环验证。RGB-D/自然纹理预算与本项目不同。Table II移除多尺度后形状误差2.73%略低于完整2.85%，不能说所有模块改善所有指标。",
+      "core_card": "core_papers.md#aft2025",
+      "intro_atlas": "introduction_atlas.md#aft2025"
+    },
+    {
+      "id": "n02",
+      "title": "On Prandtl–Ishlinskii Hysteresis Modeling of a Loaded Pneumatic Artificial Muscle",
+      "year": "2022",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G2",
+      "cluster_name": "历史、迟滞与动力学",
+      "tags": [
+        "历史、迟滞与动力学"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://doi.org/10.1115/1.4054779",
+      "other_urls": [],
+      "note": "../notes/notes_alsaaideh2022_loaded_pam_pi_hysteresis.md",
+      "alias_of": "",
+      "where_used": "RW2：历史与迟滞",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n03",
+      "title": "Shape reconstruction of soft continuum robots via the fusion of local strains and global poses",
+      "year": "2024",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G3",
+      "cluster_name": "部分观测、形状传感与观察器",
+      "tags": [
+        "部分观测、形状传感与观察器"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://doi.org/10.1016/j.xcrp.2024.102224",
+      "other_urls": [
+        "https://doi.org/10.1016/j.xcrp.2024.102224"
+      ],
+      "note": "../notes/notes_an2024_strain_pose_fusion_shape.md",
+      "alias_of": "",
+      "where_used": "RW3：局部信息与状态估计",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n04",
+      "title": "Damage Adaptation in Seconds for Architected Materials (LEAP)",
+      "year": "2026",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G4",
+      "cluster_name": "预测、视觉与自适应控制",
+      "tags": [
+        "预测、视觉与自适应控制"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://arxiv.org/abs/2606.17394",
+      "other_urls": [],
+      "note": "../notes/notes_avtges2026_leap_damage_adaptation.md",
+      "alias_of": "",
+      "where_used": "RW4：预测/适应控制",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n05",
+      "title": "Hysteresis-assisted shape morphing for soft continuum robots (HasMorph)",
+      "year": "2025",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G2",
+      "cluster_name": "历史、迟滞与动力学",
+      "tags": [
+        "历史、迟滞与动力学"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://www.science.org/doi/10.1126/sciadv.adx3024",
+      "other_urls": [],
+      "note": "../notes/notes_bi2025_hasmorph_hysteresis_shape_morphing.md",
+      "alias_of": "",
+      "where_used": "RW2：历史与迟滞",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n06",
+      "title": "CATNIPS: Collision Avoidance Through Neural Implicit Probabilistic Scenes",
+      "year": "2023",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G5",
+      "cluster_name": "约束、接触与安全",
+      "tags": [
+        "约束、接触与安全"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://arxiv.org/abs/2302.12931",
+      "other_urls": [
+        "https://github.com/chengine/catnips"
+      ],
+      "note": "../notes/notes_catnips_collision_avoidance_2023.md",
+      "alias_of": "",
+      "where_used": "讨论：约束与安全边界",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "chen2022",
+      "title": "Fully body visual self-modeling of robot morphologies",
+      "year": "2022",
+      "metadata_basis": "原文核对指定章节",
+      "cluster": "G1",
+      "cluster_name": "视觉自建模与全身表示",
+      "tags": [
+        "全身视觉自建模",
+        "隐式形态",
+        "损伤"
+      ],
+      "priority": "P2 精读",
+      "verification": "primary_checked",
+      "primary_url": "https://doi.org/10.1126/scirobotics.abn1944",
+      "other_urls": [],
+      "note": "../notes/notes_chen2022_self_modeling_damage_recovery.md",
+      "alias_of": "",
+      "where_used": "RW1；自建模定义",
+      "caveat": "本地出版PDF标题是“Fully body visual self-modeling of robot morphologies”；不是本项目的软体历史状态观察器。",
+      "core_card": "core_papers.md#chen2022",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n08",
+      "title": "Data-driven Methods Applied to Soft Robot Modeling and Control: A Review",
+      "year": "2023",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G7",
+      "cluster_name": "综述与方法规范",
+      "tags": [
+        "综述与方法规范"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://arxiv.org/abs/2305.12137",
+      "other_urls": [
+        "https://arxiv.org/abs/2305.12137"
+      ],
+      "note": "../notes/notes_chen2023_data_driven_soft_robot_review.md",
+      "alias_of": "",
+      "where_used": "引言背景与评价规范",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "chen2025",
+      "title": "Hysteresis-Aware Neural Network Modeling and Whole-Body Reinforcement Learning Control of Soft Robots",
+      "year": "2025",
+      "metadata_basis": "原文核对指定章节",
+      "cluster": "G2",
+      "cluster_name": "历史、迟滞与动力学",
+      "tags": [
+        "方向迟滞",
+        "全身",
+        "真实数据",
+        "强化学习"
+      ],
+      "priority": "P1 核心",
+      "verification": "primary_checked",
+      "primary_url": "https://arxiv.org/abs/2504.13582",
+      "other_urls": [],
+      "note": "../notes/notes_chen2025_hysteresis_whole_body_rl.md",
+      "alias_of": "",
+      "where_used": "引言第2/4段；RW2；M1方向基线",
+      "caveat": "不是仿真监督训练；方向条件不能直接等同任意长历史，但也不能把旧笔记中的RNN/TCN推断当原方法。V-A训练/测试措辞有歧义，应独立规定本项目数据划分。",
+      "core_card": "core_papers.md#chen2025",
+      "intro_atlas": "introduction_atlas.md#chen2025"
+    },
+    {
+      "id": "n10",
+      "title": "Compensating for Unmodeled Forces using Neural Networks in Soft Manipulator Planning",
+      "year": "2021",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G4",
+      "cluster_name": "预测、视觉与自适应控制",
+      "tags": [
+        "预测、视觉与自适应控制"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://research.engr.oregonstate.edu/rdml/sites/research.engr.oregonstate.edu.rdml/files/icra21_home_papercept_ras.papercept.net_www_conferences_conferences_icra21_submissions_4110_fi.pdf",
+      "other_urls": [],
+      "note": "../notes/notes_chow2021_residual_nn_planning.md",
+      "alias_of": "",
+      "where_used": "RW4：预测/适应控制",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n11",
+      "title": "End-Point Position Estimation of a Soft Continuum Manipulator Using Embedded Linear Magnetic Encoders",
+      "year": "2023",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G3",
+      "cluster_name": "部分观测、形状传感与观察器",
+      "tags": [
+        "部分观测、形状传感与观察器"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9921875/",
+      "other_urls": [],
+      "note": "../notes/notes_costa2023_linear_magnetic_encoders.md",
+      "alias_of": "",
+      "where_used": "RW3：局部信息与状态估计",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n12",
+      "title": "Hysteresis Modeling of Soft Pneumatic Actuators: An Experimental Review",
+      "year": "2025",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G2",
+      "cluster_name": "历史、迟滞与动力学",
+      "tags": [
+        "历史、迟滞与动力学"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://www.mdpi.com/2076-0825/14/7/321",
+      "other_urls": [
+        "https://doi.org/10.3390/act14070321"
+      ],
+      "note": "../notes/notes_delamorena2025_spa_hysteresis_review.md",
+      "alias_of": "",
+      "where_used": "RW2：历史与迟滞",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n13",
+      "title": "DGS-LRM: Real-Time Deformable 3D Gaussian Reconstruction From Monocular Videos",
+      "year": "2025",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G6",
+      "cluster_name": "效率、不确定性与表示工具",
+      "tags": [
+        "效率、不确定性与表示工具"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://arxiv.org/abs/2506.09997",
+      "other_urls": [],
+      "note": "../notes/notes_dgs_lrm_2025.md",
+      "alias_of": "",
+      "where_used": "方法工具或未来方向",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n14",
+      "title": "Safe Autonomous Environmental Contact for Soft Robots Using Control Barrier Functions",
+      "year": "2025",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G5",
+      "cluster_name": "约束、接触与安全",
+      "tags": [
+        "约束、接触与安全"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://arxiv.org/abs/2504.14755",
+      "other_urls": [],
+      "note": "../notes/notes_dickson2025_safe_contact_cbf.md",
+      "alias_of": "",
+      "where_used": "讨论：约束与安全边界",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n15",
+      "title": "Learning Controllers for Continuum Soft Manipulators: Impact of Modeling and Looming Challenges",
+      "year": "2025",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G7",
+      "cluster_name": "综述与方法规范",
+      "tags": [
+        "综述与方法规范"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://doi.org/10.1002/aisy.202400344",
+      "other_urls": [],
+      "note": "../notes/notes_falotico2025_csm_learning_control_review.md",
+      "alias_of": "",
+      "where_used": "引言背景与评价规范",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n16",
+      "title": "Evolutionary Gait Reconfiguration in Damaged Legged Robots",
+      "year": "2025",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G4",
+      "cluster_name": "预测、视觉与自适应控制",
+      "tags": [
+        "预测、视觉与自适应控制"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://arxiv.org/abs/2506.19968",
+      "other_urls": [],
+      "note": "../notes/notes_farghdani2025_damaged_legged_recovery.md",
+      "alias_of": "",
+      "where_used": "RW4：预测/适应控制",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n17",
+      "title": "Continuum Robot Modeling with Action Conditioned Flow Matching",
+      "year": "2026",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G6",
+      "cluster_name": "效率、不确定性与表示工具",
+      "tags": [
+        "效率、不确定性与表示工具"
+      ],
+      "priority": "P3 储备",
+      "verification": "identity_pending",
+      "primary_url": "https://arxiv.org/abs/2605.09216",
+      "other_urls": [],
+      "note": "../notes/notes_flow_matching_tdcr_2026.md",
+      "alias_of": "",
+      "where_used": "方法工具或未来方向",
+      "caveat": "有检索线索，但题名/作者/出版信息与技术主张尚未完成原文身份核对；不能直接进入正式参考文献。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n18",
+      "title": "A three-dimensional fractional visco-hyperelastic model for soft materials",
+      "year": "2022",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G2",
+      "cluster_name": "历史、迟滞与动力学",
+      "tags": [
+        "历史、迟滞与动力学"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://doi.org/10.1016/j.jmbbm.2022.105564",
+      "other_urls": [],
+      "note": "../notes/notes_gao2022_fractional_viscohyperelastic.md",
+      "alias_of": "",
+      "where_used": "RW2：历史与迟滞",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n19",
+      "title": "Sim-to-Real of Soft Robots With Learned Residual Physics",
+      "year": "2024",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G4",
+      "cluster_name": "预测、视觉与自适应控制",
+      "tags": [
+        "预测、视觉与自适应控制"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://arxiv.org/abs/2402.01086",
+      "other_urls": [],
+      "note": "../notes/notes_gao2024_residual_physics.md",
+      "alias_of": "",
+      "where_used": "RW4：预测/适应控制",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n20",
+      "title": "Modeling of Viscoelastic Electromechanical Behavior in a Soft Dielectric Elastomer Actuator",
+      "year": "2017",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G2",
+      "cluster_name": "历史、迟滞与动力学",
+      "tags": [
+        "历史、迟滞与动力学"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://doi.org/10.1109/TRO.2017.2706285",
+      "other_urls": [
+        "https://softrobotics.sjtu.edu.cn/pdf/38.pdf"
+      ],
+      "note": "../notes/notes_gu2017_dea_viscoelastic_statespace.md",
+      "alias_of": "",
+      "where_used": "RW2：历史与迟滞",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "hachen2025",
+      "title": "A Non-Linear Model Predictive Task-Space Controller Satisfying Shape Constraints for Tendon-Driven Continuum Robots",
+      "year": "2025",
+      "metadata_basis": "原文核对指定章节",
+      "cluster": "G5",
+      "cluster_name": "约束、接触与安全",
+      "tags": [
+        "NMPC",
+        "形状约束",
+        "PCC",
+        "实时"
+      ],
+      "priority": "P2 精读",
+      "verification": "primary_checked",
+      "primary_url": "https://arxiv.org/abs/2409.09970",
+      "other_urls": [],
+      "note": "../notes/notes_hachen2025_nmpc_shape_constraints.md",
+      "alias_of": "",
+      "where_used": "RW4；计算预算与避障边界",
+      "caveat": "这是特定时域与CPU下的迭代时间，不是任意任务端到端硬实时。本项目当前没有其避障约束。",
+      "core_card": "core_papers.md#hachen2025",
+      "intro_atlas": ""
+    },
+    {
+      "id": "herrmann2026",
+      "title": "Discrete Geometric Modeling and Extended State Estimation of Continuum Robots",
+      "year": "2026",
+      "metadata_basis": "原文核对指定章节",
+      "cluster": "G3",
+      "cluster_name": "部分观测、形状传感与观察器",
+      "tags": [
+        "物理模型",
+        "EKF",
+        "状态与扰动",
+        "实时"
+      ],
+      "priority": "P2 精读",
+      "verification": "primary_checked",
+      "primary_url": "https://arxiv.org/abs/2606.21205",
+      "other_urls": [],
+      "note": "../notes/notes_herrmann2026_discrete_geom_ekf.md",
+      "alias_of": "",
+      "where_used": "RW3；物理观察器与学习模型的公平定位",
+      "caveat": "5 ms本次已在原文核实，但不等于相同RGB视觉反馈预算；也不证明全部物理方法都快/慢。",
+      "core_card": "core_papers.md#herrmann2026",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n23",
+      "title": "Leveraging Part-Based NeRF for Robot Self-Modeling and Control",
+      "year": "2025",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G1",
+      "cluster_name": "视觉自建模与全身表示",
+      "tags": [
+        "视觉自建模与全身表示"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://onlinelibrary.wiley.com/doi/full/10.1002/smb2.70005",
+      "other_urls": [],
+      "note": "../notes/notes_hu2025_part_nerf_self_modeling.md",
+      "alias_of": "",
+      "where_used": "RW1：形状表示与自建模",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n24",
+      "title": "Hysteresis-Aware Neural Network for Soft Robot Proprioception",
+      "year": "2025",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G2",
+      "cluster_name": "历史、迟滞与动力学",
+      "tags": [
+        "历史、迟滞与动力学"
+      ],
+      "priority": "P3 储备",
+      "verification": "duplicate_alias",
+      "primary_url": "https://arxiv.org/abs/2504.13582",
+      "other_urls": [],
+      "note": "../notes/notes_hysteresis_aware_nn_2025.md",
+      "alias_of": "chen2025",
+      "where_used": "RW2：历史与迟滞",
+      "caveat": "与Chen 2504.13582同一arXiv，旧题名和方法描述不准确；引用主记录chen2025，不重复计数。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "jiang2025",
+      "title": "Data-driven Kinematic Modeling in Soft Robots: System Identification and Uncertainty Quantification",
+      "year": "2025",
+      "metadata_basis": "原文核对指定章节",
+      "cluster": "G6",
+      "cluster_name": "效率、不确定性与表示工具",
+      "tags": [
+        "不确定性",
+        "Conformal",
+        "数据划分"
+      ],
+      "priority": "P2 精读",
+      "verification": "primary_checked",
+      "primary_url": "https://arxiv.org/abs/2507.07370",
+      "other_urls": [],
+      "note": "../notes/notes_jiang2025_conformal_kinematic_uq.md",
+      "alias_of": "",
+      "where_used": "RW扩展；未来校准不确定性",
+      "caveat": "分布无关保证有相应数据假设；时间相关和部署漂移不能自动享有普通split conformal覆盖保证。本项目尚无校准概率区间。",
+      "core_card": "core_papers.md#jiang2025",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n26",
+      "title": "A modal-space formulation for momentum observer contact estimation and effects of uncertainty for continuum robots",
+      "year": "2025",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G5",
+      "cluster_name": "约束、接触与安全",
+      "tags": [
+        "约束、接触与安全"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://arxiv.org/abs/2505.03044",
+      "other_urls": [],
+      "note": "../notes/notes_johnston2025_momentum_observer_contact.md",
+      "alias_of": "",
+      "where_used": "讨论：约束与安全边界",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n27",
+      "title": "Shape-Aware Whole-Body Control for Continuum Robots with Application in Endoluminal Surgical Robotics",
+      "year": "2025",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G4",
+      "cluster_name": "预测、视觉与自适应控制",
+      "tags": [
+        "预测、视觉与自适应控制"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://arxiv.org/abs/2510.12332",
+      "other_urls": [],
+      "note": "../notes/notes_kasaei2025_shape_aware_whole_body.md",
+      "alias_of": "",
+      "where_used": "RW4：预测/适应控制",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n28",
+      "title": "Multi-core Optical Fibers with Bragg Gratings as Shape Sensor for Flexible Medical Instruments",
+      "year": "2019",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G3",
+      "cluster_name": "部分观测、形状传感与观察器",
+      "tags": [
+        "部分观测、形状传感与观察器"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://ris.utwente.nl/ws/files/105398009/khan19_sensors_inpress.pdf",
+      "other_urls": [],
+      "note": "../notes/notes_khan2019_fbg_multicore_shape.md",
+      "alias_of": "",
+      "where_used": "RW3：局部信息与状态估计",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n29",
+      "title": "Koopman Embedding for Cross-Configuration Control of Soft Robots",
+      "year": "2026",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G4",
+      "cluster_name": "预测、视觉与自适应控制",
+      "tags": [
+        "预测、视觉与自适应控制"
+      ],
+      "priority": "P3 储备",
+      "verification": "identity_pending",
+      "primary_url": "",
+      "other_urls": [],
+      "note": "../notes/notes_koopman_embedding_soft_robot_2026.md",
+      "alias_of": "",
+      "where_used": "RW4：预测/适应控制",
+      "caveat": "有检索线索，但题名/作者/出版信息与技术主张尚未完成原文身份核对；不能直接进入正式参考文献。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "krauss2026",
+      "title": "Accurate Open-Loop Control of a Soft Continuum Robot Through Visually Learned Latent Representations",
+      "year": "2026",
+      "metadata_basis": "原文核对指定章节",
+      "cluster": "G4",
+      "cluster_name": "预测、视觉与自适应控制",
+      "tags": [
+        "视觉自建模",
+        "潜动力学",
+        "历史",
+        "开环"
+      ],
+      "priority": "P1 核心",
+      "verification": "primary_checked",
+      "primary_url": "https://arxiv.org/abs/2603.19655",
+      "other_urls": [],
+      "note": "../notes/notes_krauss2026_open_loop_latent_scr.md",
+      "alias_of": "",
+      "where_used": "引言第2/4段；RW1/2；预测与控制指标设计",
+      "caveat": "不能称其无历史模型；七个消融的优化代理指标不等于七组实机控制验证。其后续工作明确包含反馈与部分观测。",
+      "core_card": "core_papers.md#krauss2026",
+      "intro_atlas": "introduction_atlas.md#krauss2026"
+    },
+    {
+      "id": "n31",
+      "title": "Self-supervised Body Image Acquisition Using a Deep Neural Network for Sensorimotor Prediction",
+      "year": "2019",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G1",
+      "cluster_name": "视觉自建模与全身表示",
+      "tags": [
+        "视觉自建模与全身表示"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://arxiv.org/abs/1906.00825",
+      "other_urls": [],
+      "note": "../notes/notes_laflaquiere2019_body_image.md",
+      "alias_of": "",
+      "where_used": "RW1：形状表示与自建模",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n32",
+      "title": "Real-Time Whole-Body Contact Estimation of Continuum Robots Using Multiplexed Fibers for Embodied Actuation and Sensing to Quantify Interactions",
+      "year": "2025",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G5",
+      "cluster_name": "约束、接触与安全",
+      "tags": [
+        "约束、接触与安全"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://doi.org/10.1177/21695172251388808",
+      "other_urls": [],
+      "note": "../notes/notes_lin2025_whole_body_contact_estimation.md",
+      "alias_of": "",
+      "where_used": "讨论：约束与安全边界",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n33",
+      "title": "BiLSTM-MLP based hysteresis modeling for soft pneumatic joint actuator",
+      "year": "2024",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G2",
+      "cluster_name": "历史、迟滞与动力学",
+      "tags": [
+        "历史、迟滞与动力学"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://journals.sagepub.com/doi/10.1177/09544062241233924",
+      "other_urls": [],
+      "note": "../notes/notes_liu2024_bilstm_mlp_hysteresis.md",
+      "alias_of": "",
+      "where_used": "RW2：历史与迟滞",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n34",
+      "title": "Differentiable Robot Rendering (Dr. Robot)",
+      "year": "2024",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G1",
+      "cluster_name": "视觉自建模与全身表示",
+      "tags": [
+        "视觉自建模与全身表示"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://drrobot.cs.columbia.edu/",
+      "other_urls": [
+        "https://arxiv.org/abs/2410.13851",
+        "https://github.com/cvlab-columbia/drrobot"
+      ],
+      "note": "../notes/notes_liu2024_differentiable_robot_rendering.md",
+      "alias_of": "",
+      "where_used": "RW1：形状表示与自建模",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n35",
+      "title": "Robot at the Mirror: Learning to Imitate via Associating Self-supervised Models",
+      "year": "2023",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G1",
+      "cluster_name": "视觉自建模与全身表示",
+      "tags": [
+        "视觉自建模与全身表示"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://arxiv.org/abs/2311.13226",
+      "other_urls": [],
+      "note": "../notes/notes_lucny2023_mirror_self_model.md",
+      "alias_of": "",
+      "where_used": "RW1：形状表示与自建模",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n36",
+      "title": "Contact-Aware Planning and Control of Continuum Robots in Highly Constrained Environments",
+      "year": "2026",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G5",
+      "cluster_name": "约束、接触与安全",
+      "tags": [
+        "约束、接触与安全"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://arxiv.org/abs/2604.15638",
+      "other_urls": [],
+      "note": "../notes/notes_mangan2026_contact_aware_planning.md",
+      "alias_of": "",
+      "where_used": "讨论：约束与安全边界",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n37",
+      "title": "Controlling Diverse Robots by Inferring Jacobian Fields with Deep Networks (Neural Jacobian Fields)",
+      "year": "2025",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G4",
+      "cluster_name": "预测、视觉与自适应控制",
+      "tags": [
+        "预测、视觉与自适应控制"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://doi.org/10.1038/s41586-025-09170-0",
+      "other_urls": [
+        "https://github.com/sizhe-li/neural-jacobian-field"
+      ],
+      "note": "../notes/notes_neural_jacobian_fields_2025.md",
+      "alias_of": "",
+      "where_used": "RW4：预测/适应控制",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "park2024",
+      "title": "Hysteresis Compensation of Flexible Continuum Manipulator Using RGBD Sensing and Temporal Convolutional Network",
+      "year": "2024",
+      "metadata_basis": "原文核对指定章节",
+      "cluster": "G2",
+      "cluster_name": "历史、迟滞与动力学",
+      "tags": [
+        "TCN",
+        "历史窗口",
+        "RGB-D",
+        "迟滞补偿"
+      ],
+      "priority": "P2 精读",
+      "verification": "primary_checked",
+      "primary_url": "https://arxiv.org/abs/2402.11319",
+      "other_urls": [],
+      "note": "../notes/notes_park2024_tcn_hysteresis_compensation.md",
+      "alias_of": "",
+      "where_used": "RW2；M3；历史长度消融",
+      "caveat": "传动摩擦/迟滞机制不同于气动软臂系统，RGB-D标记也不同于无标记RGB边缘；不能把80步当通用最优。",
+      "core_card": "core_papers.md#park2024",
+      "intro_atlas": "introduction_atlas.md#park2024"
+    },
+    {
+      "id": "n39",
+      "title": "Physics-Informed Neural Networks for Soft Robot Modeling",
+      "year": "2025",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G6",
+      "cluster_name": "效率、不确定性与表示工具",
+      "tags": [
+        "效率、不确定性与表示工具"
+      ],
+      "priority": "P3 储备",
+      "verification": "identity_pending",
+      "primary_url": "https://arxiv.org/abs/2502.01916",
+      "other_urls": [],
+      "note": "../notes/notes_pinn_soft_robot_2025.md",
+      "alias_of": "",
+      "where_used": "方法工具或未来方向",
+      "caveat": "有检索线索，但题名/作者/出版信息与技术主张尚未完成原文身份核对；不能直接进入正式参考文献。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n40",
+      "title": "Towards Contact-Aided Motion Planning for Tendon-Driven Continuum Robots",
+      "year": "2024",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G5",
+      "cluster_name": "约束、接触与安全",
+      "tags": [
+        "约束、接触与安全"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://arxiv.org/abs/2402.14175",
+      "other_urls": [],
+      "note": "../notes/notes_rao2024_contact_aided_planning.md",
+      "alias_of": "",
+      "where_used": "讨论：约束与安全边界",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "rezvani2025",
+      "title": "Robust Visual Embodiment: How Robots Discover Their Bodies in Real Environments",
+      "year": "2025",
+      "metadata_basis": "原文核对指定章节",
+      "cluster": "G1",
+      "cluster_name": "视觉自建模与全身表示",
+      "tags": [
+        "视觉自建模",
+        "噪声",
+        "背景杂乱"
+      ],
+      "priority": "P2 精读",
+      "verification": "primary_checked",
+      "primary_url": "https://arxiv.org/abs/2510.03677",
+      "other_urls": [],
+      "note": "../notes/notes_rezvani2025_robust_visual_embodiment.md",
+      "alias_of": "",
+      "where_used": "RW1/3；前端鲁棒性实验",
+      "caveat": "噪声恢复不等于软臂受遮挡时的历史状态闭环补偿；不继承摘要中的首次主张。",
+      "core_card": "core_papers.md#rezvani2025",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n42",
+      "title": "Continuum Robots: An Overview",
+      "year": "2023",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G7",
+      "cluster_name": "综述与方法规范",
+      "tags": [
+        "综述与方法规范"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://advanced.onlinelibrary.wiley.com/doi/10.1002/aisy.202200367",
+      "other_urls": [],
+      "note": "../notes/notes_russo2023_continuum_robots_overview.md",
+      "alias_of": "",
+      "where_used": "引言背景与评价规范",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "schafke2024",
+      "title": "Learning-Based Nonlinear Model Predictive Control of Articulated Soft Robots Using Recurrent Neural Networks",
+      "year": "2024",
+      "metadata_basis": "原文核对指定章节",
+      "cluster": "G4",
+      "cluster_name": "预测、视觉与自适应控制",
+      "tags": [
+        "GRU",
+        "LSTM",
+        "NMPC",
+        "实时"
+      ],
+      "priority": "P1 核心",
+      "verification": "primary_checked",
+      "primary_url": "https://arxiv.org/abs/2411.05616",
+      "other_urls": [],
+      "note": "../notes/notes_schäfke2024_rnn_nmpc_soft_robot.md",
+      "alias_of": "",
+      "where_used": "RW2/4；M2/B2；频率定义",
+      "caveat": "比较时必须让RNN合理携带和初始化隐藏状态；单纯开放环GRU不能代表完整反馈观察器。",
+      "core_card": "core_papers.md#schafke2024",
+      "intro_atlas": "introduction_atlas.md#schafke2024"
+    },
+    {
+      "id": "n44",
+      "title": "Synergistic Shape Estimation and Control of Continuum Robots using Augmented Neural ODEs",
+      "year": "2025",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G3",
+      "cluster_name": "部分观测、形状传感与观察器",
+      "tags": [
+        "部分观测、形状传感与观察器"
+      ],
+      "priority": "P3 储备",
+      "verification": "identity_pending",
+      "primary_url": "https://arxiv.org/abs/2501.03859",
+      "other_urls": [],
+      "note": "../notes/notes_shape_node_control_2025.md",
+      "alias_of": "",
+      "where_used": "RW3：局部信息与状态估计",
+      "caveat": "有检索线索，但题名/作者/出版信息与技术主张尚未完成原文身份核对；不能直接进入正式参考文献。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "shen2022",
+      "title": "ACID: Action-Conditional Implicit Visual Dynamics for Deformable Object Manipulation",
+      "year": "2022",
+      "metadata_basis": "原文核对指定章节",
+      "cluster": "G6",
+      "cluster_name": "效率、不确定性与表示工具",
+      "tags": [
+        "部分观测",
+        "隐式表示",
+        "外部可变形物体"
+      ],
+      "priority": "P2 精读",
+      "verification": "primary_checked",
+      "primary_url": "https://arxiv.org/abs/2203.06856",
+      "other_urls": [],
+      "note": "../notes/notes_shen2022_acid_deformable_dynamics.md",
+      "alias_of": "",
+      "where_used": "跨领域方法启发；避免当直接软臂基线",
+      "caveat": "不是软臂身体自建模，也不能据此声称本项目新发明部分点云/部分图像推理。",
+      "core_card": "core_papers.md#shen2022",
+      "intro_atlas": "introduction_atlas.md#shen2022"
+    },
+    {
+      "id": "n46",
+      "title": "Shape Sensing Techniques for Continuum Robots in Minimally Invasive Surgery: A Survey",
+      "year": "2017",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G7",
+      "cluster_name": "综述与方法规范",
+      "tags": [
+        "综述与方法规范"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://doi.org/10.1109/tbme.2016.2622361",
+      "other_urls": [],
+      "note": "../notes/notes_shi2017_shape_sensing_survey.md",
+      "alias_of": "",
+      "where_used": "引言背景与评价规范",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n47",
+      "title": "Self-Supervised Learning for Soft Robot Proprioception",
+      "year": "2025",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G3",
+      "cluster_name": "部分观测、形状传感与观察器",
+      "tags": [
+        "部分观测、形状传感与观察器"
+      ],
+      "priority": "P3 储备",
+      "verification": "identity_pending",
+      "primary_url": "",
+      "other_urls": [],
+      "note": "../notes/notes_ssl_proprioception_2025.md",
+      "alias_of": "",
+      "where_used": "RW3：局部信息与状态估计",
+      "caveat": "有检索线索，但题名/作者/出版信息与技术主张尚未完成原文身份核对；不能直接进入正式参考文献。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n48",
+      "title": "Physics-Informed Recurrent Neural Networks for Soft Pneumatic Actuators",
+      "year": "2022",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G2",
+      "cluster_name": "历史、迟滞与动力学",
+      "tags": [
+        "历史、迟滞与动力学"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://ui.adsabs.harvard.edu/abs/2022IRAL....7.6862S/abstract",
+      "other_urls": [],
+      "note": "../notes/notes_sun2022_pirnn_soft_pneumatic.md",
+      "alias_of": "",
+      "where_used": "RW2：历史与迟滞",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n49",
+      "title": "NeuralFeels with neural fields: Visuotactile perception for in-hand manipulation",
+      "year": "2024",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G6",
+      "cluster_name": "效率、不确定性与表示工具",
+      "tags": [
+        "效率、不确定性与表示工具"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://www.science.org/doi/10.1126/scirobotics.adl0628",
+      "other_urls": [
+        "https://arxiv.org/abs/2312.13469"
+      ],
+      "note": "../notes/notes_suresh2024_neuralfeels_in_hand.md",
+      "alias_of": "",
+      "where_used": "方法工具或未来方向",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n50",
+      "title": "Generative 3D State Estimation for DLOs From Partial Observations",
+      "year": "2026",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G3",
+      "cluster_name": "部分观测、形状传感与观察器",
+      "tags": [
+        "部分观测、形状传感与观察器"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://ieeexplore.ieee.org/document/11248900/",
+      "other_urls": [],
+      "note": "../notes/notes_tang2026_dlo_diffusion.md",
+      "alias_of": "",
+      "where_used": "RW3：局部信息与状态估计",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n51",
+      "title": "Learning to Control the Whole-body Shape of a Soft Robotic Arm in Unknown Situations",
+      "year": "2026",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G4",
+      "cluster_name": "预测、视觉与自适应控制",
+      "tags": [
+        "预测、视觉与自适应控制"
+      ],
+      "priority": "P3 储备",
+      "verification": "identity_pending",
+      "primary_url": "",
+      "other_urls": [],
+      "note": "../notes/notes_tang2026_whole_body_shape.md",
+      "alias_of": "",
+      "where_used": "RW4：预测/适应控制",
+      "caveat": "有检索线索，但题名/作者/出版信息与技术主张尚未完成原文身份核对；不能直接进入正式参考文献。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n52",
+      "title": "Soft robot perception using embedded soft sensors and recurrent neural networks",
+      "year": "2019",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G2",
+      "cluster_name": "历史、迟滞与动力学",
+      "tags": [
+        "历史、迟滞与动力学"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://www.science.org/doi/10.1126/scirobotics.aav1488",
+      "other_urls": [],
+      "note": "../notes/notes_thuruthel2019_rnn_soft_proprioception.md",
+      "alias_of": "",
+      "where_used": "RW2：历史与迟滞",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n53",
+      "title": "Real-time dynamics of soft and continuum robots based on Cosserat rod models",
+      "year": "2019",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G2",
+      "cluster_name": "历史、迟滞与动力学",
+      "tags": [
+        "历史、迟滞与动力学"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://journals.sagepub.com/doi/10.1177/0278364919842269",
+      "other_urls": [],
+      "note": "../notes/notes_till2019_realtime_cosserat_dynamics.md",
+      "alias_of": "",
+      "where_used": "RW2：历史与迟滞",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n54",
+      "title": "Dynamical Modeling and Control of Soft Robots with Non-constant Curvature Deformation",
+      "year": "2022",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G2",
+      "cluster_name": "历史、迟滞与动力学",
+      "tags": [
+        "历史、迟滞与动力学"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://arxiv.org/abs/2203.07929",
+      "other_urls": [
+        "https://arxiv.org/abs/2203.07929"
+      ],
+      "note": "../notes/notes_wang2022_nonconstant_curvature.md",
+      "alias_of": "",
+      "where_used": "RW2：历史与迟滞",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n55",
+      "title": "Shape Reconstruction of Extensible Continuum Manipulator Based on Soft Sensors",
+      "year": "2024",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G3",
+      "cluster_name": "部分观测、形状传感与观察器",
+      "tags": [
+        "部分观测、形状传感与观察器"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://doi.org/10.1089/soro.2023.0094",
+      "other_urls": [],
+      "note": "../notes/notes_wang2024_srss_continuum_shape.md",
+      "alias_of": "",
+      "where_used": "RW3：局部信息与状态估计",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "wang2025",
+      "title": "Estimating Continuum Robot Shape under External Loading using Spatiotemporal Neural Networks",
+      "year": "2025",
+      "metadata_basis": "原文核对指定章节",
+      "cluster": "G3",
+      "cluster_name": "部分观测、形状传感与观察器",
+      "tags": [
+        "RGB与历史融合",
+        "LSTM",
+        "外部负载",
+        "形状估计"
+      ],
+      "priority": "P1 核心",
+      "verification": "primary_checked",
+      "primary_url": "https://arxiv.org/abs/2510.22339",
+      "other_urls": [],
+      "note": "../notes/notes_wang2025_spatiotemporal_shape_loading.md",
+      "alias_of": "",
+      "where_used": "RW2/3；B2多模态递归基线",
+      "caveat": "历史+视觉融合估计已有直接相关工作；880样本8:2划分本身不足以证明独立采集泛化；所核对实验未建立遮挡闭环控制结论。",
+      "core_card": "core_papers.md#wang2025",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n57",
+      "title": "Design and Kinematic Modeling of Constant Curvature Continuum Robots: A Review",
+      "year": "2010",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G7",
+      "cluster_name": "综述与方法规范",
+      "tags": [
+        "综述与方法规范"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://journals.sagepub.com/doi/10.1177/0278364910368147",
+      "other_urls": [
+        "https://journals.sagepub.com/doi/10.1177/0278364910368147"
+      ],
+      "note": "../notes/notes_webster2010_constant_curvature_review.md",
+      "alias_of": "",
+      "where_used": "引言背景与评价规范",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n58",
+      "title": "Unified Neural Network-Based Shape Sensing for Continuum Robots Using Fiber Bragg Gratings",
+      "year": "2025",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G3",
+      "cluster_name": "部分观测、形状传感与观察器",
+      "tags": [
+        "部分观测、形状传感与观察器"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://doi.org/10.1109/jsen.2025.3626890",
+      "other_urls": [],
+      "note": "../notes/notes_wild2025_unified_fbg_shape_sensing.md",
+      "alias_of": "",
+      "where_used": "RW3：局部信息与状态估计",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n59",
+      "title": "Contact-Aware Safety in Soft Robots Using High-Order Control Barrier and Lyapunov Functions",
+      "year": "2025",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G5",
+      "cluster_name": "约束、接触与安全",
+      "tags": [
+        "约束、接触与安全"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://arxiv.org/abs/2505.03841",
+      "other_urls": [],
+      "note": "../notes/notes_wong2025_contact_aware_safety.md",
+      "alias_of": "",
+      "where_used": "讨论：约束与安全边界",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "wong2026",
+      "title": "A Closed-Form CLF-CBF Controller for Whole-Body Continuum Soft Robot Collision Avoidance",
+      "year": "2026",
+      "metadata_basis": "原文核对指定章节",
+      "cluster": "G5",
+      "cluster_name": "约束、接触与安全",
+      "tags": [
+        "CLF-CBF",
+        "全身避障",
+        "闭式控制"
+      ],
+      "priority": "P2 精读",
+      "verification": "primary_checked",
+      "primary_url": "https://arxiv.org/abs/2603.19424",
+      "other_urls": [],
+      "note": "../notes/notes_wong2026_clf_cbf_whole_body_avoidance.md",
+      "alias_of": "",
+      "where_used": "RW4边界；未来安全扩展",
+      "caveat": "当前算法只是动作限幅/限速与故障停止，没有障碍物CBF；不能声称具有同等安全性。",
+      "core_card": "core_papers.md#wong2026",
+      "intro_atlas": ""
+    },
+    {
+      "id": "n61",
+      "title": "RobotSDF: Implicit Morphology Modeling for the Robotic Arm",
+      "year": "2024",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G1",
+      "cluster_name": "视觉自建模与全身表示",
+      "tags": [
+        "视觉自建模与全身表示"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://www.mdpi.com/1424-8220/24/16/5248",
+      "other_urls": [
+        "https://www.mdpi.com/1424-8220/24/16/5248"
+      ],
+      "note": "../notes/notes_yang2024_robotsdf_implicit_morphology.md",
+      "alias_of": "",
+      "where_used": "RW1：形状表示与自建模",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "yu2026",
+      "title": "Shape-Interpretable Visual Self-Modeling Enables Geometry-Aware Continuum Robot Control",
+      "year": "2026",
+      "metadata_basis": "原文核对指定章节",
+      "cluster": "G4",
+      "cluster_name": "预测、视觉与自适应控制",
+      "tags": [
+        "多视角",
+        "可解释形状",
+        "视觉控制",
+        "全身"
+      ],
+      "priority": "P1 核心",
+      "verification": "primary_checked",
+      "primary_url": "https://arxiv.org/abs/2603.01751",
+      "other_urls": [],
+      "note": "../notes/notes_yu2026_shape_interpretable.md",
+      "alias_of": "",
+      "where_used": "引言第2/3段；RW1；全身任务设计",
+      "caveat": "单个视角用单目图像不等于整套系统只需单视角完成任意3D控制；严重遮挡/分割失败被列为限制。",
+      "core_card": "core_papers.md#yu2026",
+      "intro_atlas": "introduction_atlas.md#yu2026"
+    },
+    {
+      "id": "n63",
+      "title": "Machine Learning Best Practices for Soft Robot Proprioception",
+      "year": "2023",
+      "metadata_basis": "旧笔记线索，非认证元数据",
+      "cluster": "G7",
+      "cluster_name": "综述与方法规范",
+      "tags": [
+        "综述与方法规范"
+      ],
+      "priority": "P3 储备",
+      "verification": "note_only",
+      "primary_url": "https://doi.org/10.1109/IROS55552.2023.10342379",
+      "other_urls": [
+        "https://www.annanzhang.com/data/pdf/zhang2023machine.pdf"
+      ],
+      "note": "../notes/notes_zhang2023_ml_best_practices_proprioception.md",
+      "alias_of": "",
+      "where_used": "引言背景与评价规范",
+      "caveat": "仅定位到既有阅读笔记，技术细节和数值本次未复核；正式引用前核原文。",
+      "core_card": "",
+      "intro_atlas": ""
+    },
+    {
+      "id": "zheng2025",
+      "title": "Estimating Dynamic Soft Continuum Robot States From Boundaries",
+      "year": "2025",
+      "metadata_basis": "原文核对指定章节",
+      "cluster": "G3",
+      "cluster_name": "部分观测、形状传感与观察器",
+      "tags": [
+        "边界传感",
+        "状态观察器",
+        "Cosserat",
+        "部分观测"
+      ],
+      "priority": "P1 核心",
+      "verification": "primary_checked",
+      "primary_url": "https://arxiv.org/abs/2505.04491",
+      "other_urls": [],
+      "note": "../notes/notes_zheng2025_boundary_observer.md",
+      "alias_of": "",
+      "where_used": "引言第3/4段；RW3；可观测性边界",
+      "caveat": "这里boundary是杆的物理边界，不是图像轮廓；不能把其收敛定理或力估计能力移植给本项目的p/h更新。",
+      "core_card": "core_papers.md#zheng2025",
+      "intro_atlas": "introduction_atlas.md#zheng2025"
+    },
+    {
+      "id": "zheng_softae2025",
+      "title": "Learning Soft Robotic Dynamics with Active Exploration (SoftAE)",
+      "year": "2025",
+      "metadata_basis": "原文核对指定章节",
+      "cluster": "G4",
+      "cluster_name": "预测、视觉与自适应控制",
+      "tags": [
+        "主动探索",
+        "概率集成",
+        "任务泛化"
+      ],
+      "priority": "P2 精读",
+      "verification": "primary_checked",
+      "primary_url": "https://arxiv.org/abs/2510.27428",
+      "other_urls": [],
+      "note": "../notes/notes_zheng2025_softae_active_dynamics.md",
+      "alias_of": "",
+      "where_used": "数据采集讨论；未来工作",
+      "caveat": "当前全遮挡停止不是主动探索；不能给现有实现添加不确定性驱动采集/控制的标签。",
+      "core_card": "core_papers.md#zheng_softae2025",
+      "intro_atlas": ""
+    },
+    {
+      "id": "almanzor2023",
+      "title": "Static Shape Control of Soft Continuum Robots Using Deep Visual Inverse Kinematic Models",
+      "year": "2023",
+      "metadata_basis": "本地出版/接受稿核对指定章节",
+      "cluster": "G4",
+      "cluster_name": "预测、视觉与自适应控制",
+      "tags": [
+        "全身静态控制",
+        "视觉逆运动学",
+        "手绘目标"
+      ],
+      "priority": "P1 核心",
+      "verification": "primary_checked",
+      "primary_url": "https://doi.org/10.1109/TRO.2023.3275375",
+      "other_urls": [],
+      "note": "",
+      "alias_of": "",
+      "where_used": "RW1/4；B1；目标任务设计",
+      "caveat": "静态形状任务与动态历史补偿不同，但不能声称首次全身控制或首次手绘目标；原文也讨论遮挡影响。",
+      "core_card": "core_papers.md#almanzor2023",
+      "intro_atlas": ""
+    },
+    {
+      "id": "softnerf2024",
+      "title": "SoftNeRF: A Self-Modeling Soft Robot Plugin for Various Tasks",
+      "year": "2024",
+      "metadata_basis": "本地出版/接受稿核对指定章节",
+      "cluster": "G1",
+      "cluster_name": "视觉自建模与全身表示",
+      "tags": [
+        "自建模",
+        "多视角",
+        "隐式形状"
+      ],
+      "priority": "P2 精读",
+      "verification": "primary_checked",
+      "primary_url": "https://doi.org/10.1109/IROS58592.2024.10801344",
+      "other_urls": [],
+      "note": "",
+      "alias_of": "",
+      "where_used": "RW1；从表示到任务",
+      "caveat": "本项目当前控制没有运行NeRF渲染或多视角SDF；不能沿用旧项目名词描述当前算法。",
+      "core_card": "core_papers.md#softnerf2024",
+      "intro_atlas": ""
+    },
+    {
+      "id": "hu2025",
+      "title": "Teaching robots to build simulations of themselves",
+      "year": "2025",
+      "metadata_basis": "本地出版/接受稿核对指定章节",
+      "cluster": "G1",
+      "cluster_name": "视觉自建模与全身表示",
+      "tags": [
+        "视觉自建模",
+        "自建仿真",
+        "形态变化"
+      ],
+      "priority": "P2 精读",
+      "verification": "primary_checked",
+      "primary_url": "https://doi.org/10.1038/s42256-025-01006-w",
+      "other_urls": [],
+      "note": "",
+      "alias_of": "",
+      "where_used": "RW1背景；文献身份区分",
+      "caveat": "不能与“Leveraging Part-Based NeRF…”(10.1002/smb2.70005)合并为同一条文献。",
+      "core_card": "core_papers.md#hu2025",
+      "intro_atlas": ""
+    },
+    {
+      "id": "tang2026",
+      "title": "A general soft robotic controller inspired by neuronal structural and plastic synapses that adapts to diverse arms, tasks, and perturbations",
+      "year": "2026",
+      "metadata_basis": "本地出版/接受稿核对指定章节",
+      "cluster": "G4",
+      "cluster_name": "预测、视觉与自适应控制",
+      "tags": [
+        "在线适应",
+        "多任务",
+        "多软臂",
+        "稳定性"
+      ],
+      "priority": "P2 精读",
+      "verification": "primary_checked",
+      "primary_url": "https://doi.org/10.1126/sciadv.aea3712",
+      "other_urls": [],
+      "note": "",
+      "alias_of": "",
+      "where_used": "RW4；状态校正与参数适应之别",
+      "caveat": "本项目只修正状态、权重冻结，不具有这类跨形态在线参数学习或相同稳定性结论。",
+      "core_card": "core_papers.md#tang2026",
+      "intro_atlas": ""
+    },
+    {
+      "id": "xu2026",
+      "title": "Safety-Aware Adaptive Visual Servoing of Soft Robots through Online Shape-Force Transformation",
+      "year": "2026",
+      "metadata_basis": "本地出版/接受稿核对指定章节",
+      "cluster": "G5",
+      "cluster_name": "约束、接触与安全",
+      "tags": [
+        "视觉伺服",
+        "接触力",
+        "安全约束",
+        "在线适应"
+      ],
+      "priority": "P2 精读",
+      "verification": "primary_checked",
+      "primary_url": "https://doi.org/10.1109/TRO.2026.3706564",
+      "other_urls": [],
+      "note": "",
+      "alias_of": "",
+      "where_used": "RW4边界；接触是未来扩展",
+      "caveat": "遮挡补偿不等于力估计；本项目未实现在线形状—力变换或接触约束。",
+      "core_card": "core_papers.md#xu2026",
+      "intro_atlas": ""
+    }
+  ]
+}
