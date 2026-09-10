@@ -43,7 +43,8 @@ class QtValveTransport(QObject):
         self._closed = False
         self.command_filter = None
         self._request.connect(self._issue_on_qt_thread, Qt.QueuedConnection)
-        controller.communication_result.connect(self._on_communication_result)
+        # This slot only touches lock-protected command records, never Qt widgets.
+        controller.communication_result.connect(self._on_communication_result, Qt.DirectConnection)
 
     def send(self, action6: Sequence[float], required_groups: Sequence[int],
              timeout_s: float) -> CommandReceipt:
@@ -71,16 +72,16 @@ class QtValveTransport(QObject):
         completed = pending.event.wait(float(timeout_s))
         with self._lock:
             self._pending.pop(command_id, None)
-        if not completed:
-            return CommandReceipt(command_id, requested,
-                                  pending.applied6 or requested,
-                                  pending.t_command or time.monotonic(), None, "timeout")
-        failures = [value for value in pending.acknowledgements.values() if not value[0]]
-        status = failures[0][2] if failures else "ack"
-        ack_times = [value[1] for value in pending.acknowledgements.values() if value[0]]
-        return CommandReceipt(command_id, requested, pending.applied6 or requested,
-                              pending.t_command or time.monotonic(),
-                              max(ack_times) if ack_times else None, status)
+            if not completed:
+                return CommandReceipt(command_id, requested,
+                                      pending.applied6 or requested,
+                                      pending.t_command or time.monotonic(), None, "timeout")
+            failures = [value for value in pending.acknowledgements.values() if not value[0]]
+            status = failures[0][2] if failures else "ack"
+            ack_times = [value[1] for value in pending.acknowledgements.values() if value[0]]
+            return CommandReceipt(command_id, requested, pending.applied6 or requested,
+                                  pending.t_command or time.monotonic(),
+                                  max(ack_times) if ack_times else None, status)
 
     @pyqtSlot(str, object, object, bool)
     def _issue_on_qt_thread(self, command_id, action6, groups, bypass_rate):
@@ -90,49 +91,52 @@ class QtValveTransport(QObject):
             return  # worker 已 timeout，禁止迟到命令继续下发
         required = (tuple(int(g) for g in groups) if groups is not None
                     else tuple(sorted(self.controller.connected_groups)))
-        if not required:
-            pending.acknowledgements[0] = (False, time.monotonic(), "not_connected")
-            pending.event.set()
-            return
-        pending.required_groups = required
+        with self._lock:
+            if not required:
+                pending.acknowledgements[0] = (False, time.monotonic(), "not_connected")
+                pending.event.set()
+                return
+            pending.required_groups = required
         try:
             if self.command_filter is not None and not bypass_rate:
                 action6 = self.command_filter(action6)
             _, applied, t_command = self.controller.set_pressures(
                 action6, command_id=command_id, bypass_rate=bool(bypass_rate),
                 required_groups=required)
-            pending.applied6 = tuple(float(value) for value in applied)
-            pending.t_command = float(t_command)
-            pending.issued = True
-            if (any(not value[0] for value in pending.acknowledgements.values()) or
-                    all(group in pending.acknowledgements for group in required)):
-                pending.event.set()
+            with self._lock:
+                pending.applied6 = tuple(float(value) for value in applied)
+                pending.t_command = float(t_command)
+                pending.issued = True
+                if (any(not value[0] for value in pending.acknowledgements.values()) or
+                        all(group in pending.acknowledgements for group in required)):
+                    pending.event.set()
         except Exception as error:
-            pending.acknowledgements[0] = (
-                False, time.monotonic(), f"controller_error:{type(error).__name__}")
-            pending.event.set()
+            with self._lock:
+                pending.acknowledgements[0] = (
+                    False, time.monotonic(), f"controller_error:{type(error).__name__}")
+                pending.event.set()
 
     @pyqtSlot(str, int, bool, float, str)
     def _on_communication_result(self, command_id, group_id, ok, timestamp, status):
         with self._lock:
             pending = self._pending.get(str(command_id))
-        if pending is None or int(group_id) not in pending.required_groups:
-            return
-        pending.acknowledgements[int(group_id)] = (
-            bool(ok), float(timestamp), str(status))
-        if pending.issued and (not ok or all(group in pending.acknowledgements
-                                             for group in pending.required_groups)):
-            pending.event.set()
+            if pending is None or int(group_id) not in pending.required_groups:
+                return
+            pending.acknowledgements[int(group_id)] = (
+                bool(ok), float(timestamp), str(status))
+            if pending.issued and (not ok or all(group in pending.acknowledgements
+                                                 for group in pending.required_groups)):
+                pending.event.set()
 
     def close(self) -> None:
-        self._closed = True
         with self._lock:
+            self._closed = True
             pending = list(self._pending.values())
             self._pending.clear()
-        for command in pending:
-            command.acknowledgements[0] = (
-                False, time.monotonic(), "transport_closed")
-            command.event.set()
+            for command in pending:
+                command.acknowledgements[0] = (
+                    False, time.monotonic(), "transport_closed")
+                command.event.set()
         try:
             self.controller.communication_result.disconnect(
                 self._on_communication_result)

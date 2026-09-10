@@ -5,7 +5,7 @@ except Exception:                       # 未装时 mock / 仅相机+NDI 模式�
     serial = None
 import queue
 import time
-from PyQt5.QtCore import QObject, pyqtSignal, QThread
+from PyQt5.QtCore import QObject, pyqtSignal, QThread, Qt
 import struct
 
 
@@ -369,8 +369,8 @@ class ModbusManager(QObject):
             # 创建并启动通信线程
             thread = ModbusThread(serial_port, group_id)
             thread.wire_event.connect(self.wire_event)
-            thread.data_sent.connect(self.on_data_sent)
-            thread.error_occurred.connect(self.on_error_occurred)
+            thread.data_sent.connect(self.on_data_sent, Qt.DirectConnection)
+            thread.error_occurred.connect(self.on_error_occurred, Qt.DirectConnection)
             thread.start()
 
             self.modbus_threads[group_id] = thread

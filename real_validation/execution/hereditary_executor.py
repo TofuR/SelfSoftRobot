@@ -123,9 +123,14 @@ class HereditaryExecutor:
                     timing=None
                     try:
                         timing=dict(step=k,plan_phase='reserve' if k>=primary_steps else 'primary',primary_steps=primary_steps,reserve_steps=reserve_steps,control_mode=self.control_mode,execution_id=execution_id,revision_status='command_failed',state_committed=False,version_before=version_before,remaining_before_model=before)
+                        send_started=self.clock()
                         receipt=self.transport.send(action,(1,2),self.timeout)
+                        send_returned=self.clock()
                         next_deadline=receipt.t_command+r.dt
                         timing.update(command_id=receipt.command_id,t_command=receipt.t_command,t_ack=receipt.t_ack,feedback_deadline=next_deadline,command_jitter_ms=(receipt.t_command-deadline)*1000,ack_ms=(receipt.t_ack-receipt.t_command)*1000 if receipt.t_ack is not None else None,command_interval_ms=(receipt.t_command-receipts[-1].t_command)*1000 if receipts else None)
+                        timing.update(send_wait_ms=(send_returned-send_started)*1000,
+                                      dispatch_wait_ms=max(0.,(receipt.t_command-send_started)*1000),
+                                      ack_delivery_ms=max(0.,(send_returned-receipt.t_ack)*1000) if receipt.t_ack is not None else None)
                         receipts.append(receipt);self.archive.command(k,receipt);r.acknowledge(receipt)
                         if receipt.status!='ack':raise RuntimeError(f'command {receipt.command_id}: {receipt.status}')
                         # Valve slew uses actual command intervals, so applied6 may
@@ -146,20 +151,27 @@ class HereditaryExecutor:
                         earliest=max(receipt.t_command+self.settle_s,receipt.t_ack or receipt.t_command)
                         wait_start=self.clock();wait_end=next_deadline-.003;frame=None
                         timing['revision_status']='frame_missing'
+                        polls=0
                         while self.clock()<wait_end:
-                            if self.abort_event.wait(.005):raise RuntimeError('operator_abort')
+                            if self.abort_event.is_set():raise RuntimeError('operator_abort')
                             frame=self.frame_provider()
+                            polls+=1
                             if frame is not None and frame[1]>=earliest and frame[1]>r.last_frame:break
                             frame=None
+                            if self.abort_event.wait(min(.005,max(0.,wait_end-self.clock()))):raise RuntimeError('operator_abort')
                         timing['frame_wait_ms']=(self.clock()-wait_start)*1000
+                        timing.update(camera_poll_count=polls,feedback_budget_ms=max(0.,(wait_end-self.clock())*1000))
                         timing['fallback_model']=old[k+1:].copy()
                         if frame is None:
                             if self.camera_provider:
                                 for camera,other in self.camera_provider().items():self.archive.enqueue_image(k,camera,other,receipt)
                             misses+=1;r.record('feedback_missing',step=k,execution_id=execution_id,consecutive_missing=misses)
-                            if self.callback:self.callback(dict(edges=0,consecutive_missing=misses,visibility=dict(status='没有新图像；仅模型预测')))
+                            timing.update(edges=0,consecutive_missing=misses,control_mode=self.control_mode,
+                                          visibility=dict(status='没有 ACK 后的新图像；仅模型预测'))
                             if misses>=self.max_missing:raise RuntimeError('连续三次没有新图像，停止并归零' if self.max_missing==3 else f'连续 {misses} 次没有新图像，停止并归零')
                             continue
+                        timing.update(frame_age_at_selection_ms=(self.clock()-frame[1])*1000,
+                                      frame_after_ack_ms=(frame[1]-receipt.t_ack)*1000 if receipt.t_ack is not None else None)
                         # Full old suffix is consumed exactly once at the command boundary.
                         preprocess_start=self.clock()
                         feedback,occlusion=self.image_transform(frame[0]) if self.image_transform else (frame[0],{'enabled':False})

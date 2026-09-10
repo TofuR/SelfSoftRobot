@@ -8,6 +8,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+TIMING_FIELDS=['step','revision_status','command_interval_ms','command_jitter_ms','ack_ms','frame_wait_ms','preprocess_ms','feedback_budget_ms','feedback_wait_ms','compute_ms','edge_ms','observer_ms','control_ms','archive_enqueue_ms','cycle_ms','state_committed','suffix_changed',
+               'send_wait_ms','dispatch_wait_ms','ack_delivery_ms','camera_poll_count','frame_age_at_selection_ms','frame_after_ack_ms']
+
 class ExperimentArchive:
     def __init__(self,folder,started,metadata,evaluation_provider=None):
         self.folder=Path(folder);self.started=started;self.provider=evaluation_provider
@@ -17,7 +20,7 @@ class ExperimentArchive:
         self.image_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='experiment-images');self.image_jobs=deque()
         self.steps=(self.folder/'steps.jsonl').open('x',buffering=1);self.handles.append(self.steps)
         (self.folder/'feedback_jobs').mkdir()
-        self.timings=self.csv('timings.csv',['step','revision_status','command_interval_ms','command_jitter_ms','ack_ms','frame_wait_ms','preprocess_ms','feedback_budget_ms','feedback_wait_ms','compute_ms','edge_ms','observer_ms','control_ms','archive_enqueue_ms','cycle_ms','state_committed','suffix_changed'])
+        self.timings=self.csv('timings.csv',TIMING_FIELDS)
         self.write_status('running')
     def csv(self,name,columns):
         f=(self.folder/name).open('x',newline='',buffering=1);self.handles.append(f);writer=csv.writer(f);writer.writerow(columns);return writer
@@ -28,8 +31,7 @@ class ExperimentArchive:
     def step(self,value):
         if value.get('proposal_path'):self.proposals.append(value['proposal_path'])
         self.steps.write(json.dumps(value,default=lambda a:np.asarray(a).tolist(),allow_nan=False)+'\n')
-        fields=['step','revision_status','command_interval_ms','command_jitter_ms','ack_ms','frame_wait_ms','preprocess_ms','feedback_budget_ms','feedback_wait_ms','compute_ms','edge_ms','observer_ms','control_ms','archive_enqueue_ms','cycle_ms','state_committed','suffix_changed']
-        self.timings.writerow([value.get(k) for k in fields])
+        self.timings.writerow([value.get(k) for k in TIMING_FIELDS])
 
     def enqueue_image(self,*args):
         while self.image_jobs and self.image_jobs[0].done():self.image_jobs.popleft().result()

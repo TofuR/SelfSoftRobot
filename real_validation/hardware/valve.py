@@ -23,7 +23,7 @@ import time
 from array import array
 from typing import List, Optional
 
-from PyQt5.QtCore import QObject, QTimer, pyqtSignal
+from PyQt5.QtCore import QObject, QTimer, Qt, pyqtSignal
 
 from .modbus import ModbusManager
 
@@ -130,8 +130,9 @@ class ValveController(QObject):
         self._command_ids = itertools.count(1)
         self._required_groups = None
         self._slew = PressureSlewLimiter(initial=self._last)
-        self.mgr.command_ack.connect(self._on_command_ack)
-        self.mgr.command_error.connect(self._on_command_error)
+        # These slots only forward signals; ACK delivery must not wait for paint.
+        self.mgr.command_ack.connect(self._on_command_ack, Qt.DirectConnection)
+        self.mgr.command_error.connect(self._on_command_error, Qt.DirectConnection)
 
     def allocate_command_id(self) -> str:
         return str(next(self._command_ids))

@@ -54,6 +54,53 @@ class HardwareSessionTest(unittest.TestCase):
     def setUpClass(cls):
         app()
 
+    def test_serial_ack_wakes_control_worker_while_gui_is_busy(self):
+        self._serial_response_with_busy_gui(True)
+
+    def test_serial_error_wakes_control_worker_while_gui_is_busy(self):
+        self._serial_response_with_busy_gui(False)
+
+    def _serial_response_with_busy_gui(self,valid):
+        """Exercise actual Modbus -> manager -> valve -> transport signal chain."""
+        import threading,time
+        from types import SimpleNamespace
+        from real_validation.hardware.valve import ValveController
+        from real_validation.hardware.modbus import ModbusRTU
+        from real_validation.execution.hardware_session import QtValveTransport
+        release=threading.Event();ports=[];receipts=[]
+        class Serial:
+            def __init__(self,**kwargs):
+                self.is_open=True;self.written=threading.Event();ports.append(self)
+            def reset_input_buffer(self):pass
+            def reset_output_buffer(self):pass
+            def flush(self):pass
+            def write(self,data):self.data=data;self.written.set()
+            def read(self,count):
+                release.wait(1.)
+                data=self.data[:6];crc=ModbusRTU.calculate_crc(data)
+                return data+bytes(((crc&255) if valid else ((crc&255)^1),crc>>8))
+            def close(self):self.is_open=False
+        controller=ValveController({1:'FAKE1',2:'FAKE2'})
+        with patch('real_validation.hardware.modbus.serial',SimpleNamespace(Serial=Serial)):
+            self.assertTrue(controller.connect())
+        transport=QtValveTransport(controller)
+        worker=threading.Thread(target=lambda:receipts.append(transport.send([0.]*6,(1,2),.8)))
+        try:
+            worker.start();end=time.monotonic()+1.
+            while not all(p.written.is_set() for p in ports) and time.monotonic()<end:
+                app().processEvents();time.sleep(.001)
+            self.assertTrue(all(p.written.is_set() for p in ports))
+            release.set()
+            # Intentionally do NOT pump Qt events: rendering can block this thread.
+            worker.join(.2)
+            self.assertFalse(worker.is_alive(),'ACK receipt still depends on GUI event delivery')
+            self.assertEqual(receipts[0].status,'ack' if valid else 'invalid_response')
+        finally:
+            release.set();end=time.monotonic()+1.
+            while worker.is_alive() and time.monotonic()<end:
+                app().processEvents();time.sleep(.001)
+            worker.join(1.);transport.close();controller.close();app().processEvents()
+
     def test_disconnected_group_config_does_not_rebuild_connected_controller(self):
         from dataclasses import replace
         session=HardwareSession();controller=session.prepare_valves();session.connect_prepared_valves((1,))

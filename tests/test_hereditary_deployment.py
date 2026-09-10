@@ -348,6 +348,26 @@ class DeploymentTests(unittest.TestCase):
         # A 65 ms correction must not round dispatch to another 100 ms slot.
         self.assertLess(float(np.median(intervals)),.18)
 
+    def test_delayed_ack_delivery_exhausts_budget_without_claiming_compute_time(self):
+        import json
+        def send(action,groups,timeout):
+            issued=self.now;self.now+=.12
+            return CommandReceipt('delayed',tuple(action),tuple(action),issued,issued+.02,'ack')
+        transport=MockCommandTransport();transport.send=send
+        callbacks=[]
+        executor=HereditaryExecutor(self.r,transport,lambda:None,callback=callbacks.append,clock=lambda:self.now)
+        executor.execute(self._flat_plan(1))
+        info=json.loads((executor.last_execution_dir/'steps.jsonl').read_text().splitlines()[0])
+        self.assertAlmostEqual(info['ack_ms'],20.)
+        self.assertAlmostEqual(info['ack_delivery_ms'],100.)
+        self.assertAlmostEqual(info['send_wait_ms'],120.)
+        self.assertEqual(info['camera_poll_count'],0)
+        self.assertEqual(info['feedback_budget_ms'],0.)
+        self.assertEqual(info['revision_status'],'frame_missing')
+        self.assertNotIn('compute_ms',info)
+        self.assertNotIn('feedback_wait_ms',info)
+        self.assertEqual(len(callbacks),1)
+
     def test_deadline_discards_state_and_plan_without_queueing_or_delaying_commands(self):
         import threading,json
         self.r.clock=time.monotonic;self.r.initialize([0.]*6)

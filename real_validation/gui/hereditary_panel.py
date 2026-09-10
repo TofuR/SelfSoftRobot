@@ -617,6 +617,7 @@ class HereditaryPanel(QWidget):
         self.job.progress.connect(self.progress)
 
     def progress(self,info):
+        from .feedback_timing import computation_text,STATUS_TEXT,timing_line
         self.canvas.evidence=np.asarray(info.get('evidence_pixels_px',[]));self.evidence_stamp=time.monotonic()
         if 'prediction_px' in info:
             self.canvas.prediction=np.asarray(info['prediction_px']);self.canvas.update()
@@ -626,18 +627,15 @@ class HereditaryPanel(QWidget):
             self.feedback_label.setText('对照：不使用矫正，按规划执行；图像仅记录。'+('本步未获得新图像' if info.get('revision_status')=='frame_missing' else ''))
             return
         visibility=info.get('visibility',{})
-        latency=info.get('compute_ms',info.get('feedback_wait_ms',0))
-        timing_label='计算' if 'compute_ms' in info else '等待反馈'
-        text=(f'{timing_label} {latency:.1f} ms · 可信边缘 {info.get("edges",0)} · '
+        text=(f'{computation_text(info)} · 可信边缘 {info.get("edges",0)} · '
               f'可见证据覆盖 {visibility.get("coverage",0):.0%} · {visibility.get("status","图像不可用")}')
         if info.get('visible_target_error_mm') is not None:text+=f' · 可见边缘目标差 {info["visible_target_error_mm"]:.2f} mm'
         if 'warmup' in info:text+=f' · 预热连续合格 {info["warmup"]["good"]}/{info["warmup"]["required"]}'
         if info.get('consecutive_missing'):text+=f' · 连续无反馈 {info["consecutive_missing"]} 次，仅模型预测'
         if 'revision_status' in info:
-            status={'committed':'已提交','deadline_expired':'超时跳过','worker_busy':'上次仍在计算，跳过','no_budget':'本周期无预算，跳过','snapshot_changed':'状态变化，丢弃','frame_missing':'无新图像','operator_abort':'已停止'}.get(info['revision_status'],info['revision_status'])
+            status=STATUS_TEXT.get(info['revision_status'],info['revision_status'])
             text+=f' · {status}'
-            interval=info.get('command_interval_ms')
-            self.results.appendPlainText(f'步骤 {info.get("step")} | 发令间隔 {interval:.1f} ms | 等待反馈 {info.get("feedback_wait_ms",0):.1f}/{info.get("feedback_budget_ms",0):.1f} ms | {status}' if interval is not None else f'步骤 {info.get("step")} | {info["revision_status"]}')
+            self.results.appendPlainText(timing_line(info))
         self.feedback_label.setText(text)
         self.state_label.setText(text)
 

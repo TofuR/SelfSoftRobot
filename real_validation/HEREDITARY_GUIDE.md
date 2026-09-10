@@ -165,6 +165,8 @@ SAM 模型缓存和同一冻结图像的编码复用；所有入口使用一致�
 
 `feedback_wait_ms` 是控制线程等待时间，超时任务的完整耗时在随后写出的提案文件中；未完成不填 0。`metadata.json` 记录关闭时尚未写完的反馈提案，进程提前结束可能无法得到这些任务的完整耗时。`cycle_ms` 到本步审计写入前为止；真实的命令间隔还包含调度和日志开销。
 
+2026-09-11 通信修复：阀 ACK/错误通知直接唤醒控制线程，避免 GUI 忙导致串口已收到应答但控制仍等待。执行日志新增 `send_wait_ms`、`dispatch_wait_ms`、`ack_delivery_ms`、`camera_poll_count`、`frame_age_at_selection_ms`、`frame_after_ack_ms`；界面显示“等待反馈 / 可用预算”，缺失测量显示 `—`，不再补 0。具体解释与相机/阀排查见 [通信时延说明](COMMUNICATION_LATENCY.md)。
+
 上级 `events.jsonl` 继续记录模型状态、每步反馈与剩余动作修订。压力是命令及 ACK，不是实测腔压；NDI 是独立测量。时间采用主机 monotonic 接收时间，多相机并非曝光同步，NDI 的时间接近也不代表设备硬件同步。NDI 缓冲最多保存 60000 条，元数据给出最早保留时间，便于检查记录范围。
 
 ## A 与 B 的实测比较
