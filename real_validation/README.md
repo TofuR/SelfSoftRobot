@@ -50,7 +50,7 @@ PyTorch / torchvision 固定为当前验证使用的 2.6.0 / 0.21.0 配对。req
 - 新 5 Hz、新 10 Hz 及旧参考：发布包的 `checkpoints/candidates/`；来源与选择指标见 [候选说明](checkpoints/candidates/README.md)。
 - JSON 中的 `dt` 决定控制模型频率，不根据相机帧率或文件名推断；换频率时换模型，不单改 `dt`。
 - SAM2 初始化需要 `checkpoints/sam2/sam2.1_hiera_tiny.pt`、`vendor/sam2/` 上游源码及其依赖。官方导出的完整 SAM 部署 ZIP 已包含源码和分割权重；仅复制 Git 源码目录不会自动包含这些被忽略的大文件。
-- YOLO 训练在服务器离线进行，目前不参与初始化或实时反馈；未来分割权重与控制权重分开放置，见 [YOLO 独立包方案](YOLO_DEPLOYMENT_PLAN.md)。
+- YOLO 训练在服务器离线进行，目前不参与初始化或实时反馈；接入后作为同一 App 内可选择的分割方法，权重、配置和依赖随 real_validation 完整部署包提供，在第二页直接使用。分割权重与控制权重仅在包内分目录保存，见 [YOLO 方法接入与随包部署方案](YOLO_DEPLOYMENT_PLAN.md)。
 
 当前绿色是冻结帧分割，青色是模型估计，白点是可信可见边缘，紫色为规划预览，红色为目标。空闲且没有计划时有局部边缘反馈；手动调压期间按 ACK 历史预测；已生成计划后保持预览一致，不持续改变计划对应状态。外力摆动的连续分割跟随仍是后续工作。
 

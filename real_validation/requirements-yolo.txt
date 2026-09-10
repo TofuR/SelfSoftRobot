@@ -1,4 +1,5 @@
 # Optional offline candidate inference dependencies; YOLO is NOT wired into the GUI yet.
+# Planned runtime belongs to the same real_validation App/package, not a separate YOLO app.
 # See YOLO_DEPLOYMENT_PLAN.md. Installing this file does not enable live tracking.
 -r requirements.txt
 torchvision==0.21.0
