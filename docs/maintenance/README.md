@@ -2,7 +2,7 @@
 title: SelfSoftRobot 治理历史
 kind: history
 status: active
-updated: 2026-09-01
+updated: 2026-09-10
 scope: material migrations, releases, removals, and acceptance decisions
 supersedes: []
 superseded_by: null
@@ -17,6 +17,7 @@ sources:
 
 | 日期 | 类型 | 决定/事件 | 证据 |
 |---|---|---|---|
+| 2026-09-10 | supersede | 论文入口转到遮挡闭环证据准备包；旧初稿保留但不作为本轮论证输入；paper/papers所有权不变 | [论文入口](../paper/README.md)、[新文献核对](../papers/review_partial_observation_20260910/README.md) |
 | 2026-09-01 | migration | 67 项历史资产原子迁入统一 workspace，旧入口在主线短跑后移除 | [`2026-09-01_legacy_asset_migration.json`](2026-09-01_legacy_asset_migration.json) |
 | 2026-09-01 | validation | 公共 engine 的 GT/OpenLoop validation 与旧评价排序等价 | [`2026-09-01_transition_validation_equivalence.md`](2026-09-01_transition_validation_equivalence.md) |
 | 2026-09-01 | release | 发布不可变 10 Hz reference dataset，并完成 formal frozen test/offline fixture | [`2026-09-01_reference_dataset_release.md`](2026-09-01_reference_dataset_release.md) |

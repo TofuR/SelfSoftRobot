@@ -2,7 +2,7 @@
 title: SelfSoftRobot 文档地图
 kind: map
 status: active
-updated: 2026-09-09
+updated: 2026-09-10
 scope: canonical documentation navigation and ownership
 supersedes: []
 superseded_by: null
@@ -80,20 +80,21 @@ python scripts/maintenance/check_docs_governance.py
 ## 文献与背景 (`background/`)
 | 文档 | 说明 |
 |---|---|
-| [`background/literature.md`](background/literature.md) | 相关工作综述(NeRF系/自建模/迟滞/视觉控制) + 本项目创新点 |
+| [`background/literature.md`](background/literature.md) | 历史主题综述；当前研究定位以论文准备包及新原文核对为准 |
 
 ## 论文与文献
 
 | 入口 | 说明 |
 |---|---|
-| [`paper/README.md`](paper/README.md) | 唯一活跃 manuscript 树；方法、实验、outline 和正文草稿在这里维护 |
+| [`paper/README.md`](paper/README.md) | 唯一活跃论文树；当前由[遮挡闭环准备包](paper/occlusion_control/README.md)组织主张、引言、公式和实验 |
+| [`papers/review_partial_observation_20260910/README.md`](papers/review_partial_observation_20260910/README.md) | 文献分类、原文核心卡片、逐段引言分析和证据纠错 |
 | [`papers/README.md`](papers/README.md) | 文献证据、66 篇单篇笔记、深读材料、原文副本和旧阶段草稿的边界 |
 
 ## 实验 (`experiments/`)
 | 文档 | 说明 |
 |---|---|
 | [`experiments/README.md`](experiments/README.md) | 实验文档入口：当前方案、正式记录和历史仿真实验 |
-| [`experiments/openloop_sparse_observation_validation_plan.md`](experiments/openloop_sparse_observation_validation_plan.md) | **当前论文实验主方案**：机制层物理记忆与 H–K 可行域，任务层路径依赖 IK/不可见轨迹，应用层不透明通道稀疏观测巡检 |
+| [`experiments/openloop_sparse_observation_validation_plan.md`](experiments/openloop_sparse_observation_validation_plan.md) | 既有稀疏OpenLoop阶段实验方案；当前遮挡闭环实验见[新实验证据链](paper/occlusion_control/04_experimental_program.md) |
 | [`experiments/real_robot_validation_workbench_todo.md`](experiments/real_robot_validation_workbench_todo.md) | **实机验证界面 TODO**：模型/场景/规划/安全执行/同步评价的通用工作台与任务插件 |
 | `experiments/hereditary_v2_training_validation.md` | Hereditary v2 正式训练与验证记录 |
 | `experiments/experiment_analysis.md`、`improvement_proposals.md`、`results_evaluation.md` | **历史仿真阶段记录**，仅用于追溯，不作为当前结论入口 |

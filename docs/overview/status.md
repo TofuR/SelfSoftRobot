@@ -16,6 +16,12 @@ sources:
 > “现在到哪了 + 接下来做什么”。本页是唯一当前状态入口；具体参数和数值以 dataset/run manifest 与实验记录为准。
 > 文献详见 [`../background/literature.md`](../background/literature.md); 模型架构详见 [`project_help.md`](project_help.md); 研究方向详见 [`../directions/`](../directions/)。
 
+## 当前研究主线：遮挡下的部分观测闭环控制
+
+2026-09-10：围绕单RGB、平面全身形状、历史状态校正、剩余动作补偿和控制期限，建立[新论文准备包](../paper/occlusion_control/README.md)。不采用旧初稿叙事。文献已整理为[7类索引](../papers/review_partial_observation_20260910/README.md)，21篇核对指定原文章节，8篇逐段拆解引言；AFT等作为直接相关工作，不将已有能力写成空白。
+
+当前证据支持模型/回放诊断和虚拟执行链路；正式论文仍需独立预测、同观测强状态基线及真实机器人遮挡闭环。下一步实验按[六层证据链](../paper/occlusion_control/04_experimental_program.md)推进。下列OpenLoop/早期NeRF路线保留为历史背景，不再单独定义当前论文主线。
+
 ## 0. 2026-09-09 部分观测回放与反馈加速
 
 - 已在 `feat/partial-observation-replay` 开展固定图像遮挡的上实机前验证：运动窗口选择、原始命令/图像配对、hereditary 非推进读出、状态校正、B 全剩余后缀优化与可视化回放。
