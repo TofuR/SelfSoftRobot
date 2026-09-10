@@ -1,10 +1,13 @@
-# Mock/离线工作台
-numpy>=1.20
-torch>=2.0
-PyQt5>=5.15
-pyqtgraph>=0.13
-scipy>=1.10
-opencv-python>=4.5
-threadpoolctl>=3.1
-scikit-image>=0.20
-# 在线感知另见 requirements-perception.txt（opencv-python / scipy）
+# Default four-page workbench: GUI, numeric control, classical perception.
+# Recommended interpreter: Python 3.10, 64-bit. See README.md.
+numpy>=1.24,<3
+torch==2.6.0
+PyQt5>=5.15,<6
+pyqtgraph>=0.13,<1
+scipy>=1.10,<2
+opencv-python>=4.5,<5
+threadpoolctl>=3.1,<4
+scikit-image>=0.20,<1
+# SAM2 initialization: requirements-sam2.txt
+# Optional physical devices: requirements-hardware.txt
+# Planned YOLO frontend / offline checks: requirements-yolo.txt

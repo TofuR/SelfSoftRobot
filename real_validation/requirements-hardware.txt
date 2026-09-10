@@ -1,8 +1,7 @@
 -r requirements.txt
-
-# 后续真机连接页面启用后按实际设备安装
-opencv-python>=4.5
+# Convenience set for the currently implemented serial / RealSense / NDI adapters.
+# UVC uses base OpenCV; SDK and NDI packages can be omitted when not using them.
+# For selective installation see README.md. System USB/serial drivers are separate.
 pyserial>=3.5
 pyrealsense2>=2.50
-scipy>=1.7
 scikit-surgerynditracker>=1.0

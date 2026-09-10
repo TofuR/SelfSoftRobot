@@ -1,5 +1,3 @@
-# 在线感知（分割 / 骨架 / 配准 / 质量门控）需要的额外依赖。
-# 只跑离线 Mock 工作台不需要装本文件。
-opencv-python>=4.5
-scipy>=1.7
-scikit-image>=0.19
+# Compatibility entrypoint. Classical perception is already in the base app.
+# This file is not an additional required install step and does not install SAM/YOLO.
+-r requirements.txt

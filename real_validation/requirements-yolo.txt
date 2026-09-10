@@ -1,0 +1,7 @@
+# Optional offline candidate inference dependencies; YOLO is NOT wired into the GUI yet.
+# See YOLO_DEPLOYMENT_PLAN.md. Installing this file does not enable live tracking.
+-r requirements.txt
+torchvision==0.21.0
+ultralytics==8.4.146
+# CPU ONNX inference for candidate comparison. Exporter 'onnx' stays on the server.
+onnxruntime==1.23.2

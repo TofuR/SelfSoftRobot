@@ -1,44 +1,15 @@
-# 模型部署包放置约定
+# 验证 App 的模型文件
 
-每个可运行模型使用一个独立目录：
+默认四页 Hereditary 与旧 OpenLoop 使用不同合同，不能互换。
 
-```text
-checkpoints/<model_name>/
-  config.json
-  deploy_manifest.json
-  best_model.pt
-```
+| 用途 | 文件 | 加载位置 |
+| --- | --- | --- |
+| 默认控制模型 | `hereditary_current/hereditary.npz` + 同名 `hereditary.json` | 第1页“加载模型” |
+| 5 Hz / 10 Hz / 旧控制参考 | `candidates/<名称>.npz` + 同名 JSON | 第1页选择对应候选；[候选来源](candidates/README.md) |
+| SAM2.1 Tiny 初始化 | `sam2/sam2.1_hiera_tiny.pt`，配合 `vendor/sam2/` | 第2页修正/高级设置中的 SAM 设置 |
+| YOLO 分割候选（待接入） | 拟放 `perception/<模型版本>/`，权重与推理合同一起 | 尚无 GUI 入口；见 [部署方案](../YOLO_DEPLOYMENT_PLAN.md) |
+| 旧 OpenLoop | `<名称>/best_model.pt`、`config.json`、`deploy_manifest.json` | 仅 `--legacy-openloop`；见 [旧指南](../GUI_GUIDE.md) |
 
-三份文件来自同一次训练试次。`deploy_manifest.json` 声明 checkpoint 哈希、六通道来源、
-模型动作通道、压力尺度、训练时基、状态坐标和节点数。毫米状态模型同时声明
-`robot_diameter_mm=16`、毫米尺度、`K_safe`/认证表和规划位移统计。
-当前模型合同为 `model_contract_version=2`：GL 的 `w0` 对齐当前动作，
-骨架和空间 GRU 统一按 `node0=base -> nodeN-1=tip` 排列。
-同一次实验生成的 `anchor.json` 与 `scene.json` 也显式保存该 `node_order`，加载时按合同校验。
+Hereditary JSON 包含参数 hash、原生 `dt`、四维压力尺度、六腔映射和限制。复制/改名时 NPZ 与 JSON 一起处理，加载会核对 hash。不能修改文件名或 JSON 的 dt 来转换 5/10 Hz 模型。分割模型不控制压力，也不拥有控制 dt。
 
-在仓库根生成部署清单：
-
-```bash
-python scripts/utils/build_deploy_manifest.py \
-  --exp-dir train_log/real_pipeline/<dataset>/<trial>/stages/open_loop \
-  --raw-seq real_capture/data/raw/<seq> \
-  --checkpoint <trial>/stages/open_loop/phase_open_loop_transition/model/best_eval_model.pt \
-  --horizon-summary <openloop_horizon_summary.json> \
-  --out train_log/real_pipeline/<dataset>/<trial>/deploy_manifest.json
-```
-
-随后复制到可移植工作台目录：
-
-```bash
-mkdir -p real_validation/checkpoints/<model_name>
-cp <trial>/stages/open_loop/config.json \
-   real_validation/checkpoints/<model_name>/config.json
-cp <trial>/stages/open_loop/phase_open_loop_transition/model/best_eval_model.pt \
-   real_validation/checkpoints/<model_name>/best_model.pt
-cp <trial>/deploy_manifest.json \
-   real_validation/checkpoints/<model_name>/deploy_manifest.json
-```
-
-GUI 在 Setup 页选择 `best_model.pt`。加载过程会向上查找同目录的配置和部署清单，并校验
-`checkpoint_sha256`。当前精简运行时接受
-`OpenLoopTransitionModel + fractional encoder`。
+权重是运行资产，不提交到 Git；源码 checkout 不保证这些大文件存在。独立发行包由打包工具明确复制所选权重并登记 SHA256，保留旧候选，不依赖服务器路径。

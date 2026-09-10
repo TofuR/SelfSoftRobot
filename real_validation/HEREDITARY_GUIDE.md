@@ -1,6 +1,6 @@
 # Hereditary / Analytic B 实验操作指南
 
-2026-09-10：已按采集 App 的设备连接与腔道控制习惯重整为四页流程。打开 [带红圈编号的 HTML 操作手册](../workspace/runs/analysis/hereditary_deployment/release_20260911_001/guide/guide.html)。独立 ZIP 内为 `HEREDITARY_GUIDE.html`，截图内嵌，无需网络。
+2026-09-11：当前四页流程已包含自动 SAM 提示、折叠修正工具、末端余量及复用配准预热。打开 [带红圈编号的 HTML 操作手册](../workspace/runs/analysis/hereditary_deployment/release_20260911_002/guide/guide.html)。独立 ZIP 内为 `HEREDITARY_GUIDE.html`，截图内嵌，无需网络。
 
 ## 启动
 
@@ -8,7 +8,7 @@
 python -m real_validation.main
 ```
 
-Windows 也可用 `run_gui.bat`。独立目录安装 `requirements.txt`，真实 USB/串口另装 `requirements-hardware.txt`；无需 `src/` 或 `real_capture/`。旧 OpenLoop 在 `--legacy-openloop` 兼容入口保留。
+Windows 也可用 `run_gui.bat`。建议 Python 3.10（64 位）；在包含 `real_validation/` 的目录安装 `real_validation/requirements.txt`。SAM 初始化另装 `requirements-sam2.txt`，真实 USB/串口按设备添加依赖或安装 `requirements-hardware.txt`；完整发行 ZIP 带所选权重和 SAM 源码，不依赖 `src/` 或 `real_capture/`。安装矩阵见 [README](README.md)。旧 OpenLoop 在 `--legacy-openloop` 兼容入口保留。YOLO 目前只在离线训练，依赖和发行内容见 [后续部署方案](YOLO_DEPLOYMENT_PLAN.md)。
 
 ## 1 设备模型
 
@@ -109,7 +109,7 @@ SAM 模型缓存和同一冻结图像的编码复用；所有入口使用一致�
 
 ### 末端调整余量
 
-在已有 **初始规划参数…** 中设置“末端调整余量”，默认 10 步，0 为关闭：10 Hz 对应约 1 s，5 Hz 对应约 2 s。预览列出“主规划 + 余量 = 总步数”，主规划与余量合计最多 200 步。初始余量采用保持末压力，参考指向用户目标；在线 B 可以继续在压力与速率限制内修订。余量影响最终预览残差，因此也参与计划达标检查。
+在已有 **初始规划参数…** 中设置“末端调整余量”，默认 10 步，0 表示额外 0 步（不是 0 kPa，不会清零）：10 Hz 对应约 1 s，5 Hz 对应约 2 s。预览列出“主规划 + 余量 = 总步数”，主规划与余量合计最多 200 步。初始余量采用保持末压力，参考指向用户目标；在线 B 可以继续在压力与速率限制内修订。余量影响最终预览残差，因此也参与计划达标检查。
 
 开环对照执行相同总长度。用尽全部步数后保持末压并报告模型估计残差与图像证据状态；不在实时周期启动全局重规划、不无限尝试。若仍未到位，可以根据当前状态再次规划；余量不能保证不可达目标可达。
 
