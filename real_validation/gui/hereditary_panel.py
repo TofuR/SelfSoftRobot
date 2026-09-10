@@ -47,7 +47,7 @@ class HereditaryPanel(QWidget):
         self.initial_roi=None;self.roi_camera_key=None;self.sam_points=[];self.sam_labels=[];self.draft_info={}
         from ..perception.sam_initial import SamInitialSegmenter,default_checkpoint
         self.sam_segmenter=SamInitialSegmenter()
-        self.draft_stamp=None;self.draft_version=None
+        self.draft_stamp=None;self.draft_version=None;self.auto_prompt_pending=False;self.evidence_stamp=-float('inf')
         self.display_controls=QWidget();display=QHBoxLayout(self.display_controls)
         self.display_mode=QComboBox();self.display_mode.addItems(['整体形状 + 中心线','仅骨架中心线'])
         self.display_mode.currentIndexChanged.connect(self.update_display)
@@ -55,7 +55,8 @@ class HereditaryPanel(QWidget):
         self.opacity.valueChanged.connect(self.update_display)
         display.addWidget(QLabel('叠图'));display.addWidget(self.display_mode)
         display.addWidget(QLabel('不透明度'));display.addWidget(self.opacity)
-        display.addWidget(QLabel('青：当前估计  紫：轨迹预览  红：目标  黄：草稿'))
+        legend=QLabel('青：模型估计  白点：可见边缘\n紫：预览  红：目标  绿：冻结分割');legend.setWordWrap(True)
+        display.addWidget(legend);self.opacity.setMinimumWidth(80)
         row=QHBoxLayout();self.path=QLineEdit();self.path.setPlaceholderText('hereditary.npz（同名 JSON 放旁边）')
         browse=QPushButton('选择模型');browse.clicked.connect(self.browse)
         row.addWidget(self.path);row.addWidget(browse);prepare.addLayout(row)
@@ -75,7 +76,11 @@ class HereditaryPanel(QWidget):
         self.probe_result=QPlainTextEdit();self.probe_result.setReadOnly(True);self.probe_result.setMaximumHeight(120);prepare.addWidget(self.probe_result);self.probe_result.hide()
         note=QLabel('先用全局「六腔控制」调到初始压力并结束调压。提取完整形状、检查黄点，再确认部署；系统保持当前压力估计状态和预热。')
         note.setWordWrap(True);initial.addWidget(note)
-        self.polarity=QComboBox();self.polarity.addItem('亮色臂身 / 较暗背景','bright');self.polarity.addItem('黑色剪影 / 明亮背景','dark');initial.addWidget(self.polarity)
+        self.auto_button=QPushButton('自动提取当前完整形状');self.auto_button.clicked.connect(self.auto_shape);initial.addWidget(self.auto_button)
+        self.initial_tools_toggle=QPushButton('修正形状 / 高级设置');self.initial_tools_toggle.setCheckable(True);initial.addWidget(self.initial_tools_toggle)
+        self.initial_tools=QWidget();detail=QVBoxLayout(self.initial_tools);detail.setContentsMargins(0,0,0,0)
+        self.initial_tools_toggle.toggled.connect(self.initial_tools.setVisible)
+        self.polarity=QComboBox();self.polarity.addItem('亮色臂身 / 较暗背景','bright');self.polarity.addItem('黑色剪影 / 明亮背景','dark');detail.addWidget(self.polarity)
         self.polarity.currentIndexChanged.connect(self.invalidate_plan)
         row=QHBoxLayout();self.initial_method=QComboBox();self.initial_method.addItem('SAM2 初始化（推荐，可较慢）','sam2');self.initial_method.addItem('传统分割（免 SAM 依赖）','classical');row.addWidget(self.initial_method)
         self.sam_settings=QDialog(self);self.sam_settings.setWindowTitle('SAM2 初始化设置');sf=QFormLayout(self.sam_settings)
@@ -83,31 +88,31 @@ class HereditaryPanel(QWidget):
         browse_sam=QPushButton('选择分割权重');browse_sam.clicked.connect(self.browse_sam);sf.addRow(browse_sam)
         self.sam_device=QComboBox();self.sam_device.addItems(['auto','cpu','cuda']);sf.addRow('推理设备',self.sam_device)
         sf.addRow(QLabel('仅在初始化使用。CPU 可运行，首次加载较慢；不会改变气压。'))
-        settings_button=QPushButton('SAM 设置');settings_button.clicked.connect(self.sam_settings.show);row.addWidget(settings_button);initial.addLayout(row)
+        settings_button=QPushButton('SAM 设置');settings_button.clicked.connect(self.sam_settings.show);row.addWidget(settings_button);detail.addLayout(row)
         row=QHBoxLayout();self.roi_button=QPushButton('框选完整臂身（排除支架）');self.roi_button.clicked.connect(lambda:self.begin_initial('roi'));row.addWidget(self.roi_button)
-        self.clear_roi_button=QPushButton('清除框选');self.clear_roi_button.clicked.connect(self.clear_initial_roi);row.addWidget(self.clear_roi_button);initial.addLayout(row)
-        self.auto_button=QPushButton('分割并提取当前完整形状');self.auto_button.clicked.connect(self.auto_shape);initial.addWidget(self.auto_button)
-        self.align_button=QPushButton('手动重画当前中心线（base → tip）');self.align_button.clicked.connect(lambda:self.set_mode('align'));initial.addWidget(self.align_button)
+        self.clear_roi_button=QPushButton('清除框选');self.clear_roi_button.clicked.connect(self.clear_initial_roi);row.addWidget(self.clear_roi_button);detail.addLayout(row)
+        self.align_button=QPushButton('手动重画当前中心线（base → tip）');self.align_button.clicked.connect(lambda:self.set_mode('align'));detail.addWidget(self.align_button)
         row=QHBoxLayout()
         self.refine_button=QPushButton('结合图像微调草稿');self.refine_button.clicked.connect(self.refine_shape);row.addWidget(self.refine_button)
-        self.refine_radius=QSpinBox();self.refine_radius.setRange(0,240);self.refine_radius.setValue(0);self.refine_radius.setSpecialValueText('自动（随尺度）');self.refine_radius.setSuffix(' px');row.addWidget(QLabel('搜索半径'));row.addWidget(self.refine_radius);initial.addLayout(row)
-        self.keep_endpoints=QCheckBox('微调时保留我标定的 BASE / TIP（无需算法识别短边）');self.keep_endpoints.setChecked(True);initial.addWidget(self.keep_endpoints)
+        self.refine_radius=QSpinBox();self.refine_radius.setRange(0,240);self.refine_radius.setValue(0);self.refine_radius.setSpecialValueText('自动（随尺度）');self.refine_radius.setSuffix(' px');row.addWidget(QLabel('搜索半径'));row.addWidget(self.refine_radius);detail.addLayout(row)
+        self.keep_endpoints=QCheckBox('微调时保留我标定的 BASE / TIP（无需算法识别短边）');self.keep_endpoints.setChecked(True);detail.addWidget(self.keep_endpoints)
         row=QHBoxLayout();self.positive_button=QPushButton('点选臂身 +');self.positive_button.clicked.connect(lambda:self.prompt_mode(True));row.addWidget(self.positive_button)
         self.negative_button=QPushButton('排除支架/背景 −');self.negative_button.clicked.connect(lambda:self.prompt_mode(False));row.addWidget(self.negative_button)
-        self.rerun_sam_button=QPushButton('按提示重新分割');self.rerun_sam_button.clicked.connect(self.resegment_initial);row.addWidget(self.rerun_sam_button);initial.addLayout(row)
-        self.mask_check=QCheckBox('叠加分割掩膜（绿色）');self.mask_check.setChecked(True);self.mask_check.toggled.connect(self.show_initial_mask);initial.addWidget(self.mask_check)
+        self.rerun_sam_button=QPushButton('按提示重新分割');self.rerun_sam_button.clicked.connect(self.resegment_initial);row.addWidget(self.rerun_sam_button);detail.addLayout(row)
+        self.mask_check=QCheckBox('叠加分割掩膜（绿色）');self.mask_check.setChecked(True);self.mask_check.toggled.connect(self.show_initial_mask);detail.addWidget(self.mask_check)
         row=QHBoxLayout()
         self.flip_button=QPushButton('交换 base / tip');self.flip_button.clicked.connect(self.flip_draft);row.addWidget(self.flip_button)
-        self.cancel_button=QPushButton('取消草稿 / 恢复实时图像');self.cancel_button.clicked.connect(self.cancel_draft);row.addWidget(self.cancel_button);initial.addLayout(row)
-        self.confirm_button=QPushButton('确认形状并部署预热');self.confirm_button.clicked.connect(self.confirm_alignment);initial.addWidget(self.confirm_button)
-        self.alignment_label=QLabel('等待完整形状：初始化应无遮挡；自动端点方向需检查。');self.alignment_label.setWordWrap(True);initial.addWidget(self.alignment_label)
+        self.cancel_button=QPushButton('取消草稿 / 恢复实时图像');self.cancel_button.clicked.connect(self.cancel_draft);row.addWidget(self.cancel_button);detail.addLayout(row)
         self.warmup_options=QGroupBox('高级：预热质量阈值');self.warmup_options.setCheckable(True);self.warmup_options.setChecked(False)
         warm_form=QFormLayout(self.warmup_options);self.warmup_fields=[]
         for label,default,lo,hi in [('最短保持 s',2.,0,60),('超时 s',20.,1,120),('连续新帧',8,2,100),('边缘覆盖',.75,.1,1),('边缘残差 px',3.,.1,20),('帧间变化 px',1.,.1,10)]:
             box=QDoubleSpinBox();box.setRange(lo,hi);box.setValue(default);self.warmup_fields.append(box);warm_form.addRow(label,box);box.setVisible(False)
         self.warmup_options.toggled.connect(lambda visible:[warm_form.itemAt(i).widget().setVisible(visible) for i in range(warm_form.count())])
         for i in range(warm_form.count()):warm_form.itemAt(i).widget().hide()
-        initial.addWidget(self.warmup_options)
+        detail.addWidget(self.warmup_options)
+        initial.addWidget(self.initial_tools);self.initial_tools.hide()
+        self.confirm_button=QPushButton('确认形状并部署预热');self.confirm_button.clicked.connect(self.confirm_alignment);initial.addWidget(self.confirm_button)
+        self.alignment_label=QLabel('自动提取后检查 BASE/TIP；有歧义时在臂身中间点一下。修正工具按需展开。');self.alignment_label.setWordWrap(True);initial.addWidget(self.alignment_label)
         self.goal_mode=QComboBox();self.goal_mode.addItems(['完整形状','局部目标（末端 / 一段）']);goal.addWidget(self.goal_mode)
         self.local_options=QWidget();local=QHBoxLayout(self.local_options);local.setContentsMargins(0,0,0,0)
         self.local_kind=QComboBox();self.local_kind.addItems(['末端点','指定节点的一段','任意臂段自动匹配']);local.addWidget(self.local_kind)
@@ -125,17 +130,19 @@ class HereditaryPanel(QWidget):
         self.max_node=QDoubleSpinBox();self.max_node.setRange(.1,50);self.max_node.setValue(4.);self.max_node.setSuffix(' mm')
         self.planning_dialog=QDialog(self);self.planning_dialog.setWindowTitle('初始规划参数');self.planning_dialog.setModal(False)
         pf=QVBoxLayout(self.planning_dialog);form=QFormLayout();pf.addLayout(form)
+        self.reserve_steps=QSpinBox();self.reserve_steps.setRange(0,100);self.reserve_steps.setValue(10)
+        form.addRow('末端调整余量（步，0 为关闭）',self.reserve_steps)
         form.addRow('受约束节点平均容限',self.tolerance);form.addRow('最大目标点偏差',self.max_node);form.addRow('搜索上限步数（自动选择长度）',self.horizon)
         self.planning_budget=QDoubleSpinBox();self.planning_budget.setRange(.1,120);self.planning_budget.setValue(15);self.planning_budget.setSuffix(' s')
         self.planning_iterations=QSpinBox();self.planning_iterations.setRange(1,100);self.planning_iterations.setValue(24)
         self.planning_shooting=QSpinBox();self.planning_shooting.setRange(1,200);self.planning_shooting.setValue(30)
         self.planning_stride=QSpinBox();self.planning_stride.setRange(1,80);self.planning_stride.setValue(20)
         for label,box in [('总计算预算（迭代间检查）',self.planning_budget),('每个长度 B 迭代上限',self.planning_iterations),('终态优化函数评估上限',self.planning_shooting),('长度搜索步长',self.planning_stride)]:form.addRow(label,box)
-        explanation=QLabel('参数修改立即生效，已有计划失效。自动尝试较短长度，达标即停；步数上限不是固定执行长度。总预算在优化迭代间检查，单次迭代可能略超预算。在线反馈期限由模型 dt 决定。')
+        explanation=QLabel('参数修改立即生效，已有计划失效。自动尝试较短长度，达标即停；步数上限不是固定执行长度。总预算在优化迭代间检查，单次迭代可能略超预算。余量已计入预览和执行总时长，先保持末条压力供 B 调整；用尽后保持，不无限续行。在线反馈期限由模型 dt 决定。')
         explanation.setWordWrap(True);pf.addWidget(explanation)
         close=QPushButton('完成');close.clicked.connect(self.planning_dialog.hide);pf.addWidget(close)
         self.planning_settings=QPushButton('初始规划参数…');self.planning_settings.clicked.connect(self.show_planning_settings);goal.addWidget(self.planning_settings)
-        self.planning_fields=[self.horizon,self.tolerance,self.max_node,self.planning_budget,self.planning_iterations,self.planning_shooting,self.planning_stride]
+        self.planning_fields=[self.reserve_steps,self.horizon,self.tolerance,self.max_node,self.planning_budget,self.planning_iterations,self.planning_shooting,self.planning_stride]
         for box in self.planning_fields:box.valueChanged.connect(self.invalidate_plan)
         self.plan_button=QPushButton('规划当前目标 / 预览');self.plan_button.clicked.connect(self.make_plan);goal.addWidget(self.plan_button)
         self.preview=QPlainTextEdit();self.preview.setReadOnly(True);self.preview.setMaximumHeight(180);goal.addWidget(self.preview)
@@ -166,7 +173,7 @@ class HereditaryPanel(QWidget):
         note.setWordWrap(True);run.addWidget(note)
         for layout in layouts:layout.addStretch()
         self.controls=[self.open_loop_check,self.trial_check,self.refine_button,self.refine_radius,self.goal_mode,self.local_options,self.path,browse,self.load_button,self.polarity,*self.mapping,self.mapping_button,self.auto_button,self.align_button,self.flip_button,self.cancel_button,self.confirm_button,self.goal_button,self.horizon,self.tolerance,self.max_node,self.plan_button,self.planning_settings,*self.planning_fields,self.arm_check,self.execute_button,self.probe_button,self.occlusion_controls,self.max_missing,self.max_skipped,self.feedback_settle,*self.warmup_fields]
-        self.controls.extend([self.initial_method,self.roi_button,self.clear_roi_button,self.positive_button,self.negative_button,self.rerun_sam_button,self.keep_endpoints,self.sam_path,self.sam_device,browse_sam])
+        self.controls.extend([self.initial_tools_toggle,self.initial_method,self.roi_button,self.clear_roi_button,self.positive_button,self.negative_button,self.rerun_sam_button,self.keep_endpoints,self.sam_path,self.sam_device,browse_sam])
         from .chamber_control import ChamberControl
         self.chambers=ChamberControl(self)
         self.chamber_button=QPushButton('六腔控制');self.chamber_button.clicked.connect(self.chambers.show)
@@ -315,7 +322,7 @@ class HereditaryPanel(QWidget):
         self.canvas.frozen=False;self.canvas.draft=None;self.canvas.stroke=[]
         self.canvas.mode='view';self.canvas.drag_node=None;self.canvas.drawing=False
         self.draft_stamp=None;self.draft_version=None;self.canvas.update()
-        self.canvas.mask=None;self.canvas.prompts=[];self.canvas.roi=None
+        self.canvas.mask=None;self.canvas.prompts=[];self.canvas.roi=None;self.auto_prompt_pending=False
         self.sam_points=[];self.sam_labels=[]
 
     def _freeze(self,frame=None):
@@ -347,7 +354,7 @@ class HereditaryPanel(QWidget):
         if np.any(region[2:]-region[:2]<8):self.message('框选太小，请包含完整臂身');return
         self.initial_roi=region.tolist();self.roi_camera_key=self._camera_key()
         self.canvas.roi=region;self.canvas.mode='view';self.canvas.update()
-        self.message('框选已保存。点击“分割并提取当前完整形状”；框内尽量排除支架，两端留少量背景。')
+        self.message('框选已保存。点击“自动提取当前完整形状”；框内尽量排除支架，两端留少量背景。')
 
     def prompt_mode(self,positive):
         if not self.canvas.frozen:self.message('请先框选或分割，冻结当前图像');return
@@ -357,6 +364,8 @@ class HereditaryPanel(QWidget):
     def add_sam_prompt(self,point,label):
         self.sam_points.append(np.asarray(point).tolist());self.sam_labels.append(int(label))
         self.canvas.prompts=list(zip(self.sam_points,self.sam_labels));self.canvas.update()
+        if self.auto_prompt_pending and label:
+            self.auto_prompt_pending=False;self.resegment_initial()
 
     def initial_config(self):
         if self.initial_roi is not None and self.roi_camera_key!=self._camera_key():
@@ -368,7 +377,7 @@ class HereditaryPanel(QWidget):
     def segment_initial(self,image,config,guide=None):
         if config['method']!='sam2':return None,{}
         mask,info=self.sam_segmenter.segment(image,config['checkpoint'],config['device'],
-                                              config['roi'],guide,config['points'],config['labels'])
+                                              config['roi'],guide,config['points'],config['labels'],polarity=config['polarity'])
         return mask,info
 
     def initial_result(self,image,config,guide=None,preserve=True):
@@ -402,7 +411,9 @@ class HereditaryPanel(QWidget):
         warning='；'.join(info.get('warnings',[]))
         if info.get('endpoints_preserved'):warning+=' 两端采用人工位置，未由算法认证短边。'
         self.alignment_label.setText('绿色是分割，黄线是待确认中心线。可拖动黄点；SAM 误选可加正/负提示重分割。'+warning)
-        self.message('草稿已生成，请检查完整臂身与 BASE/TIP，再确认部署。'+warning)
+        timing=info.get('sam',{});elapsed=timing.get('elapsed_ms')
+        duration='' if elapsed is None else f' 分割 {elapsed/1000:.2f}s。'
+        self.message('草稿已生成，请检查完整臂身与 BASE/TIP，再确认部署。'+duration+warning)
 
     def auto_shape(self):
         self.begin_initial('auto')
@@ -440,7 +451,9 @@ class HereditaryPanel(QWidget):
                 if self.cancel_event.is_set():self.message('已取消提取');return
                 self._freeze(frame);self.sam_points=[];self.sam_labels=[];self.canvas.prompts=[]
                 if error:
-                    self.message(error+'；当前图像已冻结，可框选、点提示或直接手绘。');return
+                    self.auto_prompt_pending=config['method']=='sam2'
+                    if self.auto_prompt_pending:self.canvas.mode='sam_positive'
+                    self.message(error+'；图像已冻结。可在臂身中间点一下重试，或展开修正工具。');return
                 if mode=='auto':self.publish_initial(frame[0],result,'initial')
                 else:
                     self.canvas.mode=mode
@@ -556,7 +569,10 @@ class HereditaryPanel(QWidget):
 
     def confirm_alignment(self):
         try:
-            if self.canvas.draft is None:raise ValueError('请先自动提取或描画当前完整中心线')
+            if self.canvas.draft is None:
+                if self.camera_identity!=self._camera_key():raise ValueError('相机已改变，请重新提取并配准')
+                if self.runtime is None:raise ValueError('请先加载模型')
+                self.runtime.prepare_rewarmup();self.invalidate_plan();self.start_warmup();return
             if self.camera_identity!=self._camera_key() or self.draft_version!=self.runtime.version:
                 raise ValueError('相机或动作历史在提取后变化，请重新提取')
             curve=self.canvas.draft.copy();stamp=self.draft_stamp;source=dict(self.draft_info);ready={'ok':False}
@@ -596,13 +612,16 @@ class HereditaryPanel(QWidget):
                         r.ready=True;r.deployment_id=uuid.uuid4().hex
                         r.record('deployment_snapshot',deployment_id=r.deployment_id,checkpoint=r.meta['checkpoint_sha256'],mapping=r.mapping.expansion,bounds=vars(r.bounds),matrix=r.matrix,state=r.state,applied6=r.mapping.expand(r.action),timestamp=r.at,quality=info['warmup'])
                         return info
-            raise ValueError('预热超时，模型尚未就绪；检查图像和对齐后重新提取')
+            raise ValueError('预热超时；保持压力、恢复无遮挡视野后可点击重新预热。仅配准错误或相机移动时重新提取。')
         self._job(work,lambda _:self.message('模型就绪：对齐与状态估计已完成，保持时继续观测。进入第 3 页画目标。'))
         self.job.progress.connect(self.progress)
 
     def progress(self,info):
+        self.canvas.evidence=np.asarray(info.get('evidence_pixels_px',[]));self.evidence_stamp=time.monotonic()
         if 'prediction_px' in info:
             self.canvas.prediction=np.asarray(info['prediction_px']);self.canvas.update()
+        if info.get('observation_mode')=='manual_prediction':
+            self.feedback_label.setText('手动调压：青色为 ACK 动作历史的模型预测；结束调压并保持后恢复视觉校正，实验前重新预热。');return
         if info.get('control_mode')=='open_loop':
             self.feedback_label.setText('对照：不使用矫正，按规划执行；图像仅记录。'+('本步未获得新图像' if info.get('revision_status')=='frame_missing' else ''))
             return
@@ -634,7 +653,7 @@ class HereditaryPanel(QWidget):
             self.runtime.record('image_frontend',polarity=self.runtime.edge_polarity)
             self.invalidate_plan();h=self.horizon.value();goal=self.target.copy()
             tolerance=self.tolerance.value();maximum=self.max_node.value()
-            settings=dict(budget_s=self.planning_budget.value(),iterations=self.planning_iterations.value(),shooting_nfev=self.planning_shooting.value(),horizon_step=self.planning_stride.value())
+            settings=dict(reserve_steps=self.reserve_steps.value(),budget_s=self.planning_budget.value(),iterations=self.planning_iterations.value(),shooting_nfev=self.planning_shooting.value(),horizon_step=self.planning_stride.value())
             if self.auto_curve is not None:
                 curve=self.auto_curve.copy()
                 self._job(lambda:self.runtime.plan_any_segment(curve,tolerance,maximum,h,cancel=self.cancel_event,**settings),self.planned)
@@ -655,7 +674,7 @@ class HereditaryPanel(QWidget):
         predicted=self.runtime.engine.rollout(plan['state'],plan['actions'])
         error=float(target_distances(predicted[-1],plan['goal'],plan.get('node_indices'),plan.get('target_matrix'),plan.get('target_samples')).mean())
         np.savez_compressed(self.runtime.run_dir/('plan_'+uuid.uuid4().hex[:8]+'.npz'),**{k:v for k,v in plan.items() if k not in ('trace','prediction','attempts','matching_attempts')},prediction=predicted)
-        self.preview.setPlainText(f'模型内终态目标残差（受约束节点） {error:.3f} mm\n每腔最小 {p.min(0).round(2)}\n每腔最大 {p.max(0).round(2)}\n步数 {len(p)}，dt={self.runtime.dt:.3f}s\n初始规划耗时 {plan.get("planning_ms",0)/1000:.3f} s')
+        self.preview.setPlainText(f'模型内终态目标残差（受约束节点） {error:.3f} mm\n每腔最小 {p.min(0).round(2)}\n每腔最大 {p.max(0).round(2)}\n步数 {plan.get("primary_steps",len(p))} + 余量 {plan.get("reserve_steps",0)} = {len(p)}，dt={self.runtime.dt:.3f}s\n初始规划耗时 {plan.get("planning_ms",0)/1000:.3f} s')
         self.preview.appendPlainText('搜索：'+', '.join(f'{a["horizon"]}步/{a.get("total_ms",0):.0f}ms' for a in plan['attempts']))
         self.preview.appendPlainText(('预测达标' if plan['qualified'] else '当前搜索未达标，可确认后试运行')+f' · 最大目标点 {plan["max_error"]:.3f} mm')
         if plan.get('matching_mode')=='any_segment':
@@ -708,7 +727,11 @@ class HereditaryPanel(QWidget):
     def completed(self,rows):
         status='已停止运动' if self.executor and self.executor.hold_requested else '计划指令完成'
         self.invalidate_plan();self.results.appendPlainText(f'{status}，{len(rows)} 条 ACK 指令；当前保持最终压力。\n动作 CSV / NDI / 原图 / 反馈图：{getattr(self.executor,"last_execution_dir",self.runtime.run_dir)}\nACK 不是实测腔压；模型残差不是实机到位误差。')
-        self.message(f'{status}，{len(rows)} 条 ACK 指令，保留末条压力；继续观测当前形状。')
+        assessment=getattr(self.executor,'completion_assessment',None)
+        if assessment and assessment.get('estimated_mean_error_mm') is not None:
+            self.results.appendPlainText(f'最终模型估计：平均 {assessment["estimated_mean_error_mm"]:.2f} mm / 最大 {assessment["estimated_max_error_mm"]:.2f} mm；'+('估计达标' if assessment['estimate_within_tolerance'] else '估计未达标')+'。这不是实测到位判定。')
+        next_step='可继续规划' if self.runtime.ready else '回第二页点击重新预热，配准仍有效时无需重新提取'
+        self.message(f'{status}，{len(rows)} 条 ACK 指令，保留末条压力；{next_step}。')
     def play_preview(self):
         if self.plan is None:return
         if self.play_timer.isActive():self.play_timer.stop()
@@ -733,7 +756,7 @@ class HereditaryPanel(QWidget):
         if self.runtime and self.host.hardware.valve_controller:
             try:
                 transport=self._transport(tuple(sorted(self.host.hardware.valve_controller.connected_groups)));executor=HereditaryExecutor(self.runtime,transport,self.frame_provider)
-                self._job(executor.zero,lambda _:self.message('六腔归零已 ACK；后续需重新规划'))
+                self._job(executor.zero,lambda _:self.message('六腔归零已 ACK；保留配准与已知历史，第二页重新预热后再规划'))
             except Exception as e:self.fail(e)
     def probe(self):
         frame=self.frame_provider();hardware=self.host.hardware
@@ -744,6 +767,10 @@ class HereditaryPanel(QWidget):
         self.probe_result.show();self.probe_result.setPlainText(json.dumps(info,ensure_ascii=False,indent=2))
     def tick(self):
         self._attach_controller()
+        if time.monotonic()-self.evidence_stamp>.3:self.canvas.evidence=None
+        if not self.busy:
+            reusable=self.runtime is not None and self.runtime.matrix is not None and self.runtime.alignment_confirmed and not self.canvas.frozen
+            self.confirm_button.setText('保持当前压力，重新预热（复用配准）' if reusable else '确认形状并部署预热')
         index=self.host._current_cam_index
         frame=self.host._camera_frames.get(index);stamp=self.host._camera_frame_times.get(index)
         if frame is not None and stamp is not None:
@@ -762,7 +789,7 @@ class HereditaryPanel(QWidget):
                         with threadpool_limits(1):
                             _,info=r.feedback(self.occlusion_controls.config.apply(fresh[0])[0],fresh[1],np.empty((0,4)),np.empty((0,r.engine.n_nodes,2)))
                         r.record('hold_observation',**info,state=r.state)
-                        if info.get('edges',0):self.progress(info)
+                        if info.get('edges',0) or 'visibility' in info:self.progress(info)
                         if self.target is not None and (self.auto_curve is None or self.target_ids is not None) and info.get('prediction_px') is not None:
                             model=transform(np.asarray(info['prediction_px']),np.linalg.inv(r.matrix))
                             error=float(target_distances(model,self.target,self.target_ids,self.target_matrix,self.target_samples).mean())

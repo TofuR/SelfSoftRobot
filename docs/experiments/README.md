@@ -12,6 +12,8 @@ scope: experiment plans, records, and historical simulation notes
 
 ## 当前使用
 
+- [2026-09-11 实机反馈整改](hereditary_field_followup_20260911.md)：有限末端余量、复用配准、自动初始化与图像/模型证据区分。
+
 - [原生5/10 Hz全平台部署训练](../real_data/validation_deployment_hardware_and_training_20260910.md)：补齐同平台序列处理、独立tmux、验证选择和自动导出。
 
 - [`hereditary_real_validation_integration.md`](hereditary_real_validation_integration.md)：Analytic B 工作台接入、模型部署包、六腔映射、画笔目标与虚拟设备验证。

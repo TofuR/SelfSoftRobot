@@ -109,6 +109,10 @@ def main():
         plant=window.hardware.cameras[0]
         fresh();p.auto_button.click();wait(lambda:not p.busy)
         if p.canvas.draft is None:raise RuntimeError('automatic extraction did not produce a draft')
+        if not p.initial_tools.isHidden():raise RuntimeError('advanced initial tools should start collapsed')
+        capture('04_simple','第 2 步 · 精简初始化',[(p.auto_button,'自动提取；SAM 模式自动给候选提示，歧义时点一下'),(p.initial_tools_toggle,'仅需要人工修正时展开'),(p.confirm_button,'确认当前形状后拟合并预热')],
+                '绿色冻结掩膜是初始化图像证据；青色是模型估计，白点是运行中可见边缘，不是完整实测形状。此工作流截图为 Mock + 传统分割。')
+        p.initial_tools_toggle.click()
         original=p.canvas.draft.copy()
         scale,x,y=p.canvas._layout();node=7
         point=QPoint(round(x+scale*original[node,0]),round(y+scale*original[node,1]))
@@ -125,6 +129,7 @@ def main():
         if not p.runtime.alignment_confirmed:raise RuntimeError('alignment did not complete')
         capture('05_alignment','第 2 步 · 部署预热通过',[(p.alignment_label,'检查尺度、旋转、base 和形状拟合'),(p.confirm_button,'确认后固定坐标，估计记忆状态并持续观测'),(p.warmup_options,'可展开检查预热时间、连续帧与质量阈值')],
                 '当前 5 kPa 初始压力保持不变。首次采用训练一致的当前输入平衡先验，再用完整形状修正 p/h。达到最低时间、连续有效新帧、残差与稳定性阈值才显示模型就绪；不是固定倒计时。')
+        p.initial_tools_toggle.setChecked(False)
         window.tabs.setCurrentIndex(2)
         goal=plant.engine.rollout(plant.state,np.tile([.8,.05,.7,.05],(40,1)))[-1]
         camera_goal=transform(goal,plant.matrix)
@@ -235,6 +240,8 @@ def main():
         p.chambers.show();p.chambers.start_button.click()
         wait(lambda:p.chambers.driving,15)
         wait(lambda:np.max(abs(p.ack6-5))<.1,15)
+        wait(lambda:'手动调压：青色' in p.feedback_label.text())
+        if p.canvas.prediction is None or p.runtime.ready:raise RuntimeError('manual prediction missing or readiness retained')
         p.chambers.close();wait(lambda:not p.busy)
         if p.plan is not None or not p.runtime.initialized:raise RuntimeError('takeover retained plan or lost model history')
         np.testing.assert_array_equal(matrix,p.runtime.matrix)
@@ -243,6 +250,15 @@ def main():
         if not any(e['event']=='execute_held' for e in after_events):raise RuntimeError('automatic owner did not yield to manual hold')
         p.stop_button.click();wait(lambda:not p.busy)
         if max(abs(np.asarray(window.hardware.valve_controller.last_command)))>1e-8:raise RuntimeError('stop did not zero valves')
+        if p.runtime.ready:raise RuntimeError('zero retained execution readiness')
+        window.tabs.setCurrentIndex(1);fresh();p.tick()
+        if '重新预热' not in p.confirm_button.text():raise RuntimeError('existing alignment has no recovery action')
+        p.confirm_button.click();wait(lambda:not p.busy,30)
+        if not p.runtime.ready:raise RuntimeError('reuse alignment warmup failed')
+        np.testing.assert_array_equal(matrix,p.runtime.matrix)
+        if p.runtime.history_epoch!=epoch:raise RuntimeError('rewarmup reset known history')
+        capture('10_rewarmup','重复实验 · 复用配准',[(p.confirm_button,'清零或手动调压后保持，直接重新预热'),(p.auto_button,'只有配准错误或相机改变时才重新提取')],
+                '复用相机尺度、base 和已确认动作历史；重新预热本身不发送气压。失联导致历史未知时不能直接恢复。')
         blind_verified=False
         if a.full_occlusion:
             errors.clear();p.occlusion.setChecked(False);fresh();window.tabs.setCurrentIndex(2)

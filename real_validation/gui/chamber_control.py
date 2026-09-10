@@ -118,7 +118,7 @@ class ChamberControl(QDialog):
             for row,source in zip(p.host._safety_cells,values):
                 for cell,value in zip(row,source):cell.setValue(float(value))
             p.invalidate_plan();p.host._save_hardware_config()
-            self.effective.setText('生效 u0…u3：min '+str((bounds.lower*r.mapping.scale).round(1))+' / max '+str((bounds.upper*r.mapping.scale).round(1))+' kPa')
+            self.effective.setText('生效 u0…u3：min '+str((bounds.lower*r.mapping.scale).round(1))+' / max '+str((bounds.upper*r.mapping.scale).round(1))+' kPa\n升速 '+str((bounds.rise/r.dt*r.mapping.scale).round(1))+' / 降速 '+str((bounds.fall/r.dt*r.mapping.scale).round(1))+' kPa/s；模型部署上限 '+str(r.meta['rate_kpa_s']))
             self.status.setText('目标与限制已应用，下一拍下发。' if self.driving else '设置已保存，尚未下发；点击“下发目标（按限速）”开始调压。');return True
         except Exception as error:
             suffix='；新设置未生效，仍按“生效目标”调压。可点击“结束调压（保持）”。' if self.driving else '；未下发。'
@@ -135,7 +135,7 @@ class ChamberControl(QDialog):
             r=p.runtime;c=p.host.hardware.valve_controller;groups=tuple(sorted(c.connected_groups))
             if r.initialized and groups!=(1,2):raise ValueError('在线模型需要两组阀；断组后请重新部署')
             if not groups:raise ValueError('请先连接所需阀组')
-            transport=p._transport(groups);p.invalidate_plan();p.cancel_draft();self.stop_event.clear();self.driving=True;self.drive_error=None
+            transport=p._transport(groups);r.ready=False;p.invalidate_plan();p.cancel_draft();self.stop_event.clear();self.driving=True;self.drive_error=None
             self.status.setText('已启动连续调压；修改目标后点击“更新并下发目标”。')
             self.drive_status.setText('手动调压中：等待阀组 ACK')
             def work():
@@ -150,13 +150,21 @@ class ChamberControl(QDialog):
                             step=r.bounds.project(r.mapping.reduce(target)[None],u)[0]
                         receipt=transport.send(r.mapping.expand(step),groups,.5)
                         if receipt.status!='ack':raise ValueError(f'手动命令未 ACK：{receipt.status}（阀组 {groups}，命令 {receipt.command_id}）')
-                        if r.initialized:r.acknowledge(receipt)
+                        if r.initialized:
+                            r.acknowledge(receipt)
+                            if r.matrix is not None and r.alignment_confirmed:
+                                from ..runtime.hereditary_deployment import transform
+                                with r.lock:
+                                    state,action=r.state_at(time.monotonic())
+                                    prediction=transform(r.engine.observe(state,action),r.matrix)
+                                p.job.progress.emit(dict(prediction_px=prediction,observation_mode='manual_prediction'))
                         if self.stop_event.wait(r.dt):break
                     return None
                 except Exception:
                     transport.zero(.5);raise
             def done(_):self.drive_status.setText('已结束调压，保持最后 ACK 压力')
             p._job(work,done)
+            p.job.progress.connect(p.progress)
             p.job.failed.connect(self.failed)
             p.job.finished.connect(self.finished)
         except Exception as error:self.driving=False;self.status.setText(str(error))

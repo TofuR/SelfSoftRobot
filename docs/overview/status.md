@@ -13,7 +13,7 @@ sources:
 
 # 项目状态快照
 
-2026-09-10：已启动原生5/10 Hz全平台HOV2.2部署训练，tmux `hov_full_native_20260910`；数据处理已全部完成；按用户要求停止旧任务后，在新study `hov_full_native_20260910_001` 从头训练两个频率各300 epoch，关闭早停，复用旧study已核对的数据。训练/导出是否完成以study内 `status_5hz.json`、`status_10hz.json` 为准；详见[部署与训练说明](../real_data/validation_deployment_hardware_and_training_20260910.md)。[腔道接线图册](../real_data/chamber_mapping_reference_20260910.md)提供原始实拍与六路压力。
+2026-09-11：同平台原生 5/10 Hz 的两个 300 epoch 训练均完成，候选权重及验证选择记录见[部署候选说明](../../real_validation/checkpoints/candidates/README.md)。用户实机报告起步慢、末端未到位、重复配准与 SAM 操作问题；整改与验收见[实机反馈记录](../experiments/hereditary_field_followup_20260911.md)。目前软件验证不替代现场压力跟踪与到位精度。
 
 > “现在到哪了 + 接下来做什么”。本页是唯一当前状态入口；具体参数和数值以 dataset/run manifest 与实验记录为准。
 > 文献详见 [`../background/literature.md`](../background/literature.md); 模型架构详见 [`project_help.md`](project_help.md); 研究方向详见 [`../directions/`](../directions/)。

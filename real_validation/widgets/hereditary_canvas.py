@@ -17,6 +17,7 @@ class HereditaryCanvas(QWidget):
         self.frame = None
         self.stroke = []
         self.prediction = None
+        self.evidence = None
         self.preview = None
         self.target = None
         self.draft = None
@@ -109,6 +110,9 @@ class HereditaryCanvas(QWidget):
             if self.mask is not None and self.show_mask:
                 rgba=np.zeros((h,w,4),np.uint8);rgba[self.mask>0]=[32,200,110,round(255*self.opacity)]
                 painter.drawImage(QPointF(0,0),QImage(rgba.data,w,h,rgba.strides[0],QImage.Format_RGBA8888))
+        if self.evidence is not None:
+            painter.setPen(QPen(QColor('#ffffff'),3/scale))
+            for a,b in self.evidence:painter.drawPoint(QPointF(float(a),float(b)))
         region=self.roi
         if self.mode=='roi' and len(self.stroke)>1:
             region=np.r_[np.minimum(self.stroke[0],self.stroke[-1]),np.maximum(self.stroke[0],self.stroke[-1])]
