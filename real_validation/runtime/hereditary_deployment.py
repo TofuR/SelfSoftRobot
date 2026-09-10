@@ -322,7 +322,8 @@ class HereditaryDeployment:
         result[ids]=transform(points,np.linalg.inv(self.matrix))
         return result,ids
 
-    def plan(self,goal,horizon, *, snapshot=None, seed_actions=None, deadline=None, cancel=None, iterations=24, node_indices=None, target_matrix=None, target_samples=None):
+    def plan(self,goal,horizon, *, snapshot=None, seed_actions=None, deadline=None, cancel=None, iterations=24, node_indices=None, target_matrix=None, target_samples=None, planning_rate_fraction=.8):
+        bounds=self.bounds.with_rate_fraction(planning_rate_fraction)
         if not 2<=horizon<=self.meta['max_horizon']:raise ValueError('规划长度超出部署包实验上限')
         with self.lock:
             if self.fault or self.pending:raise ValueError(self.fault or '等待指令 ACK')
@@ -334,12 +335,12 @@ class HereditaryDeployment:
         baseline=np.tile(u,(horizon,1))
         # ReLU spline autograd is zero exactly at the lower knot. A feasible
         # interior seed avoids a spurious stationary zero-pressure initial plan.
-        epsilon=np.minimum(.001,(self.bounds.upper-self.bounds.lower)/100)
-        seed=np.maximum(u,self.bounds.lower+epsilon)
-        old=self.bounds.project(np.tile(seed,(horizon,1)),u)
+        epsilon=np.minimum(.001,(bounds.upper-bounds.lower)/100)
+        seed=np.maximum(u,bounds.lower+epsilon)
+        old=bounds.project(np.tile(seed,(horizon,1)),u)
         if seed_actions is not None:
             initial=np.vstack([seed_actions,np.tile(seed_actions[-1],(max(0,horizon-len(seed_actions)),1))])[:horizon]
-            old=self.bounds.project(initial,u)
+            old=bounds.project(initial,u)
         # Only explicitly mapped nodes contribute to approach and terminal costs.
         current=self.engine.observe(z,u)
         reference=current[None]+np.minimum(np.arange(1,horizon+1)/(horizon*.7),1)[:,None,None]*(goal-current)
@@ -355,7 +356,7 @@ class HereditaryDeployment:
         for _ in range(iterations):
             if cancel is not None and cancel.is_set():raise ValueError('规划已取消')
             if deadline is not None and self.clock()>deadline:break
-            old,info=fast_suffix_b(self.engine,z,old,u,reference,self.bounds,node_indices=ids,target_matrix=target_matrix);trace.append(info)
+            old,info=fast_suffix_b(self.engine,z,old,u,reference,bounds,node_indices=ids,target_matrix=target_matrix);trace.append(info)
             if not info['accepted']:break
         if cost(old)>cost(baseline):
             old=baseline
@@ -444,7 +445,8 @@ class HereditaryDeployment:
             self.alignment_confirmed=False;self.ready=False
         return info
 
-    def plan_to_tolerance(self, goal, tolerance=1., max_node=3., max_horizon=None, budget_s=15., cancel=None, iterations=24, shooting_nfev=30, horizon_step=20, node_indices=None, target_matrix=None, target_samples=None, snapshot=None, reserve_steps=0):
+    def plan_to_tolerance(self, goal, tolerance=1., max_node=3., max_horizon=None, budget_s=15., cancel=None, iterations=24, shooting_nfev=30, horizon_step=20, node_indices=None, target_matrix=None, target_samples=None, snapshot=None, reserve_steps=0, planning_rate_fraction=.8):
+        bounds=self.bounds.with_rate_fraction(planning_rate_fraction)
         started=self.clock()
         ids=target_indices(self.engine.n_nodes,node_indices)
         if not self.ready:raise ValueError('模型尚未通过部署预热')
@@ -468,12 +470,12 @@ class HereditaryDeployment:
         maximum=int(max_horizon or self.meta['max_horizon'])
         horizons=sorted(set([min(10,maximum),maximum]+list(range(horizon_step,maximum+1,horizon_step))))
         horizons=[h for h in horizons if h>=2]
-        config=dict(tolerance=tolerance,max_node=max_node,max_horizon=maximum,reserve_steps=reserve_steps,max_total_steps=maximum+reserve_steps,budget_s=budget_s,iterations=iterations,shooting_nfev=shooting_nfev,horizon_step=horizon_step,node_indices=ids.tolist())
+        config=dict(tolerance=tolerance,max_node=max_node,max_horizon=maximum,reserve_steps=reserve_steps,max_total_steps=maximum+reserve_steps,budget_s=budget_s,iterations=iterations,shooting_nfev=shooting_nfev,horizon_step=horizon_step,node_indices=ids.tolist(),planning_rate_fraction=float(planning_rate_fraction),planning_rise_kpa_s=(bounds.rise*np.asarray(self.mapping.scale)/self.dt).tolist(),planning_fall_kpa_s=(bounds.fall*np.asarray(self.mapping.scale)/self.dt).tolist())
         for h in horizons:
             if cancel is not None and cancel.is_set():raise ValueError('规划已取消')
             if attempts and self.clock()>end:break
             attempt_start=self.clock()
-            candidate=self.plan(goal,h,snapshot=snapshot,seed_actions=seed,deadline=end,cancel=cancel,iterations=iterations,node_indices=ids,target_matrix=target_matrix,target_samples=target_samples)
+            candidate=self.plan(goal,h,snapshot=snapshot,seed_actions=seed,deadline=end,cancel=cancel,iterations=iterations,node_indices=ids,target_matrix=target_matrix,target_samples=target_samples,planning_rate_fraction=planning_rate_fraction)
             b_done=self.clock();shooting_start=b_done
             prediction=self.engine.rollout(z,candidate['actions'])
             # Bounded terminal shooting uses the same selected nodes as B.
@@ -481,18 +483,18 @@ class HereditaryDeployment:
             # feedback reference; free nodes never become tracking constraints.
             if distances(prediction[-1]).mean()>tolerance and self.clock()<end:
                 from scipy.optimize import least_squares
-                active=np.flatnonzero(self.bounds.upper-self.bounds.lower>1e-8)
+                active=np.flatnonzero(bounds.upper-bounds.lower>1e-8)
                 def actions_for(parameters):
-                    target=self.bounds.lower.copy();target[active]=parameters
-                    return self.bounds.project(np.tile(target,(h,1)),u)
+                    target=bounds.lower.copy();target[active]=parameters
+                    return bounds.project(np.tile(target,(h,1)),u)
                 def residual(parameters):
                     if cancel is not None and cancel.is_set():raise ValueError('规划已取消')
                     if self.clock()>end:raise TimeoutError('initial planning budget')
                     return residual_shape(self.engine.rollout(z,actions_for(parameters))[-1]).ravel()
                 if len(active):
                     try:
-                        seed_pressure=np.clip(candidate['actions'][-1,active],self.bounds.lower[active]+1e-7,self.bounds.upper[active]-1e-7)
-                        solved=least_squares(residual,seed_pressure,bounds=(self.bounds.lower[active],self.bounds.upper[active]),max_nfev=shooting_nfev,ftol=1e-5,xtol=1e-5,gtol=1e-5)
+                        seed_pressure=np.clip(candidate['actions'][-1,active],bounds.lower[active]+1e-7,bounds.upper[active]-1e-7)
+                        solved=least_squares(residual,seed_pressure,bounds=(bounds.lower[active],bounds.upper[active]),max_nfev=shooting_nfev,ftol=1e-5,xtol=1e-5,gtol=1e-5)
                         actions=actions_for(solved.x);shooting=self.engine.rollout(z,actions)
                         if distances(shooting[-1]).mean()<distances(prediction[-1]).mean():
                             candidate['actions']=actions;prediction=shooting
@@ -520,7 +522,7 @@ class HereditaryDeployment:
         return best
 
     def plan_any_segment(self, model_curve, tolerance=1., max_node=3., max_horizon=None,
-                         budget_s=15., cancel=None, iterations=24, shooting_nfev=30, horizon_step=20, reserve_steps=0):
+                         budget_s=15., cancel=None, iterations=24, shooting_nfev=30, horizon_step=20, reserve_steps=0, planning_rate_fraction=.8):
         """Budgeted search of material intervals and both drawing directions.
 
         Every candidate fits 32 samples along the whole curve. The chosen
@@ -550,7 +552,7 @@ class HereditaryDeployment:
                     candidates.append((rank,ids,matrix,samples,goal,reverse))
         if not candidates:raise ValueError('模型活动节点不足以匹配一段曲线')
         candidates.sort(key=lambda c:c[0]);attempts=[];best=None
-        settings=dict(tolerance=tolerance,max_node=max_node,max_horizon=max_horizon,cancel=cancel,horizon_step=horizon_step,snapshot=snapshot,reserve_steps=reserve_steps)
+        settings=dict(tolerance=tolerance,max_node=max_node,max_horizon=max_horizon,cancel=cancel,horizon_step=horizon_step,snapshot=snapshot,reserve_steps=reserve_steps,planning_rate_fraction=planning_rate_fraction)
         for _,ids,matrix,samples,goal,reverse in candidates:
             if cancel is not None and cancel.is_set():raise ValueError('规划已取消')
             remaining=screen_end-self.clock()

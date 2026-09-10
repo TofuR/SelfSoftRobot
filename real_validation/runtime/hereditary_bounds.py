@@ -30,6 +30,13 @@ class ActionBounds:
             previous = result[i]
         return result
 
+    def with_rate_fraction(self, fraction):
+        """Planning-only slew budget; physical pressure/rate limits stay intact."""
+        if isinstance(fraction,(bool,np.bool_)) or not np.isfinite(fraction) or not 0<float(fraction)<=1:
+            raise ValueError('规划速度比例必须在 (0, 1]')
+        return ActionBounds(self.lower.copy(),self.upper.copy(),
+                            self.rise*float(fraction),self.fall*float(fraction))
+
     def valid(self, actions, previous, tolerance=2e-6):
         actions = np.asarray(actions)
         delta = np.diff(np.vstack([previous, actions]), axis=0)

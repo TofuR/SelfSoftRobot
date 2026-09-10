@@ -132,17 +132,20 @@ class HereditaryPanel(QWidget):
         pf=QVBoxLayout(self.planning_dialog);form=QFormLayout();pf.addLayout(form)
         self.reserve_steps=QSpinBox();self.reserve_steps.setRange(0,100);self.reserve_steps.setValue(10)
         form.addRow('末端调整余量（步，0 为关闭）',self.reserve_steps)
+        self.planning_rate=QDoubleSpinBox();self.planning_rate.setRange(10,100);self.planning_rate.setValue(80);self.planning_rate.setSuffix(' %')
+        self.planning_rate.setToolTip('初始规划只用当前有效升/降速率的一部分；在线矫正仍可用完整上限。不是降低压力上限。')
+        form.addRow('初始规划使用的速度上限比例',self.planning_rate)
         form.addRow('受约束节点平均容限',self.tolerance);form.addRow('最大目标点偏差',self.max_node);form.addRow('搜索上限步数（自动选择长度）',self.horizon)
         self.planning_budget=QDoubleSpinBox();self.planning_budget.setRange(.1,120);self.planning_budget.setValue(15);self.planning_budget.setSuffix(' s')
         self.planning_iterations=QSpinBox();self.planning_iterations.setRange(1,100);self.planning_iterations.setValue(24)
         self.planning_shooting=QSpinBox();self.planning_shooting.setRange(1,200);self.planning_shooting.setValue(30)
         self.planning_stride=QSpinBox();self.planning_stride.setRange(1,80);self.planning_stride.setValue(20)
         for label,box in [('总计算预算（迭代间检查）',self.planning_budget),('每个长度 B 迭代上限',self.planning_iterations),('终态优化函数评估上限',self.planning_shooting),('长度搜索步长',self.planning_stride)]:form.addRow(label,box)
-        explanation=QLabel('参数修改立即生效，已有计划失效。自动尝试较短长度，达标即停；步数上限不是固定执行长度。总预算在优化迭代间检查，单次迭代可能略超预算。余量已计入预览和执行总时长，先保持末条压力供 B 调整；用尽后保持，不无限续行。在线反馈期限由模型 dt 决定。')
+        explanation=QLabel('参数修改立即生效，已有计划失效。自动尝试较短长度，达标即停；步数上限不是固定执行长度。总预算在优化迭代间检查，单次迭代可能略超预算。余量已计入预览和执行总时长，先保持末条压力供 B 调整；用尽后保持，不无限续行。发令周期由模型 dt 决定，矫正间隔在第4页设置。')
         explanation.setWordWrap(True);pf.addWidget(explanation)
         close=QPushButton('完成');close.clicked.connect(self.planning_dialog.hide);pf.addWidget(close)
         self.planning_settings=QPushButton('初始规划参数…');self.planning_settings.clicked.connect(self.show_planning_settings);goal.addWidget(self.planning_settings)
-        self.planning_fields=[self.reserve_steps,self.horizon,self.tolerance,self.max_node,self.planning_budget,self.planning_iterations,self.planning_shooting,self.planning_stride]
+        self.planning_fields=[self.planning_rate,self.reserve_steps,self.horizon,self.tolerance,self.max_node,self.planning_budget,self.planning_iterations,self.planning_shooting,self.planning_stride]
         for box in self.planning_fields:box.valueChanged.connect(self.invalidate_plan)
         self.plan_button=QPushButton('规划当前目标 / 预览');self.plan_button.clicked.connect(self.make_plan);goal.addWidget(self.plan_button)
         self.preview=QPlainTextEdit();self.preview.setReadOnly(True);self.preview.setMaximumHeight(180);goal.addWidget(self.preview)
@@ -157,8 +160,13 @@ class HereditaryPanel(QWidget):
         run.addWidget(self.occlusion_controls)
         self.max_missing=QSpinBox();self.max_missing.setRange(1,10);self.max_missing.setValue(3)
         self.max_skipped=QSpinBox();self.max_skipped.setRange(1,100);self.max_skipped.setValue(10)
+        self.feedback_interval=QSpinBox();self.feedback_interval.setRange(1,10);self.feedback_interval.setValue(2);self.feedback_interval.setSuffix(' 步')
+        self.feedback_interval.setToolTip('1：原逐步同步反馈；2：第1步计算、第2步继续旧计划、第3步前采用。中间步不会计作超时；仍逐步记录压力、图像和 NDI。')
+        self.feedback_frequency=QLabel();self.feedback_interval.valueChanged.connect(self.update_feedback_frequency)
+        self.update_feedback_frequency()
         self.feedback_settle=QDoubleSpinBox();self.feedback_settle.setRange(0,90);self.feedback_settle.setSuffix(' ms');self.feedback_settle.setToolTip('始终要求 ACK 后的新图像；只有需要额外等待时才增大，会减少本周期反馈预算')
         missing_form=QFormLayout();missing_form.addRow('连续无有效反馈几次后停止归零',self.max_missing);missing_form.addRow('连续跳过反馈几次后停止归零',self.max_skipped);missing_form.addRow('发令后额外等图',self.feedback_settle);run.addLayout(missing_form)
+        missing_form.insertRow(0,'矫正间隔',self.feedback_interval);missing_form.insertRow(1,'发令 / 矫正频率',self.feedback_frequency)
         self.open_loop_check=QCheckBox('不使用矫正，仅执行规划（对照实验）');self.open_loop_check.setToolTip('执行时不校正图像状态、不优化剩余动作；仍记录图像/压力/NDI，保留压力接续与停止控制');run.insertWidget(0,self.open_loop_check)
         self.open_loop_check.toggled.connect(self.execution_mode_changed)
         self.trial_check=QCheckBox('允许试运行未达标计划（已检查预览，仅探索）');self.trial_check.setVisible(False);run.addWidget(self.trial_check)
@@ -174,6 +182,7 @@ class HereditaryPanel(QWidget):
         for layout in layouts:layout.addStretch()
         self.controls=[self.open_loop_check,self.trial_check,self.refine_button,self.refine_radius,self.goal_mode,self.local_options,self.path,browse,self.load_button,self.polarity,*self.mapping,self.mapping_button,self.auto_button,self.align_button,self.flip_button,self.cancel_button,self.confirm_button,self.goal_button,self.horizon,self.tolerance,self.max_node,self.plan_button,self.planning_settings,*self.planning_fields,self.arm_check,self.execute_button,self.probe_button,self.occlusion_controls,self.max_missing,self.max_skipped,self.feedback_settle,*self.warmup_fields]
         self.controls.extend([self.initial_tools_toggle,self.initial_method,self.roi_button,self.clear_roi_button,self.positive_button,self.negative_button,self.rerun_sam_button,self.keep_endpoints,self.sam_path,self.sam_device,browse_sam])
+        self.controls.append(self.feedback_interval)
         from .chamber_control import ChamberControl
         self.chambers=ChamberControl(self)
         self.chamber_button=QPushButton('六腔控制');self.chamber_button.clicked.connect(self.chambers.show)
@@ -182,6 +191,12 @@ class HereditaryPanel(QWidget):
 
     @property
     def active(self):return self.busy or self.armed
+
+    def update_feedback_frequency(self):
+        if self.runtime is None:
+            self.feedback_frequency.setText('加载模型后根据 dt 显示');return
+        dt=self.runtime.dt;n=self.feedback_interval.value()
+        self.feedback_frequency.setText(f'{1/dt:.1f} Hz / {1/(dt*n):.1f} Hz'+('（逐步反馈）' if n==1 else f'（跨 {n} 步异步计算）'))
 
     def message(self,text):self.state_label.setText(str(text));self.host._log('Hereditary: '+str(text))
     def invalidate_plan(self,*_):
@@ -228,6 +243,7 @@ class HereditaryPanel(QWidget):
             self.runtime.set_mapping(self.saved_chambers['mapping'])
             for c,v in zip(self.mapping,self.saved_chambers['mapping']):c.setCurrentIndex(v)
         self.feedback_settle.setMaximum(max(0,meta['dt']*1000-5));self.horizon.setMaximum(meta['max_horizon']);self.invalidate_plan();self.target=None
+        self.update_feedback_frequency()
         self.canvas.target=None;self.canvas.prediction=None
         for box in (self.node_start,self.node_end):
             box.blockSignals(True);box.clear()
@@ -618,7 +634,7 @@ class HereditaryPanel(QWidget):
 
     def progress(self,info):
         from .feedback_timing import computation_text,STATUS_TEXT,timing_line
-        self.canvas.evidence=np.asarray(info.get('evidence_pixels_px',[]));self.evidence_stamp=time.monotonic()
+        self.canvas.evidence=np.asarray(info.get('evidence_pixels_px',[]));self.evidence_stamp=info.get('source_frame_timestamp',info.get('frame_timestamp',time.monotonic()))
         if 'prediction_px' in info:
             self.canvas.prediction=np.asarray(info['prediction_px']);self.canvas.update()
         if info.get('observation_mode')=='manual_prediction':
@@ -651,7 +667,7 @@ class HereditaryPanel(QWidget):
             self.runtime.record('image_frontend',polarity=self.runtime.edge_polarity)
             self.invalidate_plan();h=self.horizon.value();goal=self.target.copy()
             tolerance=self.tolerance.value();maximum=self.max_node.value()
-            settings=dict(reserve_steps=self.reserve_steps.value(),budget_s=self.planning_budget.value(),iterations=self.planning_iterations.value(),shooting_nfev=self.planning_shooting.value(),horizon_step=self.planning_stride.value())
+            settings=dict(planning_rate_fraction=self.planning_rate.value()/100,reserve_steps=self.reserve_steps.value(),budget_s=self.planning_budget.value(),iterations=self.planning_iterations.value(),shooting_nfev=self.planning_shooting.value(),horizon_step=self.planning_stride.value())
             if self.auto_curve is not None:
                 curve=self.auto_curve.copy()
                 self._job(lambda:self.runtime.plan_any_segment(curve,tolerance,maximum,h,cancel=self.cancel_event,**settings),self.planned)
@@ -674,6 +690,7 @@ class HereditaryPanel(QWidget):
         np.savez_compressed(self.runtime.run_dir/('plan_'+uuid.uuid4().hex[:8]+'.npz'),**{k:v for k,v in plan.items() if k not in ('trace','prediction','attempts','matching_attempts')},prediction=predicted)
         self.preview.setPlainText(f'模型内终态目标残差（受约束节点） {error:.3f} mm\n每腔最小 {p.min(0).round(2)}\n每腔最大 {p.max(0).round(2)}\n步数 {plan.get("primary_steps",len(p))} + 余量 {plan.get("reserve_steps",0)} = {len(p)}，dt={self.runtime.dt:.3f}s\n初始规划耗时 {plan.get("planning_ms",0)/1000:.3f} s')
         self.preview.appendPlainText('搜索：'+', '.join(f'{a["horizon"]}步/{a.get("total_ms",0):.0f}ms' for a in plan['attempts']))
+        self.preview.appendPlainText(f'规划速度预算 {plan.get("planning_config",{}).get("planning_rate_fraction",1)*100:.0f}%；在线矫正可用完整有效速率上限')
         self.preview.appendPlainText(('预测达标' if plan['qualified'] else '当前搜索未达标，可确认后试运行')+f' · 最大目标点 {plan["max_error"]:.3f} mm')
         if plan.get('matching_mode')=='any_segment':
             self.preview.appendPlainText(f'自动匹配节点 {self.target_ids[0]} → {self.target_ids[-1]}，'+('反向' if plan['matching_reversed'] else '正向')+f'绘制；尝试 {len(plan["matching_attempts"])}/{plan["matching_candidates_total"]} 个对应。误差覆盖32个曲线采样点。')
@@ -717,7 +734,7 @@ class HereditaryPanel(QWidget):
                 image_transform=config.apply,camera_provider=self.host.hardware.camera_frames,
                 evaluation_provider=self.host.hardware.evaluation_samples,selected_camera=self.host._current_cam_index,
                 metadata=dict(hardware=self.host.hardware.snapshot(),software_occlusion=dict(enabled=config.enabled,rectangles=config.rectangles)),
-                max_missing=self.max_missing.value(),max_skipped=self.max_skipped.value(),settle_s=self.feedback_settle.value()/1000,use_correction=not self.open_loop_check.isChecked())
+                max_missing=self.max_missing.value(),max_skipped=self.max_skipped.value(),settle_s=self.feedback_settle.value()/1000,use_correction=not self.open_loop_check.isChecked(),feedback_interval_steps=self.feedback_interval.value())
             self.arm_check.blockSignals(True);self.arm_check.setChecked(False);self.arm_check.blockSignals(False);self.armed=False
             self._job(lambda:self.executor.execute(plan,allow_unqualified=allow_trial),lambda rows:self.completed(rows))
             self.executor.callback=self.job.progress.emit;self.job.progress.connect(self.progress)

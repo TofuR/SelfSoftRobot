@@ -9,6 +9,9 @@ STATUS_TEXT={
     'snapshot_changed':'状态变化，丢弃',
     'frame_missing':'本步未启动：未获得 ACK 后新图像',
     'operator_abort':'已停止',
+    'feedback_started':'后台矫正已启动，将在指定步骤前采用',
+    'feedback_interval':'间隔步骤：继续原计划，后台计算不阻塞发令',
+    'no_evidence':'本次矫正没有可信边缘，保留原计划',
 }
 
 
@@ -22,6 +25,8 @@ def computation_text(info):
     if info.get('revision_status') in ('no_budget','worker_busy','frame_missing'):
         return '本步未计算'
     if info.get('revision_status')=='deadline_expired':return '计算耗时待后台完成后记录'
+    if info.get('revision_status')=='feedback_started':return '后台计算中'
+    if info.get('revision_status')=='feedback_interval':return '本步不启动新矫正'
     return '计算耗时未记录'
 
 

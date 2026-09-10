@@ -9,7 +9,8 @@ import cv2
 import numpy as np
 
 TIMING_FIELDS=['step','revision_status','command_interval_ms','command_jitter_ms','ack_ms','frame_wait_ms','preprocess_ms','feedback_budget_ms','feedback_wait_ms','compute_ms','edge_ms','observer_ms','control_ms','archive_enqueue_ms','cycle_ms','state_committed','suffix_changed',
-               'send_wait_ms','dispatch_wait_ms','ack_delivery_ms','camera_poll_count','frame_age_at_selection_ms','frame_after_ack_ms']
+               'send_wait_ms','dispatch_wait_ms','ack_delivery_ms','camera_poll_count','frame_age_at_selection_ms','frame_after_ack_ms',
+               'source_step','apply_step','feedback_age_ms','commit_ms']
 
 class ExperimentArchive:
     def __init__(self,folder,started,metadata,evaluation_provider=None):

@@ -2,6 +2,8 @@
 
 2026-09-11：当前四页流程已包含自动 SAM 提示、折叠修正工具、末端余量及复用配准预热。打开 [带红圈编号的 HTML 操作手册](../workspace/runs/analysis/hereditary_deployment/release_20260911_002/guide/guide.html)。独立 ZIP 内为 `HEREDITARY_GUIDE.html`，截图内嵌，无需网络。
 
+新增：第三页规划参数默认使用 80% 有效速率，第四页默认每 2 步后台矫正一次（10 Hz 发令 / 5 Hz 矫正）。间隔为 1 时保留下文原逐步反馈时序；大于 1 时采用未来边界的延迟提交规则。参数、记录与边界解释见 [分频控制与速度余量](MULTIRATE_CONTROL.md)。
+
 ## 启动
 
 ```bash

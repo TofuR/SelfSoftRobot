@@ -19,7 +19,7 @@ class FeedbackJob:
         self.thread.start()
 
     def _run(self,image,stamp,tail,reference):
-        try:self.result=self.snapshot.feedback(image,stamp,tail,reference)
+        try:self.result=self._compute(image,stamp,tail,reference)
         except Exception as error:self.error=f'{type(error).__name__}: {error}'
         finally:
             self.finished=self.snapshot.clock();self.done.set()
@@ -39,6 +39,9 @@ class FeedbackJob:
             if self.path.parent.exists():
                 try:self.path.with_suffix('.error.txt').write_text(str(error))
                 except OSError:pass
+
+    def _compute(self,image,stamp,tail,reference):
+        return self.snapshot.feedback(image,stamp,tail,reference)
 
 
 def deadline_feedback(runtime,image,stamp,tail,reference,deadline,abort,path):
