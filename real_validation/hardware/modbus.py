@@ -163,6 +163,7 @@ class ModbusRTU:
 
 class ModbusThread(QThread):
     """Modbus通信线程"""
+    wire_event = pyqtSignal(str, int, str, str, float)  # command, group, tx/rx, hex, time
     data_sent = pyqtSignal(list, int, str, float)  # values, group, command_id, ack time
     error_occurred = pyqtSignal(str, int, str, float)  # status, group, command_id, time
 
@@ -210,11 +211,13 @@ class ModbusThread(QThread):
                     sent_bytes = bytes(command_data['data'])
                     self.serial_port.write(sent_bytes)
                     self.serial_port.flush()
+                    self.wire_event.emit(command_id, self.group_id, "tx", sent_bytes.hex(" "), time.monotonic())
                     print(f"[组{self.group_id}] 发送({len(sent_bytes)}字节): {sent_bytes.hex(' ').upper()}")
 
                     # 读取固定长度响应，避免 in_waiting 的时序误判
                     expected_len = self._expected_response_len(command_data['function_code'])
                     response = self.serial_port.read(expected_len)
+                    self.wire_event.emit(command_id, self.group_id, "rx", response.hex(" "), time.monotonic())
 
                     if len(response) != expected_len:
                         print(f"[组{self.group_id}] 无响应或长度不足: {len(response)}/{expected_len}")
@@ -284,6 +287,7 @@ class ModbusManager(QObject):
     """Modbus管理类，管理多个控制组的串口连接"""
 
     # 定义信号
+    wire_event = pyqtSignal(str, int, str, str, float)
     pressure_data_sent = pyqtSignal(list, int)  # 兼容旧调用
     command_ack = pyqtSignal(str, int, float)  # command_id, group, ack time
     command_error = pyqtSignal(str, int, float, str)  # command_id, group, time, status
@@ -364,6 +368,7 @@ class ModbusManager(QObject):
 
             # 创建并启动通信线程
             thread = ModbusThread(serial_port, group_id)
+            thread.wire_event.connect(self.wire_event)
             thread.data_sent.connect(self.on_data_sent)
             thread.error_occurred.connect(self.on_error_occurred)
             thread.start()
