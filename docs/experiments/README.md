@@ -2,7 +2,7 @@
 title: 实验文档索引
 kind: map
 status: active
-updated: 2026-09-09
+updated: 2026-09-10
 scope: experiment plans, records, and historical simulation notes
 ---
 
@@ -11,6 +11,8 @@ scope: experiment plans, records, and historical simulation notes
 这里按“是否仍指导当前工作”分类。训练产物保持独立目录，过程性说明合并到对应模型的总记录。
 
 ## 当前使用
+
+- [原生5/10 Hz全平台部署训练](../real_data/validation_deployment_hardware_and_training_20260910.md)：补齐同平台序列处理、独立tmux、验证选择和自动导出。
 
 - [`hereditary_real_validation_integration.md`](hereditary_real_validation_integration.md)：Analytic B 工作台接入、模型部署包、六腔映射、画笔目标与虚拟设备验证。
 - [`partial_observation_replay_validation.md`](partial_observation_replay_validation.md)：固定图像遮挡、运动选段、状态更新和全后缀优化的上实机前回放验证。

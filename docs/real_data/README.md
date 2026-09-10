@@ -2,13 +2,16 @@
 title: 实物数据文档索引
 kind: map
 status: active
-updated: 2026-09-02
+updated: 2026-09-10
 scope: real-data workflows, records, and legacy notes
 ---
 
 # 实物数据文档索引
 
 ## 当前流程
+
+- [验证App电气接口、颜色条件与5/10 Hz训练](validation_deployment_hardware_and_training_20260910.md)。
+- [u0–u3接线实拍对照](chamber_mapping_reference_20260910.md)：逐组原始图像、压力值与六腔映射。
 
 - `capture_setup.md`：硬件采集和动作同步。
 - `general_6ch_postprocess.md`：六通道通用前处理主线。

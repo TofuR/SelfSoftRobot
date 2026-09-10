@@ -1,0 +1,46 @@
+{
+  "schema": "hereditary_deployment_v1",
+  "checkpoint_sha256": "0ed4074ebc074d12612c77c0a94257ee65f584d600da03e4fbb6f4c603891b80",
+  "weights_sha256": "6616d78311a1ca1e969a362c539c5569c2cd6d6903e12dee93f598b5f0d7c034",
+  "dt": 0.10000000149011612,
+  "action_unit_to_kpa": [
+    148.03740084171295,
+    148.03740084171295,
+    148.03740084171295,
+    148.03740084171295
+  ],
+  "expansion6": [
+    0,
+    1,
+    1,
+    2,
+    2,
+    3
+  ],
+  "lower_kpa": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "upper_kpa": [
+    150.0,
+    150.0,
+    150.0,
+    150.0
+  ],
+  "rate_kpa_s": [
+    50.0,
+    50.0,
+    50.0,
+    50.0
+  ],
+  "radius_mm": 8.0,
+  "max_horizon": 80,
+  "initialization": "Operator sets current pressure manually; align current full shape, estimate prior and warm model from ACK history; loading does not send pressure",
+  "evidence": "full eligible native-rate corpus, within-sequence validation selection; not physical control certification",
+  "source_checkpoint": "/Data5/ddf/projects/SelfSoftRobot/workspace/runs/training/hov_full_native_20260910_001/training_10hz/phase_hereditary_geometry/model/best_eval_model.pt",
+  "dataset_manifest": "/Data5/ddf/projects/SelfSoftRobot/workspace/runs/training/hov_full_native_20260910_000/dataset_10hz/dataset_manifest.json",
+  "dataset_manifest_sha256": "ca8b99254856cea5855b1f6c994de7a1f9c0cf689ffbbcf87882c4cb0ee9828d",
+  "training_rate_hz": 10
+}

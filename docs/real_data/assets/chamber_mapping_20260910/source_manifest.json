@@ -1,0 +1,106 @@
+{
+  "date": "2026-09-10",
+  "selection": "Actual raw camera frames selected for visible bending; copied byte-for-byte, no pixel edits; CSV values are issued pressures, not sensed pressure",
+  "rows": [
+    {
+      "id": "u0",
+      "sequence": "seq_20260819_183351",
+      "frame_id": 185,
+      "source_image": "workspace/data/raw/real/seq_20260819_183351/cam0/00185.png",
+      "source_sha256": "bee1c6eeb1a2a31cc6c200cc009046d861f60c8ec9b160f8a6c345ad7299219d",
+      "time_sec": 38.656,
+      "pressures6_kpa": [
+        145.6083,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "channels": "c0",
+      "port": "组1 第1路",
+      "effect": "远端/下段向画面左弯",
+      "image": "u0.png"
+    },
+    {
+      "id": "u1",
+      "sequence": "seq_20260819_183547",
+      "frame_id": 180,
+      "source_image": "workspace/data/raw/real/seq_20260819_183547/cam0/00180.png",
+      "source_sha256": "11be791624b9799df6a68f8bb1a16d31c6583f216845c1bc39b9f9a104602a34",
+      "time_sec": 37.36,
+      "pressures6_kpa": [
+        0.0,
+        148.9266,
+        148.9266,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "channels": "c1 + c2",
+      "port": "组1 第2、3路同步",
+      "effect": "远端/下段向画面右弯",
+      "image": "u1.png"
+    },
+    {
+      "id": "u2",
+      "sequence": "seq_20260819_183740",
+      "frame_id": 730,
+      "source_image": "workspace/data/raw/real/seq_20260819_183740/cam0/00730.png",
+      "source_sha256": "bd681e902faaa7fb7968c44fce81261af6b2d99292a67e959340efd13094fbbc",
+      "time_sec": 152.797,
+      "pressures6_kpa": [
+        0.0,
+        0.0,
+        0.0,
+        135.4398,
+        135.4398,
+        0.0
+      ],
+      "channels": "c3 + c4",
+      "port": "组2 第1、2路同步",
+      "effect": "近端/上段向画面左偏；此组幅度较小",
+      "image": "u2.png"
+    },
+    {
+      "id": "u3",
+      "sequence": "seq_20260819_184036",
+      "frame_id": 576,
+      "source_image": "workspace/data/raw/real/seq_20260819_184036/cam0/00576.png",
+      "source_sha256": "a5b25cd7d1ee2547873d6d94afb0c7d3e50b345b516a1b55ce882f7169df84ad",
+      "time_sec": 120.657,
+      "pressures6_kpa": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        132.1562
+      ],
+      "channels": "c5",
+      "port": "组2 第3路",
+      "effect": "近端/上段向画面右弯",
+      "image": "u3.png"
+    },
+    {
+      "id": "zero",
+      "sequence": "seq_20260819_183526",
+      "frame_id": 38,
+      "source_image": "workspace/data/raw/real/seq_20260819_183526/cam0/00038.png",
+      "source_sha256": "965ed36369f1a8e1884e686e2cdb0a7f3bf418814a499888ed610c5e254d8ff5",
+      "time_sec": 8.328,
+      "pressures6_kpa": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "channels": "全部为0",
+      "port": "参考图",
+      "effect": "零下发压力参考；不代表所有历史状态已消失",
+      "image": "zero.png"
+    }
+  ]
+}
