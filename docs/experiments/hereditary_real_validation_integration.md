@@ -15,9 +15,29 @@ sources:
 
 详细操作和解释以 [工作台实验指南](../../real_validation/HEREDITARY_GUIDE.md) 为准。当前分支 `feat/partial-observation-replay`，前序快照为 `7b00b55`；本轮不启动训练、不发送真实硬件指令。
 
+## 2026-09-10：任意臂段、试运行与无矫正对照（005）
+
+[独立部署 ZIP 005](../../workspace/runs/analysis/hereditary_deployment/SelfSoftRobot_Hereditary_workbench_20260910_005.zip) 包含本次代码、[合并按钮图解](../../workspace/runs/analysis/hereditary_deployment/release_20260910_005/guide/guide.html)和所有候选权重，旧004及更早ZIP保留。
+
+局部目标新增“任意臂段自动匹配”，无需手动节点索引。规划在同一状态快照和总时间预算内搜索连续活动节点区间及两个方向；按整段32点插值残差优化，不能只匹配两端。最终区间、方向、插值矩阵、目标采样及搜索尝试均落盘，执行固定该对应。搜索按当前位置和长度排序，预算内粗筛并细化当前最佳，不宣称全局最优或连续起止位置全覆盖。
+
+未达标但压力合法的计划可在检查预览后勾选“允许试运行未达标计划”。执行器要求显式授权，保留 `qualified=false` 与原始误差，并在元数据和初始计划中记录 `unqualified_trial`。此许可不绕过状态版本、预览漂移、设备、非有限值、压力/变化率及反馈停止门限，修改目标或重规划会清除确认。
+
+[自动匹配GUI虚拟流程](../../workspace/runs/analysis/hereditary_deployment/any_segment_20260910_000/summary.json) 与 [未达标试运行](../../workspace/runs/analysis/hereditary_deployment/any_trial_20260910_000/summary.json) 均使用新10 Hz模型，各完成40步。前者找到11–14节点对应；后者目标偏移180 px，明确未达标后允许执行，日志保留试运行标记。93项核心/GUI回归通过，包括整段误差、反向自动匹配、未确认不发令、过期预览及越界压力仍拒绝。均为虚拟设备软件证据，不能作为实机到位结论。
+
+第4页另可勾选“不使用矫正，仅执行规划”，关闭正式执行阶段的图像状态更新与后缀优化；图像、压力/ACK、NDI和时延仍记录。执行模式、是否启用矫正和逐步disabled标记写入元数据/初始计划/逐步日志；不产生反馈worker。基础采集失败、压力接续与安全停止仍生效。单元检查使用完全无臂身的黑图完成四步非零动作，并断言未调用任何矫正函数、没有反馈候选文件，命令与原计划一致。
+
+## 2026-09-10：最新独立包、局部目标与全量训练候选
+
+[独立部署 ZIP 004](../../workspace/runs/analysis/hereditary_deployment/SelfSoftRobot_Hereditary_workbench_20260910_004.zip) 保留此前ZIP；默认新10 Hz模型，候选包含新5 Hz、新10 Hz和旧参考模型，同名JSON一起保存。附带[新版图文操作指南](../../workspace/runs/analysis/hereditary_deployment/release_20260910_004/guide/guide.html)、离线腔道接线HTML/原图、硬件与训练说明、模型选择记录、包内文件SHA256清单。打开包根 `START_HERE.md` 开始使用。
+
+包含完整/局部目标互斥选择、末端点与指定区段目标、草稿图像微调和两端短边修正。候选dt自动随模型读取，不能只修改JSON改变模型时基。
+
+[隔离包检查摘要](../../workspace/runs/analysis/hereditary_deployment/release_20260910_004/portable_validation.json) 对解压内容核对哈希，加载默认及3个候选配对；Python isolated模式下使用新10 Hz默认模型完成局部目标的GUI虚拟执行，未导入 `src` / `real_capture`。验证只证明软件部署与模拟设备流程，不证明实机控制精度。打包脚本显式接收候选目录和附加文件，不自动带入本地硬件配置或大型训练数据。
+
 ## 2026-09-10：按控制周期丢弃迟到反馈、逐步审计与规划参数
 
-当前 [带参数弹窗的图解](../../workspace/runs/analysis/hereditary_deployment/deadline_20260910_002/guide.html)、[机器结果](../../workspace/runs/analysis/hereditary_deployment/deadline_20260910_002/summary.json)、[独立部署包](../../workspace/runs/analysis/hereditary_deployment/SelfSoftRobot_Hereditary_workbench_20260910_003.zip)。
+此前 [带参数弹窗的图解](../../workspace/runs/analysis/hereditary_deployment/deadline_20260910_002/guide.html)、[机器结果](../../workspace/runs/analysis/hereditary_deployment/deadline_20260910_002/summary.json)、[独立部署包](../../workspace/runs/analysis/hereditary_deployment/SelfSoftRobot_Hereditary_workbench_20260910_003.zip)。
 
 原固定 200 ms 返回后检查不能撤销已经修改的 p/h。现在反馈线程只操作独立快照；截止时间为实际发令时间 + 模型 dt − 3 ms，按时且版本未变化才整体提交状态、历史和后缀。迟到任务永远不能写实时运行状态，最多一个任务，忙时跳过，不排队。默认连续 10 次跳过后归零（第四页可调）；无图/无可信边缘仍默认连续 3 次停止。新帧必须晚于 ACK，额外等图默认 0 ms，可配置但必须小于 dt。
 

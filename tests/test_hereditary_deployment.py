@@ -81,6 +81,125 @@ class DeploymentTests(unittest.TestCase):
         failed=self.r.plan_to_tolerance(distant,.01,.02,10)
         self.assertFalse(failed['qualified']);self.assertEqual(len(failed['attempts']),1)
 
+    def test_partial_target_ignores_unconstrained_nodes_through_planning_and_execution(self):
+        self.r.ready=True
+        goal=self.engine.observe(self.r.state,self.r.action)
+        goal[1:-1]+=1000  # Intentionally impossible placeholders, not constraints.
+        ids=[self.engine.n_nodes-1]
+        plan=self.r.plan_to_tolerance(goal,1.,3.,10,iterations=1,node_indices=ids)
+        self.assertTrue(plan['qualified']);self.assertLess(plan['mean_error'],1.)
+        np.testing.assert_array_equal(plan['node_indices'],ids)
+        executor=HereditaryExecutor(self.r,MockCommandTransport(),lambda:None,clock=lambda:self.now)
+        executor.hold()  # Exercise execution preflight and archive without motion.
+        self.assertEqual(executor.execute(plan),[])
+        with np.load(executor.last_execution_dir/'initial_plan.npz') as data:
+            np.testing.assert_array_equal(data['node_indices'],ids)
+        np.testing.assert_array_equal(self.r.control_node_indices,ids)
+
+    def test_partial_goal_mapping_and_strict_contract(self):
+        self.r.matrix=np.eye(3);self.r.alignment_confirmed=True
+        tip=self.engine.n_nodes-1
+        goal,ids=self.r.partial_goal([[30,40]],[tip])
+        np.testing.assert_array_equal(goal[ids],[[30,40]])
+        goal,ids=self.r.partial_goal([[10,20],[20,30]],[tip-2,tip-1,tip])
+        np.testing.assert_allclose(goal[ids],[[10,20],[15,25],[20,30]])
+        for invalid in ([],[0],[tip+1],[2,1],[1,3],[1.,2.]):
+            with self.assertRaises(ValueError):self.r.partial_goal([[10,20],[20,30]],invalid)
+
+    def test_automatic_segment_selects_interval_and_reverse_direction(self):
+        self.r.ready=True
+        shape=self.engine.observe(self.r.state,self.r.action)
+        state=self.r.state.copy();version=self.r.version
+        plan=self.r.plan_any_segment(shape[3:7][::-1],.05,.1,3,budget_s=.5,iterations=1,shooting_nfev=2)
+        self.assertTrue(plan['qualified']);self.assertTrue(plan['matching_reversed'])
+        np.testing.assert_array_equal(plan['node_indices'],[3,4,5,6])
+        self.assertEqual(plan['target_matrix'].shape,(32,self.engine.n_nodes))
+        self.assertEqual(plan['reference'].shape[1:],(32,2))
+        np.testing.assert_array_equal(self.r.state,state);self.assertEqual(self.r.version,version)
+
+    def test_dense_curve_cannot_pass_by_matching_only_two_endpoints(self):
+        from real_validation.runtime.shape_target import segment_projection,target_distances
+        shape=self.engine.observe(self.r.state,self.r.action);ids=[3,4]
+        matrix=segment_projection(self.engine.n_nodes,ids)
+        samples=matrix@shape
+        samples[:,0]+=20*np.sin(np.linspace(0,np.pi,32))
+        self.assertEqual(target_distances(shape,shape,ids).max(),0.)
+        self.assertGreater(target_distances(shape,shape,ids,matrix,samples).mean(),10.)
+
+    def test_dense_analytic_b_reduces_curve_error_and_retains_pressure_bounds(self):
+        from real_validation.runtime.shape_target import segment_projection
+        from real_validation.runtime.hereditary_math import fast_suffix_b
+        self.r.initialize([30.]*6,100.)
+        ids=[3,4,5,6];matrix=segment_projection(self.engine.n_nodes,ids)
+        old=np.tile(self.r.action,(4,1));prediction=self.engine.rollout(self.r.state,old)
+        ref=np.einsum('sn,tnc->tsc',matrix,prediction);ref[:,:,0]+=.5
+        actions,info=fast_suffix_b(self.engine,self.r.state,old,self.r.action,ref,self.r.bounds,node_indices=ids,target_matrix=matrix)
+        self.assertAlmostEqual(info['mse_before_mm2'],.125)
+        self.assertLessEqual(info['mse_after_mm2'],info['mse_before_mm2'])
+        self.assertTrue(self.r.bounds.valid(actions,self.r.action))
+
+    def test_unqualified_trial_requires_explicit_consent_and_records_failure(self):
+        import json
+        self.r.ready=True
+        plan=self._flat_plan(3);prediction=self.engine.rollout(self.r.state,plan['actions'])
+        plan['goal']=plan['goal'].copy();plan['goal'][1:]+=100
+        plan.update(qualified=False,tolerance=1.,max_node=3.,prediction=prediction,mean_error=141.4,max_error=141.4)
+        transport=MockCommandTransport();executor=HereditaryExecutor(self.r,transport,lambda:None,clock=lambda:self.now)
+        with self.assertRaisesRegex(ValueError,'明确允许'):executor.execute(plan)
+        self.assertEqual(transport.commands,[])
+        executor.hold();executor.execute(plan,allow_unqualified=True)
+        metadata=json.loads((executor.last_execution_dir/'metadata.json').read_text())
+        self.assertTrue(metadata['unqualified_trial']);self.assertFalse(metadata['planned_qualified'])
+        with np.load(executor.last_execution_dir/'initial_plan.npz') as saved:
+            self.assertTrue(saved['unqualified_trial']);self.assertFalse(saved['planned_qualified'])
+        self.assertFalse(plan['qualified'])
+
+    def test_trial_does_not_bypass_stale_preview_or_pressure_safety(self):
+        self.r.ready=True
+        plan=self._flat_plan(3);prediction=self.engine.rollout(self.r.state,plan['actions'])
+        plan.update(qualified=False,tolerance=1.,max_node=3.,prediction=prediction+10)
+        transport=MockCommandTransport();executor=HereditaryExecutor(self.r,transport,lambda:None,clock=lambda:self.now)
+        with self.assertRaisesRegex(ValueError,'预览'):executor.execute(plan,allow_unqualified=True)
+        plan['prediction']=prediction;plan['actions'][0]=1000
+        with self.assertRaisesRegex(ValueError,'压力'):executor.execute(plan,allow_unqualified=True)
+        self.assertEqual(transport.commands,[])
+
+    def test_open_loop_records_blank_images_but_never_calls_correction(self):
+        import json
+        self.r.clock=time.monotonic;self.r.initialize([0.]*6)
+        plan=self._flat_plan(4);plan['actions'][:]=.01
+        transport=MockCommandTransport()
+        # Black frames deliberately contain no usable robot evidence. In the
+        # control ablation they are recorded, not used to gate edge coverage.
+        frames=lambda:(np.zeros((30,30,3),np.uint8),time.monotonic())
+        executor=HereditaryExecutor(self.r,transport,frames,use_correction=False,max_missing=1,max_skipped=1)
+        with patch('real_validation.execution.hereditary_executor.deadline_feedback',side_effect=AssertionError('correction called')):
+            with patch.object(self.r,'feedback',side_effect=AssertionError('observer called')):
+                receipts=executor.execute(plan)
+        self.assertEqual(len(receipts),4)
+        np.testing.assert_allclose(transport.commands,self.r.mapping.expand(plan['actions']),atol=1e-9)
+        folder=executor.last_execution_dir
+        self.assertEqual(len(list((folder/'raw/cam0').glob('*.png'))),4)
+        self.assertEqual(len(list((folder/'feedback_jobs').glob('*.json'))),0)
+        rows=[json.loads(line) for line in (folder/'steps.jsonl').read_text().splitlines()]
+        self.assertTrue(all(row['revision_status']=='disabled' and not row['state_committed'] for row in rows))
+        self.assertTrue(all(row['consecutive_skipped']==0 for row in rows))
+        metadata=json.loads((folder/'metadata.json').read_text())
+        self.assertEqual(metadata['control_mode'],'open_loop');self.assertFalse(metadata['correction_enabled'])
+
+    def test_analytic_b_partial_cost_is_independent_of_other_nodes(self):
+        from real_validation.runtime.hereditary_math import fast_suffix_b
+        self.r.initialize([30.]*6,100.)
+        old=np.tile(self.r.action,(5,1))
+        ref=self.engine.rollout(self.r.state,old);ref[:,-1,0]+=2
+        other=ref.copy();other[:,1:-1]+=1000
+        ids=[self.engine.n_nodes-1]
+        a,info=fast_suffix_b(self.engine,self.r.state,old,self.r.action,ref,self.r.bounds,node_indices=ids)
+        b,altered=fast_suffix_b(self.engine,self.r.state,old,self.r.action,other,self.r.bounds,node_indices=ids)
+        np.testing.assert_allclose(a,b,atol=1e-10)
+        self.assertEqual(info['mse_before_mm2'],altered['mse_before_mm2'])
+        self.assertTrue(self.r.bounds.valid(a,self.r.action))
+
     def test_warmup_requires_unique_quality_frames_and_timeout(self):
         from real_validation.runtime.deployment_quality import WarmupGate,WarmupCriteria
         gate=WarmupGate(WarmupCriteria(minimum_s=.2,timeout_s=1.,consecutive=2),100.)
@@ -371,8 +490,14 @@ class InitialShapeTests(unittest.TestCase):
         for pixels,polarity in ((image,'bright'),(255-image,'dark')):
             curve,mask,info=extract_initial_shape(pixels,15,polarity)
             self.assertEqual(curve.shape,(15,2))
-            self.assertLess(np.linalg.norm(curve[0]-reference[0]),5)
-            self.assertLess(np.linalg.norm(curve[-1]-reference[-1]),5)
+            # cv2 polylines have round caps extending ~8 px past these centers.
+            # The physical endpoints are the outer cap, not the drawing centers.
+            for point,center in zip(curve[[0,-1]],reference[[0,-1]]):
+                self.assertLess(np.linalg.norm(point-center),10)
+                xy=np.rint(point).astype(int)
+                self.assertLessEqual(cv2.distanceTransform(mask,cv2.DIST_L2,5)[xy[1],xy[0]],2.)
+            self.assertTrue(info['base_endpoint_fix_applied'])
+            self.assertTrue(info['tip_endpoint_fix_applied'])
             self.assertGreater(info['arc_length_px'],190)
             self.assertGreater(mask.sum(),0)
 
@@ -386,6 +511,38 @@ class InitialShapeTests(unittest.TestCase):
         with self.assertRaises(ValueError):extract_initial_shape(np.zeros((300,300,3),np.uint8),15)
         image,_=self.image()
         with self.assertRaisesRegex(ValueError,'边界'):extract_initial_shape(image[100:],15)
+
+    def test_flat_short_edges_and_guided_refinement_both_directions(self):
+        from real_validation.perception.initial_shape import extract_initial_shape,refine_initial_shape
+        # Compare known physical short-edge centers on upright and rotated arms.
+        for angle in (0.,35.):
+            mask=np.zeros((320,320),np.uint8)
+            rectangle=np.array([[146,55],[174,55],[174,265],[146,265]],float)
+            theta=np.deg2rad(angle);rot=np.array([[np.cos(theta),-np.sin(theta)],[np.sin(theta),np.cos(theta)]])
+            poly=(rectangle-160)@rot.T+160
+            caps=(np.array([[160,55],[160,265]])-160)@rot.T+160
+            cv2.fillPoly(mask,[np.rint(poly).astype(np.int32)],255)
+            image=np.repeat(np.where(mask,225,25)[...,None],3,axis=2).astype(np.uint8)
+            for pixels,polarity in ((image,'bright'),(255-image,'dark')):
+                curve,_,_=extract_initial_shape(pixels,15,polarity)
+                np.testing.assert_allclose(curve[[0,-1]],caps,atol=2.)
+                guide=np.linspace(caps[0],caps[1],15)+np.array([5.,0])@rot.T
+                for draft in (guide,guide[::-1]):
+                    refined,_,info=refine_initial_shape(pixels,draft,polarity)
+                    expected=caps if draft is guide else caps[::-1]
+                    np.testing.assert_allclose(refined[[0,-1]],expected,atol=2.)
+                    normal=rot[:,0]
+                    error=np.abs((refined[2:-2]-160)@normal).mean()
+                    self.assertLess(error,1.)
+                    self.assertEqual(info['tip_endpoint_fix_reason'],'applied')
+
+    def test_guided_refinement_rejects_blank_or_occluded_image_without_mutating_draft(self):
+        from real_validation.perception.initial_shape import refine_initial_shape
+        image,curve=self.image();draft=resample_curve(curve,15);original=draft.copy()
+        hidden=image.copy();hidden[130:175]=25
+        for pixels in (np.zeros_like(image),hidden):
+            with self.assertRaises(ValueError):refine_initial_shape(pixels,draft)
+            np.testing.assert_array_equal(draft,original)
 
 
 if __name__=='__main__':unittest.main()

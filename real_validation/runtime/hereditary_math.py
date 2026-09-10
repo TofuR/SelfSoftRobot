@@ -188,7 +188,9 @@ def constrained_update(jac, residual, old, previous, bounds, basis, *, regulariz
 
 
 def fast_suffix_b(engine, state, old, previous, reference, bounds, *, blocks=8,
-                  regularization=2., trust=.08):
+                  regularization=2., trust=.08, node_indices=None, target_matrix=None):
+    from .shape_target import target_indices
+    ids = target_indices(engine.n_nodes, node_indices)
     started = time.perf_counter()
     if not bounds.valid(old, previous):
         raise ValueError("infeasible old suffix")
@@ -196,9 +198,13 @@ def fast_suffix_b(engine, state, old, previous, reference, bounds, *, blocks=8,
     tick = time.perf_counter()
     prediction, jac = engine.rollout(state, old, action_directions=basis.reshape(*old.shape, -1))
     derivative_ms = (time.perf_counter()-tick)*1000
-    error = prediction[:, 1:]-reference[:, 1:]
+    def residual(shapes):
+        return (shapes[:, ids]-reference[:, ids] if target_matrix is None else
+                np.einsum('sn,tnc->tsc', target_matrix, shapes)-reference)
+    error = residual(prediction)
+    selected_jac = jac[:, ids] if target_matrix is None else np.einsum('sn,tncd->tscd', target_matrix, jac)
     tick = time.perf_counter()
-    delta, solver = constrained_update(jac[:, 1:], error, old, previous, bounds, basis,
+    delta, solver = constrained_update(selected_jac, error, old, previous, bounds, basis,
                                        regularization=regularization, trust=trust)
     solver_ms = (time.perf_counter()-tick)*1000
     before = float(np.mean(error**2))
@@ -207,7 +213,7 @@ def fast_suffix_b(engine, state, old, previous, reference, bounds, *, blocks=8,
     if solver.success and np.isfinite(delta).all():
         for fraction in (1., .5, .25, .125):
             candidate = old+fraction*delta
-            candidate_score = float(np.mean((engine.rollout(state, candidate)[:, 1:]-reference[:, 1:])**2))
+            candidate_score = float(np.mean(residual(engine.rollout(state, candidate))**2))
             if bounds.valid(candidate, previous) and candidate_score < before-1e-8:
                 result, score, accepted = candidate, candidate_score, True
                 break

@@ -11,16 +11,19 @@ import uuid
 import numpy as np
 from threadpoolctl import threadpool_limits
 from .deadline_feedback import deadline_feedback
+from ..runtime.shape_target import target_indices, target_distances
 
 
 class HereditaryExecutor:
     def __init__(self,runtime,transport,frame_provider,*,callback=None,timeout=.5,clock=time.monotonic,
-                 image_transform=None,camera_provider=None,evaluation_provider=None,metadata=None,selected_camera=0,max_missing=3,max_skipped=10,settle_s=0.):
+                 image_transform=None,camera_provider=None,evaluation_provider=None,metadata=None,selected_camera=0,max_missing=3,max_skipped=10,settle_s=0.,use_correction=True):
         self.runtime,self.transport,self.frame_provider=runtime,transport,frame_provider
         self.callback,self.timeout,self.clock=callback,timeout,clock
         if not 1<=max_missing<=10:raise ValueError('无反馈上限必须在 1..10')
         self.image_transform=image_transform;self.camera_provider=camera_provider;self.evaluation_provider=evaluation_provider
         self.metadata=metadata or {};self.selected_camera=selected_camera;self.max_missing=max_missing;self.archive=None
+        self.use_correction=bool(use_correction)
+        self.control_mode='analytic_b' if self.use_correction else 'open_loop'
         if not 1<=max_skipped<=100:raise ValueError('连续跳过上限必须在 1..100')
         if not np.isfinite(settle_s) or not 0<=settle_s<runtime.dt:raise ValueError('额外等图时间必须小于控制周期')
         self.settle_s=settle_s
@@ -43,31 +46,37 @@ class HereditaryExecutor:
         self.runtime.fault='归零未获得 ACK，需要人工检查'
         raise RuntimeError(self.runtime.fault)
 
-    def execute(self,plan):
+    def execute(self,plan,*,allow_unqualified=False):
         r=self.runtime
         if plan['version']!=r.version or r.pending or r.fault:
             raise ValueError('计划已过期或动作历史无效，请重新规划')
+        ids=target_indices(r.engine.n_nodes,plan.get('node_indices'))
         old=np.array(plan['actions'],copy=True);reference=np.array(plan['reference'],copy=True)
         if not r.bounds.valid(old,r.action):raise ValueError('计划压力接续不合法')
+        trial=bool(not plan.get('qualified',True) and allow_unqualified)
         if 'qualified' in plan:
-            if not plan['qualified'] or not r.ready:raise ValueError('计划未达标或部署未就绪')
+            if not r.ready:raise ValueError('部署未就绪')
+            if not plan['qualified'] and not trial:raise ValueError('计划未达标，请检查预览并明确允许试运行')
             with r.lock:state,current=r.state_at(self.clock())
             prediction=r.engine.rollout(state,old)
-            distances=np.linalg.norm(prediction[-1,1:]-plan['goal'][1:],axis=1)
+            distances=target_distances(prediction[-1],plan['goal'],ids,plan.get('target_matrix'),plan.get('target_samples'))
             drift=float(np.max(np.linalg.norm(prediction-plan['prediction'],axis=2)))
-            if distances.mean()>plan['tolerance'] or distances.max()>plan['max_node'] or drift>max(.5,plan['tolerance']/2):
+            if not np.isfinite(distances).all() or not np.isfinite(drift):raise ValueError('模型预测非有限，不能执行')
+            if (not trial and (distances.mean()>plan['tolerance'] or distances.max()>plan['max_node'])) or drift>max(.5,plan['tolerance']/2):
                 raise ValueError('保持期间状态发生变化，原预览已失效；请重新规划并预览')
+        r.control_target_matrix=None if 'target_matrix' not in plan else plan['target_matrix'].copy()
+        r.control_node_indices=ids.copy();r.target_node_indices=ids.copy();r.target_shape=np.array(plan['goal'],copy=True)
         started=self.clock();receipts=[];misses=0;skipped=0
         execution_id=uuid.uuid4().hex
         frames=r.run_dir/'executions'/execution_id/'frames'
         frames.mkdir(parents=True,exist_ok=False)
         from .experiment_archive import ExperimentArchive
         self.last_execution_dir=frames.parent
-        self.archive=ExperimentArchive(frames.parent,started,dict(self.metadata,execution_id=execution_id,deployment_id=r.deployment_id,max_missing=self.max_missing,max_skipped=self.max_skipped,feedback_reserve_ms=3,control_dt=r.dt,settle_s=self.settle_s,selected_camera=self.selected_camera),self.evaluation_provider)
+        self.archive=ExperimentArchive(frames.parent,started,dict(self.metadata,control_mode=self.control_mode,correction_enabled=self.use_correction,unqualified_trial=trial,planned_qualified=plan.get('qualified'),planned_mean_error=plan.get('mean_error'),planned_max_error=plan.get('max_error'),matching_mode=plan.get('matching_mode','fixed'),execution_id=execution_id,deployment_id=r.deployment_id,max_missing=self.max_missing,max_skipped=self.max_skipped,feedback_reserve_ms=3,control_dt=r.dt,settle_s=self.settle_s,selected_camera=self.selected_camera),self.evaluation_provider)
         outcome='failed';timing=None
         r.set_phase('control',reason='execute_pressed')
-        r.record('execute_begin',execution_id=execution_id,deployment_id=r.deployment_id,goal=plan['goal'],plan=old,reference=reference,planning_ms=plan.get('planning_ms'),planning_config=plan.get('planning_config'))
-        np.savez_compressed(frames.parent/'initial_plan.npz',actions_model=old,actions_kpa=r.mapping.expand(old),reference_mm=reference,state=plan.get('state',r.state),previous_model=plan.get('previous',r.action),goal_mm=plan['goal'],version=plan['version'],execution_state=r.state,execution_action=r.action,execution_state_time=r.at,camera_matrix=r.matrix,expansion6=r.mapping.expansion,action_unit_to_kpa=r.mapping.scale,dt=r.dt)
+        r.record('execute_begin',control_mode=self.control_mode,correction_enabled=self.use_correction,unqualified_trial=trial,planned_qualified=plan.get('qualified'),planned_mean_error=plan.get('mean_error'),planned_max_error=plan.get('max_error'),execution_id=execution_id,deployment_id=r.deployment_id,goal=plan['goal'],node_indices=ids,plan=old,reference=reference,planning_ms=plan.get('planning_ms'),planning_config=plan.get('planning_config'))
+        np.savez_compressed(frames.parent/'initial_plan.npz',actions_model=old,actions_kpa=r.mapping.expand(old),reference_mm=reference,state=plan.get('state',r.state),previous_model=plan.get('previous',r.action),goal_mm=plan['goal'],node_indices=ids,unqualified_trial=trial,control_mode=self.control_mode,correction_enabled=self.use_correction,planned_qualified=plan.get('qualified',True),**{key:plan[key] for key in ('target_matrix','target_samples','matching_mode','matching_reversed','goal_curve') if key in plan},version=plan['version'],execution_state=r.state,execution_action=r.action,execution_state_time=r.at,camera_matrix=r.matrix,expansion6=r.mapping.expansion,action_unit_to_kpa=r.mapping.scale,dt=r.dt)
         try:
             with threadpool_limits(1):
                 for k in range(len(old)):
@@ -86,7 +95,7 @@ class HereditaryExecutor:
                     cycle_start=self.clock();before=old[k+1:].copy();version_before=r.version
                     timing=None
                     try:
-                        timing=dict(step=k,execution_id=execution_id,revision_status='command_failed',state_committed=False,version_before=version_before,remaining_before_model=before)
+                        timing=dict(step=k,control_mode=self.control_mode,execution_id=execution_id,revision_status='command_failed',state_committed=False,version_before=version_before,remaining_before_model=before)
                         receipt=self.transport.send(action,(1,2),self.timeout)
                         next_deadline=receipt.t_command+r.dt
                         timing.update(command_id=receipt.command_id,t_command=receipt.t_command,t_ack=receipt.t_ack,feedback_deadline=next_deadline,command_jitter_ms=(receipt.t_command-deadline)*1000,ack_ms=(receipt.t_ack-receipt.t_command)*1000 if receipt.t_ack is not None else None,command_interval_ms=(receipt.t_command-receipts[-1].t_command)*1000 if receipts else None)
@@ -139,7 +148,20 @@ class HereditaryExecutor:
                         feedback_deadline=next_deadline-.003
                         timing['feedback_budget_ms']=max(0.,(feedback_deadline-self.clock())*1000)
                         timing['revision_status']='feedback_error'
-                        candidate,info=deadline_feedback(r,feedback,frame[1],old[k+1:],reference[k+1:],feedback_deadline,self.abort_event,frames.parent/'feedback_jobs'/f'{k:05d}.json')
+                        if self.use_correction:
+                            candidate,info=deadline_feedback(r,feedback,frame[1],old[k+1:],reference[k+1:],feedback_deadline,self.abort_event,frames.parent/'feedback_jobs'/f'{k:05d}.json')
+                        else:
+                            # Same acquisition/archive path, but no image state
+                            # correction, no suffix optimizer and no worker job.
+                            candidate=old[k+1:].copy();misses=0;skipped=0
+                            with r.lock:
+                                z,u=r.state_at(self.clock())
+                                predicted=r.engine.observe(z,u)
+                            from ..runtime.hereditary_deployment import transform
+                            info=dict(revision_status='disabled',state_committed=False,frame_age_ms=(self.clock()-frame[1])*1000,
+                                      control=dict(accepted=False,reason='correction_disabled'),
+                                      visibility=dict(status='矫正关闭；图像仅记录'),
+                                      prediction_px=transform(predicted,r.matrix) if r.matrix is not None else predicted)
                         info['software_occlusion']=occlusion
                         if info.get('revision_status')=='committed' and info.get('observer',{}).get('count',0)==0:
                             misses+=1
@@ -147,9 +169,9 @@ class HereditaryExecutor:
                         elif info.get('state_committed'):
                             misses=0
                         old[k+1:]=candidate
-                        skipped=0 if info.get('state_committed') else skipped+1
+                        skipped=0 if not self.use_correction or info.get('state_committed') else skipped+1
                         info['consecutive_skipped']=skipped
-                        info.update(consecutive_missing=misses,observation_mode='image_supported' if info.get('state_committed') and not misses else 'model_only',step=k,slot=slot,execution_id=execution_id,frame_timestamp=frame[1],command_jitter_ms=(receipt.t_command-deadline)*1000)
+                        info.update(control_mode=self.control_mode,consecutive_missing=misses,observation_mode=('record_only' if not self.use_correction else ('image_supported' if info.get('state_committed') and not misses else 'model_only')),step=k,slot=slot,execution_id=execution_id,frame_timestamp=frame[1],command_jitter_ms=(receipt.t_command-deadline)*1000)
                         timing.update(info,control_ms=info.get('control',{}).get('time_ms'))
                         r.record('feedback',**info,state=r.state,remaining_actions=old[k+1:])
                         if skipped>=self.max_skipped:raise RuntimeError(f'连续 {skipped} 次未能及时提交反馈，停止并归零')
@@ -161,7 +183,7 @@ class HereditaryExecutor:
                             if self.callback:self.callback(timing)
             if misses or skipped:r.ready=False
             r.set_phase('final_hold',reason='plan_completed')
-            r.record('execute_completed',execution_id=execution_id,commands=len(receipts),final_pressure=r.mapping.expand(r.action))
+            r.record('execute_completed',control_mode=self.control_mode,execution_id=execution_id,commands=len(receipts),final_pressure=r.mapping.expand(r.action))
             outcome='completed_unobserved' if misses or skipped else 'completed';return receipts
         except Exception as error:
             if self.hold_requested and str(error)=='operator_abort':

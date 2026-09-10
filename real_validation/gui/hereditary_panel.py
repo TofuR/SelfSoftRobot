@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,Q
 
 from ..runtime.hereditary_deployment import load_bundle,HereditaryDeployment,transform,resample_curve
 from ..execution.hereditary_executor import HereditaryExecutor
+from ..runtime.shape_target import target_indices, target_distances
 from ..execution.executor import CommandReceipt
 from ..widgets.hereditary_canvas import HereditaryCanvas
 
@@ -30,7 +31,7 @@ class Job(QThread):
 class HereditaryPanel(QWidget):
     def __init__(self,host):
         super().__init__(host);self.host=host;self.runtime=None;self.job=None;self.executor=None
-        self.plan=None;self.target=None;self.armed=False;self.busy=False;self.frame=None
+        self.plan=None;self.target=None;self.target_ids=None;self.auto_curve=None;self.target_matrix=None;self.target_samples=None;self.armed=False;self.busy=False;self.frame=None
         self.frame_lock=threading.Lock();self.transport=None;self.controller=None;self.commands={};self.camera_identity=None
         self.alignment_error=None;self.cancel_event=threading.Event();self.ack6=np.full(6,np.nan);self.zero_pending=False
         self.pages=[QWidget() for _ in range(4)]
@@ -41,6 +42,11 @@ class HereditaryPanel(QWidget):
         self.canvas=HereditaryCanvas()
         self.canvas.curve_finished.connect(self.curve)
         self.canvas.draft_changed.connect(self.draft_changed)
+        self.canvas.roi_finished.connect(self.roi_selected)
+        self.canvas.prompt_added.connect(self.add_sam_prompt)
+        self.initial_roi=None;self.roi_camera_key=None;self.sam_points=[];self.sam_labels=[];self.draft_info={}
+        from ..perception.sam_initial import SamInitialSegmenter,default_checkpoint
+        self.sam_segmenter=SamInitialSegmenter()
         self.draft_stamp=None;self.draft_version=None
         self.display_controls=QWidget();display=QHBoxLayout(self.display_controls)
         self.display_mode=QComboBox();self.display_mode.addItems(['整体形状 + 中心线','仅骨架中心线'])
@@ -71,8 +77,25 @@ class HereditaryPanel(QWidget):
         note.setWordWrap(True);initial.addWidget(note)
         self.polarity=QComboBox();self.polarity.addItem('亮色臂身 / 较暗背景','bright');self.polarity.addItem('黑色剪影 / 明亮背景','dark');initial.addWidget(self.polarity)
         self.polarity.currentIndexChanged.connect(self.invalidate_plan)
-        self.auto_button=QPushButton('自动提取当前完整形状（冻结图像，可拖动黄点）');self.auto_button.clicked.connect(self.auto_shape);initial.addWidget(self.auto_button)
+        row=QHBoxLayout();self.initial_method=QComboBox();self.initial_method.addItem('SAM2 初始化（推荐，可较慢）','sam2');self.initial_method.addItem('传统分割（免 SAM 依赖）','classical');row.addWidget(self.initial_method)
+        self.sam_settings=QDialog(self);self.sam_settings.setWindowTitle('SAM2 初始化设置');sf=QFormLayout(self.sam_settings)
+        self.sam_path=QLineEdit(str(default_checkpoint()));sf.addRow('SAM2.1 Tiny 权重',self.sam_path)
+        browse_sam=QPushButton('选择分割权重');browse_sam.clicked.connect(self.browse_sam);sf.addRow(browse_sam)
+        self.sam_device=QComboBox();self.sam_device.addItems(['auto','cpu','cuda']);sf.addRow('推理设备',self.sam_device)
+        sf.addRow(QLabel('仅在初始化使用。CPU 可运行，首次加载较慢；不会改变气压。'))
+        settings_button=QPushButton('SAM 设置');settings_button.clicked.connect(self.sam_settings.show);row.addWidget(settings_button);initial.addLayout(row)
+        row=QHBoxLayout();self.roi_button=QPushButton('框选完整臂身（排除支架）');self.roi_button.clicked.connect(lambda:self.begin_initial('roi'));row.addWidget(self.roi_button)
+        self.clear_roi_button=QPushButton('清除框选');self.clear_roi_button.clicked.connect(self.clear_initial_roi);row.addWidget(self.clear_roi_button);initial.addLayout(row)
+        self.auto_button=QPushButton('分割并提取当前完整形状');self.auto_button.clicked.connect(self.auto_shape);initial.addWidget(self.auto_button)
         self.align_button=QPushButton('手动重画当前中心线（base → tip）');self.align_button.clicked.connect(lambda:self.set_mode('align'));initial.addWidget(self.align_button)
+        row=QHBoxLayout()
+        self.refine_button=QPushButton('结合图像微调草稿');self.refine_button.clicked.connect(self.refine_shape);row.addWidget(self.refine_button)
+        self.refine_radius=QSpinBox();self.refine_radius.setRange(0,240);self.refine_radius.setValue(0);self.refine_radius.setSpecialValueText('自动（随尺度）');self.refine_radius.setSuffix(' px');row.addWidget(QLabel('搜索半径'));row.addWidget(self.refine_radius);initial.addLayout(row)
+        self.keep_endpoints=QCheckBox('微调时保留我标定的 BASE / TIP（无需算法识别短边）');self.keep_endpoints.setChecked(True);initial.addWidget(self.keep_endpoints)
+        row=QHBoxLayout();self.positive_button=QPushButton('点选臂身 +');self.positive_button.clicked.connect(lambda:self.prompt_mode(True));row.addWidget(self.positive_button)
+        self.negative_button=QPushButton('排除支架/背景 −');self.negative_button.clicked.connect(lambda:self.prompt_mode(False));row.addWidget(self.negative_button)
+        self.rerun_sam_button=QPushButton('按提示重新分割');self.rerun_sam_button.clicked.connect(self.resegment_initial);row.addWidget(self.rerun_sam_button);initial.addLayout(row)
+        self.mask_check=QCheckBox('叠加分割掩膜（绿色）');self.mask_check.setChecked(True);self.mask_check.toggled.connect(self.show_initial_mask);initial.addWidget(self.mask_check)
         row=QHBoxLayout()
         self.flip_button=QPushButton('交换 base / tip');self.flip_button.clicked.connect(self.flip_draft);row.addWidget(self.flip_button)
         self.cancel_button=QPushButton('取消草稿 / 恢复实时图像');self.cancel_button.clicked.connect(self.cancel_draft);row.addWidget(self.cancel_button);initial.addLayout(row)
@@ -85,15 +108,24 @@ class HereditaryPanel(QWidget):
         self.warmup_options.toggled.connect(lambda visible:[warm_form.itemAt(i).widget().setVisible(visible) for i in range(warm_form.count())])
         for i in range(warm_form.count()):warm_form.itemAt(i).widget().hide()
         initial.addWidget(self.warmup_options)
+        self.goal_mode=QComboBox();self.goal_mode.addItems(['完整形状','局部目标（末端 / 一段）']);goal.addWidget(self.goal_mode)
+        self.local_options=QWidget();local=QHBoxLayout(self.local_options);local.setContentsMargins(0,0,0,0)
+        self.local_kind=QComboBox();self.local_kind.addItems(['末端点','指定节点的一段','任意臂段自动匹配']);local.addWidget(self.local_kind)
+        self.node_start=QComboBox();self.node_end=QComboBox()
+        for box in (self.node_start,self.node_end):
+            for i in range(1,15):box.addItem(f'节点 {i}'+(' (TIP)' if i==14 else ''),i)
+        self.node_start.setCurrentIndex(10);self.node_end.setCurrentIndex(13)
+        self.node_arrow=QLabel('→');local.addWidget(self.node_start);local.addWidget(self.node_arrow);local.addWidget(self.node_end);goal.addWidget(self.local_options)
         self.goal_button=QPushButton('连续画目标中心线（base → tip）');self.goal_button.clicked.connect(lambda:self.set_mode('goal'));goal.addWidget(self.goal_button)
-        note=QLabel('从已对齐 base 开始连续描画。拟合全部节点；整体形状显示由中心线和模型半径扩展，不是分割测量。当前路线未加入避障。')
-        note.setWordWrap(True);goal.addWidget(note)
+        self.goal_note=QLabel();self.goal_note.setWordWrap(True);goal.addWidget(self.goal_note)
+        for box in (self.goal_mode,self.local_kind,self.node_start,self.node_end):box.currentIndexChanged.connect(self.change_goal_mode)
+        self.change_goal_mode()
         self.horizon=QSpinBox();self.horizon.setRange(2,80);self.horizon.setValue(80)
         self.tolerance=QDoubleSpinBox();self.tolerance.setRange(.05,20);self.tolerance.setValue(2.);self.tolerance.setSuffix(' mm')
         self.max_node=QDoubleSpinBox();self.max_node.setRange(.1,50);self.max_node.setValue(4.);self.max_node.setSuffix(' mm')
         self.planning_dialog=QDialog(self);self.planning_dialog.setWindowTitle('初始规划参数');self.planning_dialog.setModal(False)
         pf=QVBoxLayout(self.planning_dialog);form=QFormLayout();pf.addLayout(form)
-        form.addRow('全形状平均容限（不含 base）',self.tolerance);form.addRow('最大节点偏差',self.max_node);form.addRow('搜索上限步数（自动选择长度）',self.horizon)
+        form.addRow('受约束节点平均容限',self.tolerance);form.addRow('最大目标点偏差',self.max_node);form.addRow('搜索上限步数（自动选择长度）',self.horizon)
         self.planning_budget=QDoubleSpinBox();self.planning_budget.setRange(.1,120);self.planning_budget.setValue(15);self.planning_budget.setSuffix(' s')
         self.planning_iterations=QSpinBox();self.planning_iterations.setRange(1,100);self.planning_iterations.setValue(24)
         self.planning_shooting=QSpinBox();self.planning_shooting.setRange(1,200);self.planning_shooting.setValue(30)
@@ -105,7 +137,7 @@ class HereditaryPanel(QWidget):
         self.planning_settings=QPushButton('初始规划参数…');self.planning_settings.clicked.connect(self.show_planning_settings);goal.addWidget(self.planning_settings)
         self.planning_fields=[self.horizon,self.tolerance,self.max_node,self.planning_budget,self.planning_iterations,self.planning_shooting,self.planning_stride]
         for box in self.planning_fields:box.valueChanged.connect(self.invalidate_plan)
-        self.plan_button=QPushButton('规划全形状 / 预览');self.plan_button.clicked.connect(self.make_plan);goal.addWidget(self.plan_button)
+        self.plan_button=QPushButton('规划当前目标 / 预览');self.plan_button.clicked.connect(self.make_plan);goal.addWidget(self.plan_button)
         self.preview=QPlainTextEdit();self.preview.setReadOnly(True);self.preview.setMaximumHeight(180);goal.addWidget(self.preview)
         row=QHBoxLayout();self.play_button=QPushButton('播放模型预测');self.play_button.clicked.connect(self.play_preview);row.addWidget(self.play_button)
         self.scrubber=QSlider(Qt.Horizontal);self.scrubber.setRange(0,0);self.scrubber.valueChanged.connect(self.show_preview);row.addWidget(self.scrubber);goal.addLayout(row)
@@ -120,6 +152,10 @@ class HereditaryPanel(QWidget):
         self.max_skipped=QSpinBox();self.max_skipped.setRange(1,100);self.max_skipped.setValue(10)
         self.feedback_settle=QDoubleSpinBox();self.feedback_settle.setRange(0,90);self.feedback_settle.setSuffix(' ms');self.feedback_settle.setToolTip('始终要求 ACK 后的新图像；只有需要额外等待时才增大，会减少本周期反馈预算')
         missing_form=QFormLayout();missing_form.addRow('连续无有效反馈几次后停止归零',self.max_missing);missing_form.addRow('连续跳过反馈几次后停止归零',self.max_skipped);missing_form.addRow('发令后额外等图',self.feedback_settle);run.addLayout(missing_form)
+        self.open_loop_check=QCheckBox('不使用矫正，仅执行规划（对照实验）');self.open_loop_check.setToolTip('执行时不校正图像状态、不优化剩余动作；仍记录图像/压力/NDI，保留压力接续与停止控制');run.insertWidget(0,self.open_loop_check)
+        self.open_loop_check.toggled.connect(self.execution_mode_changed)
+        self.trial_check=QCheckBox('允许试运行未达标计划（已检查预览，仅探索）');self.trial_check.setVisible(False);run.addWidget(self.trial_check)
+        self.trial_note=QLabel();self.trial_note.setWordWrap(True);run.addWidget(self.trial_note)
         self.arm_check=QCheckBox('已检查目标、映射、对齐和压力范围，允许执行');self.arm_check.toggled.connect(self.arm);run.addWidget(self.arm_check)
         self.execute_button=QPushButton('开始实验运动：执行 Analytic B 图像反馈');self.execute_button.clicked.connect(self.execute);run.addWidget(self.execute_button)
         self.hold_stop_button=QPushButton('停止运动（保持当前压力）');self.hold_stop_button.clicked.connect(self.request_hold);run.addWidget(self.hold_stop_button)
@@ -129,7 +165,8 @@ class HereditaryPanel(QWidget):
         note=QLabel('完成后保持最终压力。此模型仅支持正压；不支持实际负压。虚拟相机与 ACK 仅用于软件流程验证。')
         note.setWordWrap(True);run.addWidget(note)
         for layout in layouts:layout.addStretch()
-        self.controls=[self.path,browse,self.load_button,self.polarity,*self.mapping,self.mapping_button,self.auto_button,self.align_button,self.flip_button,self.cancel_button,self.confirm_button,self.goal_button,self.horizon,self.tolerance,self.max_node,self.plan_button,self.planning_settings,*self.planning_fields,self.arm_check,self.execute_button,self.probe_button,self.occlusion_controls,self.max_missing,self.max_skipped,self.feedback_settle,*self.warmup_fields]
+        self.controls=[self.open_loop_check,self.trial_check,self.refine_button,self.refine_radius,self.goal_mode,self.local_options,self.path,browse,self.load_button,self.polarity,*self.mapping,self.mapping_button,self.auto_button,self.align_button,self.flip_button,self.cancel_button,self.confirm_button,self.goal_button,self.horizon,self.tolerance,self.max_node,self.plan_button,self.planning_settings,*self.planning_fields,self.arm_check,self.execute_button,self.probe_button,self.occlusion_controls,self.max_missing,self.max_skipped,self.feedback_settle,*self.warmup_fields]
+        self.controls.extend([self.initial_method,self.roi_button,self.clear_roi_button,self.positive_button,self.negative_button,self.rerun_sam_button,self.keep_endpoints,self.sam_path,self.sam_device,browse_sam])
         from .chamber_control import ChamberControl
         self.chambers=ChamberControl(self)
         self.chamber_button=QPushButton('六腔控制');self.chamber_button.clicked.connect(self.chambers.show)
@@ -142,6 +179,8 @@ class HereditaryPanel(QWidget):
     def message(self,text):self.state_label.setText(str(text));self.host._log('Hereditary: '+str(text))
     def invalidate_plan(self,*_):
         self.plan=None;self.armed=False
+        if hasattr(self,'trial_check'):
+            self.trial_check.setChecked(False);self.trial_check.hide();self.trial_note.clear()
         if hasattr(self,'play_timer'):self.play_timer.stop();self.canvas.preview=None;self.canvas.update()
         if hasattr(self,'arm_check'):self.arm_check.blockSignals(True);self.arm_check.setChecked(False);self.arm_check.blockSignals(False)
     def fail(self,error):
@@ -172,6 +211,7 @@ class HereditaryPanel(QWidget):
         if self.runtime:self.runtime.close()
         self.canvas.draft=None;self.canvas.frozen=False;self.canvas.mode='view';self.alignment_error=None
         engine,meta=value
+        self.clear_initial_roi();self.canvas.mask=None;self.canvas.prompts=[];self.draft_info={}
         root=Path(self.host.run_root.text())/'hereditary'
         folder=root/(datetime.now().strftime('%Y%m%d_%H%M%S')+'_'+uuid.uuid4().hex[:6])
         self.runtime=HereditaryDeployment(engine,meta,folder)
@@ -182,6 +222,11 @@ class HereditaryPanel(QWidget):
             for c,v in zip(self.mapping,self.saved_chambers['mapping']):c.setCurrentIndex(v)
         self.feedback_settle.setMaximum(max(0,meta['dt']*1000-5));self.horizon.setMaximum(meta['max_horizon']);self.invalidate_plan();self.target=None
         self.canvas.target=None;self.canvas.prediction=None
+        for box in (self.node_start,self.node_end):
+            box.blockSignals(True);box.clear()
+            for i in range(1,engine.n_nodes):box.addItem(f'节点 {i}'+(' (TIP)' if i==engine.n_nodes-1 else ''),i)
+            box.blockSignals(False)
+        self.node_start.setCurrentIndex(max(0,engine.n_nodes-5));self.node_end.setCurrentIndex(engine.n_nodes-2);self.change_goal_mode()
         self.chambers.apply();self._attach_controller();self.host._update_main_info()
         self.message(f'已加载 {engine.channels} 输入 / {engine.n_nodes} 节点，dt={meta["dt"]} s\n压力上限 {meta["upper_kpa"]} kPa；历史尚未初始化\n日志 {folder}')
     def _attach_controller(self):
@@ -263,62 +308,190 @@ class HereditaryPanel(QWidget):
         self.canvas.update()
 
     def leave_drawing(self):
-        if self.canvas.mode=='goal':
+        if self.canvas.mode in ('goal','goal_point'):
             self.canvas.mode='view';self.canvas.stroke=[];self.canvas.update()
 
     def cancel_draft(self):
         self.canvas.frozen=False;self.canvas.draft=None;self.canvas.stroke=[]
         self.canvas.mode='view';self.canvas.drag_node=None;self.canvas.drawing=False
         self.draft_stamp=None;self.draft_version=None;self.canvas.update()
+        self.canvas.mask=None;self.canvas.prompts=[];self.canvas.roi=None
+        self.sam_points=[];self.sam_labels=[]
 
-    def _freeze(self):
+    def _freeze(self,frame=None):
         r=self.runtime
         if r is None:raise ValueError('请先加载模型')
         if r.pending or r.fault:raise ValueError(r.fault or '等待指令 ACK')
-        frame=self.frame_provider()
-        if frame is None or time.monotonic()-frame[1]>.3:raise ValueError('需要新相机图像')
+        if frame is None:
+            frame=self.frame_provider()
+            if frame is None or time.monotonic()-frame[1]>.3:raise ValueError('需要新相机图像')
         self.cancel_draft();self.invalidate_plan()
         r.alignment_confirmed=False;r.ready=False;self.alignment_error=None;self.target=None;self.canvas.target=None
         self.canvas.set_frame(frame[0].copy());self.canvas.frozen=True
+        self.canvas.roi=self.initial_roi
         self.draft_stamp=frame[1];self.draft_version=r.version;self.camera_identity=self._camera_key()
         return frame
 
-    def auto_shape(self):
+    def browse_sam(self):
+        path,_=QFileDialog.getOpenFileName(self,'选择 SAM2.1 Tiny 权重',self.sam_path.text(),'SAM2 (*.pt)')
+        if path:self.sam_path.setText(path)
+
+    def show_initial_mask(self,visible):
+        self.canvas.show_mask=visible;self.canvas.update()
+
+    def clear_initial_roi(self):
+        self.initial_roi=None;self.roi_camera_key=None;self.canvas.roi=None;self.canvas.update()
+
+    def roi_selected(self,region):
+        region=np.rint(region).astype(int)
+        if np.any(region[2:]-region[:2]<8):self.message('框选太小，请包含完整臂身');return
+        self.initial_roi=region.tolist();self.roi_camera_key=self._camera_key()
+        self.canvas.roi=region;self.canvas.mode='view';self.canvas.update()
+        self.message('框选已保存。点击“分割并提取当前完整形状”；框内尽量排除支架，两端留少量背景。')
+
+    def prompt_mode(self,positive):
+        if not self.canvas.frozen:self.message('请先框选或分割，冻结当前图像');return
+        self.canvas.mode='sam_positive' if positive else 'sam_negative'
+        self.message('在臂身内部点选正提示' if positive else '在误选的支架或背景上点负提示；随后按提示重新分割')
+
+    def add_sam_prompt(self,point,label):
+        self.sam_points.append(np.asarray(point).tolist());self.sam_labels.append(int(label))
+        self.canvas.prompts=list(zip(self.sam_points,self.sam_labels));self.canvas.update()
+
+    def initial_config(self):
+        if self.initial_roi is not None and self.roi_camera_key!=self._camera_key():
+            raise ValueError('框选后相机配置已改变，请清除框选或重新框选')
+        return dict(method=self.initial_method.currentData(),polarity=self.polarity.currentData(),
+                    roi=self.initial_roi,checkpoint=self.sam_path.text(),device=self.sam_device.currentText(),
+                    points=list(self.sam_points),labels=list(self.sam_labels))
+
+    def segment_initial(self,image,config,guide=None):
+        if config['method']!='sam2':return None,{}
+        mask,info=self.sam_segmenter.segment(image,config['checkpoint'],config['device'],
+                                              config['roi'],guide,config['points'],config['labels'])
+        return mask,info
+
+    def initial_result(self,image,config,guide=None,preserve=True):
+        from ..perception.initial_shape import extract_initial_shape,refine_initial_shape
+        mask,sam_info=self.segment_initial(image,config,guide)
         try:
-            from ..perception.initial_shape import extract_initial_shape
+            if guide is None:
+                curve,mask,info=extract_initial_shape(image,self.runtime.engine.n_nodes,config['polarity'],config['roi'],mask)
+            else:
+                curve,mask,info=refine_initial_shape(image,guide,config['polarity'],config.get('search_px',0),preserve,mask)
+        except ValueError as error:
+            if mask is None:raise
+            return None,mask,dict(sam=sam_info,extraction_error=str(error))
+        info['sam']=sam_info
+        return curve,mask,info
+
+    def publish_initial(self,image,value,source):
+        curve,mask,info=value
+        import cv2
+        name=source+'_'+uuid.uuid4().hex[:8]
+        cv2.imwrite(str(self.runtime.run_dir/(name+'.png')),image)
+        cv2.imwrite(str(self.runtime.run_dir/(name+'_mask.png')),mask)
+        self.runtime.record('initial_shape_draft',source=source,frame=name+'.png',timestamp=self.draft_stamp,curve=curve,diagnostics=info)
+        if curve is None:
+            self.canvas.mask=mask;self.canvas.update()
+            self.message('SAM 掩膜已显示，但中心线仍需修正：'+info['extraction_error']+'。可补正/负提示重分割或手绘；已有草稿保留。')
+            return
+        self.draft_info=info;self.canvas.draft=curve.astype(float);self.canvas.mask=mask
+        self.canvas.radius=info['radius_px'];self.canvas.mode='edit';self.canvas.update()
+        self.draft_changed(curve,operator=False)
+        warning='；'.join(info.get('warnings',[]))
+        if info.get('endpoints_preserved'):warning+=' 两端采用人工位置，未由算法认证短边。'
+        self.alignment_label.setText('绿色是分割，黄线是待确认中心线。可拖动黄点；SAM 误选可加正/负提示重分割。'+warning)
+        self.message('草稿已生成，请检查完整臂身与 BASE/TIP，再确认部署。'+warning)
+
+    def auto_shape(self):
+        self.begin_initial('auto')
+
+    def begin_initial(self,mode):
+        try:
+            if self.busy:raise ValueError('请等待当前操作结束或先停止')
             r=self.runtime
             if r is None:raise ValueError('请先加载模型')
             if self.chambers.driving:raise ValueError('请先结束手动调压并保持')
-            if self.occlusion_controls.config.enabled:raise ValueError('初始化提取完整形状前，请关闭软件遮挡测试')
+            if self.occlusion_controls.config.enabled:raise ValueError('初始化前请关闭软件遮挡测试')
             if tuple(c.currentData() for c in self.mapping)!=r.mapping.expansion:raise ValueError('请先应用映射')
-            transport=self._transport();count=r.engine.n_nodes;polarity=self.polarity.currentData();frames=[]
+            config=self.initial_config();config['points']=[];config['labels']=[]
+            transport=self._transport()
             def work():
                 receipt=transport.send(self.host.hardware.valve_controller.last_command,(1,2),.5)
-                if receipt.status!='ack':raise ValueError('当前保持压力未确认')
+                if receipt.status!='ack':raise ValueError('当前保持压力未确认：'+receipt.status)
                 if r.initialized and not r.fault:r.acknowledge(receipt)
                 else:r.initialize(receipt.applied6,receipt.t_command)
                 until=time.monotonic()+.8
                 while time.monotonic()<until:
                     if self.cancel_event.wait(.01):raise ValueError('提取已取消')
                     frame=self.frame_provider()
-                    if frame is not None and frame[1]>max(receipt.t_ack,receipt.t_command+.05):
-                        frames.append(frame);return extract_initial_shape(frame[0],count,polarity)
-                raise ValueError('确认保持后没有新图像')
+                    if frame is not None and frame[1]>max(receipt.t_ack,receipt.t_command+.05):break
+                else:raise ValueError('确认保持后没有新图像')
+                if mode!='auto':return frame,None,None
+                try:
+                    from threadpoolctl import threadpool_limits
+                    with threadpool_limits(4):value=self.initial_result(frame[0],config)
+                    if self.cancel_event.is_set():raise ValueError('提取已取消')
+                    return frame,value,None
+                except Exception as error:return frame,None,str(error)
             def done(value):
-                curve,mask,info=value;frame=frames[0]
-                self._freeze();self.canvas.set_frame(frame[0]);self.canvas.frame=frame[0].copy();self.draft_stamp=frame[1]
-                import cv2
-                name='initial_'+uuid.uuid4().hex[:8]
-                cv2.imwrite(str(self.runtime.run_dir/(name+'.png')),frame[0])
-                cv2.imwrite(str(self.runtime.run_dir/(name+'_mask.png')),mask)
-                self.runtime.record('initial_shape_draft',source='pixels',frame=name+'.png',timestamp=frame[1],curve=curve,diagnostics=info)
-                self.canvas.draft=curve.astype(float);self.canvas.radius=info['radius_px'];self.canvas.mode='edit';self.canvas.update()
-                self.alignment_label.setText('图像已冻结。拖动黄点修正；检查 BASE / TIP，可交换方向。确认按钮才计算并提交对齐。')
-                self.message('完整形状草稿已提取，等待人工检查与确认')
+                frame,result,error=value
+                if self.cancel_event.is_set():self.message('已取消提取');return
+                self._freeze(frame);self.sam_points=[];self.sam_labels=[];self.canvas.prompts=[]
+                if error:
+                    self.message(error+'；当前图像已冻结，可框选、点提示或直接手绘。');return
+                if mode=='auto':self.publish_initial(frame[0],result,'initial')
+                else:
+                    self.canvas.mode=mode
+                    self.message('拖动框选完整臂身，尽量排除支架' if mode=='roi' else '从实际 BASE 短边中心连续画到 TIP 短边中心；松开后可拖动黄点')
+            self.message('确认当前保持压力并获取图像；SAM 首次加载可能较慢，后台处理不改变目标压力。')
             self._job(work,done)
         except Exception as e:self.fail(e)
 
-    def draft_changed(self,points):
+    def resegment_initial(self):
+        try:
+            if not self.canvas.frozen:raise ValueError('请先冻结当前图像')
+            if self.camera_identity!=self._camera_key() or self.draft_version!=self.runtime.version:raise ValueError('相机或动作历史变化，请重新提取')
+            config=self.initial_config();config['method']='sam2';image=self.canvas.frame.copy()
+            def done(value):
+                if not self.cancel_event.is_set():self.publish_initial(image,value,'sam_prompt')
+            self._job(lambda:self.initial_result(image,config),done)
+        except Exception as error:self.fail(error)
+
+    def refine_shape(self):
+        try:
+            if self.runtime is None or self.canvas.draft is None or not self.canvas.frozen:
+                raise ValueError('请先自动提取或手动绘制当前完整形状草稿')
+            if self.camera_identity!=self._camera_key() or self.draft_version!=self.runtime.version:
+                raise ValueError('相机或动作历史变化，请重新提取')
+            image=self.canvas.frame.copy();draft=self.canvas.draft.copy()
+            config=self.initial_config();config['search_px']=self.refine_radius.value();preserve=self.keep_endpoints.isChecked()
+            def done(value):
+                if not self.cancel_event.is_set():self.publish_initial(image,value,'refined')
+            self._job(lambda:self.initial_result(image,config,draft,preserve),done)
+        except Exception as e:self.fail(e)
+
+    def change_goal_mode(self,*_):
+        self.invalidate_plan();self.target=None;self.target_ids=None;self.auto_curve=None;self.target_matrix=None;self.target_samples=None
+        self.canvas.target=None;self.leave_drawing()
+        if self.runtime:
+            self.runtime.target_shape=None;self.runtime.target_node_indices=None
+        partial=self.goal_mode.currentIndex()==1;segment=self.local_kind.currentIndex()==1
+        self.canvas.highlight_indices=(np.arange(self.node_start.currentData(),self.node_end.currentData()+1) if partial and segment and self.node_start.currentData() is not None and self.node_end.currentData() is not None else None)
+        self.local_options.setVisible(partial)
+        self.node_start.setVisible(segment);self.node_end.setVisible(segment);self.node_arrow.setVisible(segment)
+        self.goal_button.setText('画一段目标中心线（近 base 端 → 近 tip 端）' if partial and segment else
+                                 ('单击设置末端目标' if partial else '连续画目标中心线（base → tip）'))
+        self.goal_note.setText('局部目标只拟合所选节点，其余臂身由模型决定。节点从 base=0 到 TIP 递增；一段曲线按所选节点等弧长对应。切换模式/区段清除旧目标。当前不含避障。' if partial else
+                              '从已对齐 base 连续画到 tip；全部活动节点参与拟合。切换到局部目标会清除完整目标。当前不含避障。')
+        if partial and self.local_kind.currentIndex()==2:
+            self.goal_button.setText('画一段目标（自动选择匹配臂段）')
+            self.goal_note.setText('只画需要到达的一段，不选择节点。规划在预算内搜索不同臂段和两个绘制方向，按整段曲线采样误差选取；预览标出匹配区段，执行时固定对应关系。当前不含避障。')
+        self.canvas.update()
+
+    def draft_changed(self,points,operator=True):
+        if operator:self.draft_info=dict(self.draft_info,operator_edited=True)
         self.invalidate_plan()
         self.runtime.alignment_confirmed=False
         self.alignment_error=None
@@ -331,11 +504,21 @@ class HereditaryPanel(QWidget):
 
     def set_mode(self,mode):
         try:
+            if mode=='align':
+                if (self.canvas.frozen and self.runtime is not None and self.draft_version==self.runtime.version
+                        and self.camera_identity==self._camera_key()):
+                    self.canvas.mode='align';self.canvas.stroke=[]
+                    self.message('在冻结图像上从 BASE 画到 TIP；手绘可直接确认，图像微调可选')
+                else:self.begin_initial('align')
+                return
             if self.runtime is None or not self.runtime.initialized:raise ValueError('请先提取当前形状，建立保持压力历史')
             if mode=='align':self._freeze()
             elif not self.runtime.ready:raise ValueError('请先完成部署预热')
             else:self.cancel_draft()
+            if mode=='goal' and self.goal_mode.currentIndex()==1 and self.local_kind.currentIndex()==0:mode='goal_point'
             self.invalidate_plan();self.canvas.mode=mode;self.canvas.stroke=[]
+            if mode in ('goal','goal_point'):
+                self.message(self.goal_button.text()+'；新目标将替换旧目标');return
             self.message('按住左键，从 base 连续画到 tip；松开完成 '+('当前形状草稿' if mode=='align' else '目标全形状'))
         except Exception as e:self.fail(e)
 
@@ -344,9 +527,29 @@ class HereditaryPanel(QWidget):
             if self.canvas.mode=='align':
                 self.canvas.draft=resample_curve(points,self.runtime.engine.n_nodes)
                 self.canvas.mode='edit';self.draft_changed(self.canvas.draft)
+                self.draft_info={'method':'operator_drawn','endpoints_preserved':True}
             else:
-                self.target=self.runtime.goal(points);self.runtime.target_shape=self.target.copy();self.canvas.target=transform(self.target,self.runtime.matrix)
-                self.runtime.record('target',camera_curve=points,model_goal=self.target);self.message('目标已记录，可规划全形状接近过程')
+                self.auto_curve=None;self.target_matrix=None;self.target_samples=None
+                if self.goal_mode.currentIndex()==0:
+                    self.target=self.runtime.goal(points);self.target_ids=None
+                    display=self.target
+                elif self.local_kind.currentIndex()==2:
+                    self.auto_curve=transform(resample_curve(points,32),np.linalg.inv(self.runtime.matrix))
+                    self.target=self.auto_curve.copy();self.target_ids=None;display=self.target
+                else:
+                    last=self.runtime.engine.n_nodes-1
+                    if self.local_kind.currentIndex()==0:ids=np.array([last])
+                    else:
+                        start,end=self.node_start.currentData(),self.node_end.currentData()
+                        if start>=end:raise ValueError('一段中心线的起始节点必须小于结束节点')
+                        ids=np.arange(start,end+1)
+                    self.target,self.target_ids=self.runtime.partial_goal(points,ids)
+                    display=self.target[self.target_ids]
+                self.runtime.target_shape=self.target.copy() if self.auto_curve is None else None;self.runtime.target_node_indices=self.target_ids
+                self.canvas.target=transform(display,self.runtime.matrix)
+                self.runtime.record('target',camera_curve=points,model_goal=self.target,
+                                    node_indices=target_indices(self.runtime.engine.n_nodes,self.target_ids) if self.auto_curve is None else None,automatic_curve=self.auto_curve,mode=self.goal_mode.currentText())
+                self.message('目标已记录，可规划并预览；仅受约束节点参与目标误差')
                 self.canvas.mode='view'
             self.invalidate_plan();self.canvas.stroke=[];self.canvas.update()
         except Exception as e:self.fail(e)
@@ -356,17 +559,22 @@ class HereditaryPanel(QWidget):
             if self.canvas.draft is None:raise ValueError('请先自动提取或描画当前完整中心线')
             if self.camera_identity!=self._camera_key() or self.draft_version!=self.runtime.version:
                 raise ValueError('相机或动作历史在提取后变化，请重新提取')
-            matrix,error=self.runtime.align(self.canvas.draft,timestamp=self.draft_stamp)
-            self.draft_version=self.runtime.version;self.alignment_error=error
-            scale=np.linalg.norm(matrix[:2,0]);angle=np.degrees(np.arctan2(matrix[1,0],matrix[0,0]))
-            base=transform(self.runtime.engine.base[None],matrix)[0]
-            self.alignment_label.setText(f'尺度 {scale:.3f} px/mm · 旋转 {angle:.1f}°\nbase ({base[0]:.1f}, {base[1]:.1f}) px · 拟合 RMS {error:.2f} px')
-            if error>8:raise ValueError('对齐 RMS 超过 8 px；检查草稿、方向或初始姿态。尚未确认。')
-            state_error=self.runtime.fit_full_state(self.canvas.draft,self.draft_stamp)
-            self.runtime.confirm_alignment();self.runtime.record('initial_shape_confirmed',curve=self.canvas.draft,timestamp=self.draft_stamp)
-            self.canvas.radius=self.runtime.meta['radius_mm']*scale
-            self.cancel_draft();self.message(f'坐标已固定，初始状态拟合 {state_error:.2f} mm；保持当前压力预热中')
-            self.start_warmup()
+            curve=self.canvas.draft.copy();stamp=self.draft_stamp;source=dict(self.draft_info);ready={'ok':False}
+            def work():
+                from threadpoolctl import threadpool_limits
+                with threadpool_limits(1):return self.runtime.calibrate_full_shape(curve,stamp,self.cancel_event)
+            def done(info):
+                if self.cancel_event.is_set():return
+                scale=info['scale_px_per_mm'];base=info['base_px'];self.alignment_error=info['rms_px']
+                self.alignment_label.setText(f'尺度 {scale:.3f} px/mm · 旋转 {info["angle_deg"]:.1f}°\nbase ({base[0]:.1f}, {base[1]:.1f}) px · RMS {info["rms_px"]:.2f} px / 臂长 {info["rms_fraction"]:.2%}')
+                self.runtime.confirm_alignment();self.runtime.record('initial_shape_confirmed',curve=curve,timestamp=stamp,source=source)
+                self.canvas.radius=self.runtime.meta['radius_mm']*scale
+                self.cancel_draft();ready['ok']=True
+                self.message('尺度、坐标与有界状态拟合完成；保持当前压力，准备连续图像预热')
+            self._job(work,done)
+            def warmup_after_finished():
+                if ready['ok'] and not self.cancel_event.is_set() and not self.zero_pending:self.start_warmup()
+            self.job.finished.connect(warmup_after_finished)
         except Exception as e:self.fail(e)
 
     def start_warmup(self):
@@ -395,6 +603,9 @@ class HereditaryPanel(QWidget):
     def progress(self,info):
         if 'prediction_px' in info:
             self.canvas.prediction=np.asarray(info['prediction_px']);self.canvas.update()
+        if info.get('control_mode')=='open_loop':
+            self.feedback_label.setText('对照：不使用矫正，按规划执行；图像仅记录。'+('本步未获得新图像' if info.get('revision_status')=='frame_missing' else ''))
+            return
         visibility=info.get('visibility',{})
         latency=info.get('compute_ms',info.get('feedback_wait_ms',0))
         timing_label='计算' if 'compute_ms' in info else '等待反馈'
@@ -416,7 +627,7 @@ class HereditaryPanel(QWidget):
 
     def make_plan(self):
         try:
-            if self.target is None:raise ValueError('请先画完整目标')
+            if self.target is None:raise ValueError('请先绘制当前模式的目标')
             self.safety_ui=np.asarray([[c.value() for c in row] for row in self.host._safety_cells])[:,:4]
             self.runtime.configure_limits(*self.safety_ui.T)
             self.runtime.edge_polarity=self.polarity.currentData()
@@ -424,27 +635,48 @@ class HereditaryPanel(QWidget):
             self.invalidate_plan();h=self.horizon.value();goal=self.target.copy()
             tolerance=self.tolerance.value();maximum=self.max_node.value()
             settings=dict(budget_s=self.planning_budget.value(),iterations=self.planning_iterations.value(),shooting_nfev=self.planning_shooting.value(),horizon_step=self.planning_stride.value())
-            self._job(lambda:self.runtime.plan_to_tolerance(goal,tolerance,maximum,h,cancel=self.cancel_event,**settings),self.planned)
+            if self.auto_curve is not None:
+                curve=self.auto_curve.copy()
+                self._job(lambda:self.runtime.plan_any_segment(curve,tolerance,maximum,h,cancel=self.cancel_event,**settings),self.planned)
+            else:
+                settings['node_indices']=None if self.target_ids is None else self.target_ids.copy()
+                self._job(lambda:self.runtime.plan_to_tolerance(goal,tolerance,maximum,h,cancel=self.cancel_event,**settings),self.planned)
         except Exception as e:self.fail(e)
     def planned(self,plan):
         self.plan=plan
+        self.target_matrix=plan.get('target_matrix');self.target_samples=plan.get('target_samples')
+        if plan.get('matching_mode')=='any_segment':
+            self.target=plan['goal'].copy();self.target_ids=plan['node_indices'].copy()
+            self.runtime.target_shape=self.target.copy();self.runtime.target_node_indices=self.target_ids
+            self.canvas.highlight_indices=self.target_ids.copy()
+        self.trial_check.setChecked(False);self.trial_check.setVisible(not plan['qualified'])
+        self.trial_note.setText('' if plan['qualified'] else f'未达到目标：平均误差 {plan["mean_error"]:.2f} mm，最大误差 {plan["max_error"]:.2f} mm。可检查紫色预览后勾选试运行；不表示已到位。')
         p=self.runtime.mapping.expand(plan['actions'])
         predicted=self.runtime.engine.rollout(plan['state'],plan['actions'])
-        error=float(np.linalg.norm(predicted[-1]-plan['goal'],axis=1)[1:].mean())
-        np.savez_compressed(self.runtime.run_dir/('plan_'+uuid.uuid4().hex[:8]+'.npz'),**{k:v for k,v in plan.items() if k not in ('trace','prediction','attempts')},prediction=predicted)
-        self.preview.setPlainText(f'模型内终态全形状残差 {error:.3f} mm\n每腔最小 {p.min(0).round(2)}\n每腔最大 {p.max(0).round(2)}\n步数 {len(p)}，dt={self.runtime.dt:.3f}s\n初始规划耗时 {plan.get("planning_ms",0)/1000:.3f} s')
+        error=float(target_distances(predicted[-1],plan['goal'],plan.get('node_indices'),plan.get('target_matrix'),plan.get('target_samples')).mean())
+        np.savez_compressed(self.runtime.run_dir/('plan_'+uuid.uuid4().hex[:8]+'.npz'),**{k:v for k,v in plan.items() if k not in ('trace','prediction','attempts','matching_attempts')},prediction=predicted)
+        self.preview.setPlainText(f'模型内终态目标残差（受约束节点） {error:.3f} mm\n每腔最小 {p.min(0).round(2)}\n每腔最大 {p.max(0).round(2)}\n步数 {len(p)}，dt={self.runtime.dt:.3f}s\n初始规划耗时 {plan.get("planning_ms",0)/1000:.3f} s')
         self.preview.appendPlainText('搜索：'+', '.join(f'{a["horizon"]}步/{a.get("total_ms",0):.0f}ms' for a in plan['attempts']))
-        self.preview.appendPlainText(('预测达标' if plan['qualified'] else '当前搜索未达标，不能执行')+f' · 最大节点 {plan["max_error"]:.3f} mm')
+        self.preview.appendPlainText(('预测达标' if plan['qualified'] else '当前搜索未达标，可确认后试运行')+f' · 最大目标点 {plan["max_error"]:.3f} mm')
+        if plan.get('matching_mode')=='any_segment':
+            self.preview.appendPlainText(f'自动匹配节点 {self.target_ids[0]} → {self.target_ids[-1]}，'+('反向' if plan['matching_reversed'] else '正向')+f'绘制；尝试 {len(plan["matching_attempts"])}/{plan["matching_candidates_total"]} 个对应。误差覆盖32个曲线采样点。')
         self.preview_plot.clear()
         for i in range(6):self.preview_plot.plot(np.arange(1,len(p)+1)*self.runtime.dt,p[:,i],pen=(i,6),name=f'c{i}')
         self.scrubber.setRange(0,len(p)-1);self.show_preview(0)
-        self.message('找到预测达标计划，请播放预览后确认执行' if plan['qualified'] else '当前搜索未达标；调整目标或容限后重新规划')
+        self.message('找到预测达标计划，请播放预览后确认执行' if plan['qualified'] else '当前搜索未达标；可重新规划，或到第4页明确确认后试运行')
     def arm(self,checked):
-        if checked and (self.plan is None or not self.plan.get('qualified',False)):self.arm_check.setChecked(False);self.fail('请先规划');return
+        if checked and (self.plan is None or (not self.plan.get('qualified',False) and not self.trial_check.isChecked())):
+            self.arm_check.setChecked(False);self.message('请先生成计划；未达标计划需检查预览并勾选允许试运行');return
         self.armed=bool(checked);self.canvas.locked=self.armed
         for c in self.controls:
             if c not in (self.arm_check,self.execute_button):c.setEnabled(not self.armed)
         self.host._refresh()
+    def execution_mode_changed(self,checked):
+        self.arm_check.setChecked(False)
+        self.trial_check.setChecked(False)
+        self.execute_button.setText('开始实验运动：仅按规划执行（不矫正）' if checked else '开始实验运动：执行 Analytic B 图像反馈')
+        self.message('对照模式：仅按规划运行，图像仅记录；请检查计划后重新确认' if checked else '已启用 Analytic B 图像矫正；请检查计划后重新确认')
+
     def frame_provider(self):
         return self.host.hardware.latest_camera_frame(self.host._current_cam_index)
     def _camera_key(self):
@@ -462,15 +694,15 @@ class HereditaryPanel(QWidget):
             if self.host.hardware.states['camera']!=DeviceState.READY:raise ValueError('相机未 READY')
             if frame is None or time.monotonic()-frame[1]>.3:raise ValueError('没有新相机图像')
             self.results.clear()
-            transport=self._transport();plan=self.plan
+            transport=self._transport();plan=self.plan;allow_trial=self.trial_check.isChecked()
             config=self.occlusion_controls.config
             self.executor=HereditaryExecutor(self.runtime,transport,self.frame_provider,
                 image_transform=config.apply,camera_provider=self.host.hardware.camera_frames,
                 evaluation_provider=self.host.hardware.evaluation_samples,selected_camera=self.host._current_cam_index,
                 metadata=dict(hardware=self.host.hardware.snapshot(),software_occlusion=dict(enabled=config.enabled,rectangles=config.rectangles)),
-                max_missing=self.max_missing.value(),max_skipped=self.max_skipped.value(),settle_s=self.feedback_settle.value()/1000)
+                max_missing=self.max_missing.value(),max_skipped=self.max_skipped.value(),settle_s=self.feedback_settle.value()/1000,use_correction=not self.open_loop_check.isChecked())
             self.arm_check.blockSignals(True);self.arm_check.setChecked(False);self.arm_check.blockSignals(False);self.armed=False
-            self._job(lambda:self.executor.execute(plan),lambda rows:self.completed(rows))
+            self._job(lambda:self.executor.execute(plan,allow_unqualified=allow_trial),lambda rows:self.completed(rows))
             self.executor.callback=self.job.progress.emit;self.job.progress.connect(self.progress)
         except Exception as e:self.fail(e)
     def completed(self,rows):
@@ -531,9 +763,9 @@ class HereditaryPanel(QWidget):
                             _,info=r.feedback(self.occlusion_controls.config.apply(fresh[0])[0],fresh[1],np.empty((0,4)),np.empty((0,r.engine.n_nodes,2)))
                         r.record('hold_observation',**info,state=r.state)
                         if info.get('edges',0):self.progress(info)
-                        if self.target is not None and info.get('prediction_px') is not None:
+                        if self.target is not None and (self.auto_curve is None or self.target_ids is not None) and info.get('prediction_px') is not None:
                             model=transform(np.asarray(info['prediction_px']),np.linalg.inv(r.matrix))
-                            error=float(np.linalg.norm(model[1:]-self.target[1:],axis=1).mean())
+                            error=float(target_distances(model,self.target,self.target_ids,self.target_matrix,self.target_samples).mean())
                             self.feedback_label.setText(self.feedback_label.text()+f' · 模型目标差 {error:.2f} mm（非实测全形状）')
                     with r.lock:z,u=r.state_at(time.monotonic())
                     self.canvas.prediction=transform(r.engine.observe(z,u),r.matrix);self.canvas.radius=r.meta["radius_mm"]*np.linalg.norm(r.matrix[:2,0]);self.canvas.update()

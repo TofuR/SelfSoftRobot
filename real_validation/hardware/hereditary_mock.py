@@ -32,7 +32,13 @@ class HereditaryMockCamera(QObject):
     def emit_frame(self):
         image=np.full((480,640,3),(45,35,25),np.uint8)
         curve=self.current_curve();radius=self.meta['radius_mm']*np.linalg.norm(self.matrix[:2,0])
-        cv2.polylines(image,[np.rint(curve).astype(np.int32)],False,(225,225,225),round(2*radius),cv2.LINE_AA)
+        # Model nodes represent short-edge centers. A thick cv2 polyline adds
+        # round caps beyond both nodes and biases pixel-derived scale/base.
+        tangent=np.gradient(curve,axis=0)
+        normal=np.column_stack([-tangent[:,1],tangent[:,0]])
+        normal/=np.maximum(np.linalg.norm(normal,axis=1,keepdims=True),1e-8)
+        polygon=np.vstack([curve+radius*normal,(curve-radius*normal)[::-1]])
+        cv2.fillPoly(image,[np.rint(polygon).astype(np.int32)],(225,225,225),cv2.LINE_AA)
         if self.occluded:image[222:278,295:351]=35
         cv2.putText(image,'MODEL MOCK - NOT PHYSICAL',(12,28),cv2.FONT_HERSHEY_SIMPLEX,.55,(80,180,240),1)
         self.frame_ready.emit(image,time.monotonic())

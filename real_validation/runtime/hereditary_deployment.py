@@ -17,6 +17,7 @@ import numpy as np
 
 from .hereditary_math import FrozenHereditary, fast_suffix_b
 from .hereditary_bounds import ActionBounds
+from .shape_target import target_indices, target_distances, segment_projection, validate_projection
 from ..perception.partial_edges import extract_edges_vectorized
 
 
@@ -295,12 +296,27 @@ class HereditaryDeployment:
         result[0]=self.engine.base
         return result
 
-    def plan(self,goal,horizon, *, snapshot=None, seed_actions=None, deadline=None, cancel=None, iterations=24):
+    def partial_goal(self, camera_curve, node_indices):
+        if not self.alignment_confirmed:raise ValueError('请先确认对齐叠图')
+        ids=target_indices(self.engine.n_nodes,node_indices)
+        points=np.asarray(camera_curve,dtype=float)
+        if len(ids)==1:
+            if points.shape!=(1,2) or not np.isfinite(points).all():raise ValueError('请单击指定一个目标点')
+        else:points=resample_curve(points,len(ids))
+        with self.lock:
+            z,u=self.state_at(self.clock())
+            result=self.engine.observe(z,u).copy()
+        result[ids]=transform(points,np.linalg.inv(self.matrix))
+        return result,ids
+
+    def plan(self,goal,horizon, *, snapshot=None, seed_actions=None, deadline=None, cancel=None, iterations=24, node_indices=None, target_matrix=None, target_samples=None):
         if not 2<=horizon<=self.meta['max_horizon']:raise ValueError('规划长度超出部署包实验上限')
         with self.lock:
             if self.fault or self.pending:raise ValueError(self.fault or '等待指令 ACK')
             if snapshot is None:z,u=self.state_at(self.clock());version=self.version
             else:z,u,version=snapshot
+        ids=target_indices(self.engine.n_nodes,node_indices)
+        target_distances(self.engine.observe(z,u),goal,ids,target_matrix,target_samples)
         self.set_phase('planning',reason='goal_plan_requested')
         baseline=np.tile(u,(horizon,1))
         # ReLU spline autograd is zero exactly at the lower knot. A feasible
@@ -311,19 +327,28 @@ class HereditaryDeployment:
         if seed_actions is not None:
             initial=np.vstack([seed_actions,np.tile(seed_actions[-1],(max(0,horizon-len(seed_actions)),1))])[:horizon]
             old=self.bounds.project(initial,u)
-        # Build an explicit whole-shape approach reference ending at the drawn
-        # goal. All nodes are fitted; this is not a terminal-only objective.
+        # Only explicitly mapped nodes contribute to approach and terminal costs.
         current=self.engine.observe(z,u)
         reference=current[None]+np.minimum(np.arange(1,horizon+1)/(horizon*.7),1)[:,None,None]*(goal-current)
+        if target_matrix is not None:
+            target_matrix,target_samples=validate_projection(target_matrix,target_samples,self.engine.n_nodes,ids)
+            sampled=target_matrix@current
+            reference=sampled[None]+np.minimum(np.arange(1,horizon+1)/(horizon*.7),1)[:,None,None]*(target_samples-sampled)
+        def cost(actions):
+            shapes=self.engine.rollout(z,actions)
+            residual=shapes[:,ids]-reference[:,ids] if target_matrix is None else np.einsum('sn,tnc->tsc',target_matrix,shapes)-reference
+            return np.mean(residual**2)
         trace=[]
         for _ in range(iterations):
             if cancel is not None and cancel.is_set():raise ValueError('规划已取消')
             if deadline is not None and self.clock()>deadline:break
-            old,info=fast_suffix_b(self.engine,z,old,u,reference,self.bounds);trace.append(info)
+            old,info=fast_suffix_b(self.engine,z,old,u,reference,self.bounds,node_indices=ids,target_matrix=target_matrix);trace.append(info)
             if not info['accepted']:break
-        if np.mean((self.engine.rollout(z,old)-reference)**2)>np.mean((self.engine.rollout(z,baseline)-reference)**2):
+        if cost(old)>cost(baseline):
             old=baseline
-        return dict(actions=old,reference=reference,state=z,previous=u,version=version,created=self.clock(),trace=trace,goal=goal)
+        result=dict(actions=old,reference=reference,state=z,previous=u,version=version,created=self.clock(),trace=trace,goal=goal,node_indices=ids)
+        if target_matrix is not None:result.update(target_matrix=target_matrix.copy(),target_samples=target_samples.copy())
+        return result
 
     def fit_full_state(self, curve, timestamp):
         """Fit bounded memory with the camera transform fixed, retaining a prior."""
@@ -350,30 +375,93 @@ class HereditaryDeployment:
             self.record('full_shape_state_fit',mean_mm=error,state=z,prior=prior,matrix=self.matrix)
             return error
 
-    def plan_to_tolerance(self, goal, tolerance=1., max_node=3., max_horizon=None, budget_s=15., cancel=None, iterations=24, shooting_nfev=30, horizon_step=20):
+    def calibrate_full_shape(self,curve,timestamp,cancel=None,max_nfev=60):
+        """Fit camera similarity and bounded memory together before readiness checks.
+
+        The state prior prevents claiming unique physical memory from one image.
+        Residual acceptance is relative to arm length, independent of camera scale.
+        """
+        from scipy.optimize import least_squares
+        target=resample_curve(curve,self.engine.n_nodes)
+        length=float(np.linalg.norm(np.diff(target,axis=0),axis=1).sum())
+        if length<20:raise ValueError('草稿太小，无法可靠标定；请检查完整中心线')
+        with self.lock:
+            if self.pending or self.fault:raise ValueError(self.fault or '等待压力 ACK')
+            prior,u=self.state_at(timestamp);version=self.version
+            prior=prior.copy();u=u.copy()
+        matrix,before=similarity_alignment(self.engine.observe(prior,u),target)
+        scale0=float(np.linalg.norm(matrix[:2,0]));theta0=float(np.arctan2(matrix[1,0],matrix[0,0]))
+        drive,_=self.engine.drive(u);low,_=self.engine.drive(self.bounds.lower);high,_=self.engine.drive(self.bounds.upper)
+        lo=np.r_[(drive[:,None]-self.engine.thresholds).ravel(),np.repeat(np.minimum(low,0),self.engine.n_maxwell)]
+        hi=np.r_[(drive[:,None]+self.engine.thresholds).ravel(),np.repeat(np.maximum(high,0),self.engine.n_maxwell)]
+        # Fixed play operators remain fixed, rather than giving the solver equal bounds.
+        active=np.flatnonzero(hi-lo>1e-10);prior=np.clip(prior,lo,hi)
+        def evaluate(v,derivatives=False):
+            if cancel is not None and cancel.is_set():raise ValueError('部署标定已取消')
+            z=prior.copy();z[active]=v[:-2];theta,logscale=v[-2:];scale=np.exp(logscale)
+            rotation=np.array([[np.cos(theta),-np.sin(theta)],[np.sin(theta),np.cos(theta)]])
+            if derivatives:shape,jac,_=self.engine.observe(z,u,derivatives=True)
+            else:shape=self.engine.observe(z,u)
+            relative=shape-self.engine.base
+            pixels=scale*relative@rotation.T+target[0]
+            residual=np.r_[((pixels[1:]-target[1:])/scale0).ravel(),(z[active]-prior[active])/.08]
+            if not derivatives:return residual
+            jstate=scale*np.einsum('ij,njz->niz',rotation,jac[:,:,active])[1:].reshape(-1,len(active))/scale0
+            rotated=relative@rotation.T
+            jtheta=scale*np.column_stack([-rotated[:,1],rotated[:,0]])[1:].ravel()/scale0
+            jscale=(scale*rotated)[1:].ravel()/scale0
+            return np.vstack([np.column_stack([jstate,jtheta,jscale]),np.column_stack([np.eye(len(active))/.08,np.zeros((len(active),2))])])
+        start=np.r_[prior[active],theta0,np.log(scale0)]
+        result=least_squares(evaluate,start,jac=lambda v:evaluate(v,True),
+                             bounds=(np.r_[lo[active],theta0-np.pi,np.log(scale0/2)],np.r_[hi[active],theta0+np.pi,np.log(scale0*2)]),max_nfev=max_nfev)
+        z=prior.copy();z[active]=result.x[:-2];theta,logscale=result.x[-2:];scale=float(np.exp(logscale))
+        matrix=np.eye(3);matrix[:2,:2]=scale*np.array([[np.cos(theta),-np.sin(theta)],[np.sin(theta),np.cos(theta)]])
+        matrix[:2,2]=target[0]-matrix[:2,:2]@self.engine.base
+        pixels=transform(self.engine.observe(z,u),matrix)
+        error=float(np.sqrt(np.mean(np.sum((pixels-target)**2,axis=1))))
+        info=dict(rms_px=error,rms_mm=error/scale,rms_fraction=error/length,scale_px_per_mm=scale,
+                  angle_deg=float(np.degrees(theta)),base_px=target[0].tolist(),initial_rms_px=before,nfev=result.nfev,
+                  accepted=error/length<=.03,method='joint_similarity_bounded_state_prior')
+        with self.lock:
+            if self.version!=version or self.pending or self.fault:raise ValueError('标定期间压力或状态变化，请重新提取')
+            if cancel is not None and cancel.is_set():raise ValueError('部署标定已取消')
+            self.record('joint_initial_calibration',curve=target,matrix=matrix,state=z,diagnostics=info)
+            if not info['accepted']:raise ValueError(f'状态拟合后形状 RMS 仍为臂长的 {error/length:.1%}（上限 3%）；请检查完整草稿、BASE/TIP、腔道映射或姿态')
+            self.matrix=matrix;self.at=timestamp;self.state=z;self.action=u;self.history.clear();self._snapshot();self.version+=1
+            self.alignment_confirmed=False;self.ready=False
+        return info
+
+    def plan_to_tolerance(self, goal, tolerance=1., max_node=3., max_horizon=None, budget_s=15., cancel=None, iterations=24, shooting_nfev=30, horizon_step=20, node_indices=None, target_matrix=None, target_samples=None, snapshot=None):
         started=self.clock()
+        ids=target_indices(self.engine.n_nodes,node_indices)
         if not self.ready:raise ValueError('模型尚未通过部署预热')
         if any(isinstance(v,bool) or int(v)!=v or not 1<=v<=limit for v,limit in ((iterations,100),(shooting_nfev,200),(horizon_step,80))):raise ValueError('规划迭代/评估次数和搜索步长超出范围')
         if not np.isfinite([tolerance,max_node,budget_s]).all() or min(tolerance,max_node,budget_s)<=0:raise ValueError('规划容限和预算必须为有限正数')
         if max_horizon is not None and not 2<=max_horizon<=self.meta['max_horizon']:raise ValueError('搜索长度超出模型包上限')
         with self.lock:
-            z,u=self.state_at(self.clock());snapshot=(z.copy(),u.copy(),self.version)
+            if snapshot is None:
+                z,u=self.state_at(self.clock());snapshot=(z.copy(),u.copy(),self.version)
+            else:z,u,_=snapshot
+        if target_matrix is not None:target_matrix,target_samples=validate_projection(target_matrix,target_samples,self.engine.n_nodes,ids)
+        def residual_shape(shape):
+            return shape[ids]-goal[ids] if target_matrix is None else target_matrix@shape-target_samples
+        def distances(shape):return np.linalg.norm(residual_shape(shape),axis=1)
         end=started+budget_s;best=None;seed=None;attempts=[]
         maximum=int(max_horizon or self.meta['max_horizon'])
         horizons=sorted(set([min(10,maximum),maximum]+list(range(horizon_step,maximum+1,horizon_step))))
         horizons=[h for h in horizons if h>=2]
-        config=dict(tolerance=tolerance,max_node=max_node,max_horizon=maximum,budget_s=budget_s,iterations=iterations,shooting_nfev=shooting_nfev,horizon_step=horizon_step)
+        config=dict(tolerance=tolerance,max_node=max_node,max_horizon=maximum,budget_s=budget_s,iterations=iterations,shooting_nfev=shooting_nfev,horizon_step=horizon_step,node_indices=ids.tolist())
         for h in horizons:
             if cancel is not None and cancel.is_set():raise ValueError('规划已取消')
             if attempts and self.clock()>end:break
             attempt_start=self.clock()
-            candidate=self.plan(goal,h,snapshot=snapshot,seed_actions=seed,deadline=end,cancel=cancel,iterations=iterations)
+            candidate=self.plan(goal,h,snapshot=snapshot,seed_actions=seed,deadline=end,cancel=cancel,iterations=iterations,node_indices=ids,target_matrix=target_matrix,target_samples=target_samples)
             b_done=self.clock();shooting_start=b_done
             prediction=self.engine.rollout(z,candidate['actions'])
-            # Initial planning can afford bounded terminal shooting. The B
-            # suffix controller remains unchanged; the accepted feasible path
-            # becomes its whole-shape tracking reference.
-            if np.linalg.norm(prediction[-1,1:]-goal[1:],axis=1).mean()>tolerance and self.clock()<end:
+            # Bounded terminal shooting uses the same selected nodes as B.
+            # For partial targets keep the requested terminal geometry in the
+            # feedback reference; free nodes never become tracking constraints.
+            if distances(prediction[-1]).mean()>tolerance and self.clock()<end:
                 from scipy.optimize import least_squares
                 active=np.flatnonzero(self.bounds.upper-self.bounds.lower>1e-8)
                 def actions_for(parameters):
@@ -382,17 +470,18 @@ class HereditaryDeployment:
                 def residual(parameters):
                     if cancel is not None and cancel.is_set():raise ValueError('规划已取消')
                     if self.clock()>end:raise TimeoutError('initial planning budget')
-                    return (self.engine.rollout(z,actions_for(parameters))[-1,1:]-goal[1:]).ravel()
+                    return residual_shape(self.engine.rollout(z,actions_for(parameters))[-1]).ravel()
                 if len(active):
                     try:
                         seed_pressure=np.clip(candidate['actions'][-1,active],self.bounds.lower[active]+1e-7,self.bounds.upper[active]-1e-7)
                         solved=least_squares(residual,seed_pressure,bounds=(self.bounds.lower[active],self.bounds.upper[active]),max_nfev=shooting_nfev,ftol=1e-5,xtol=1e-5,gtol=1e-5)
                         actions=actions_for(solved.x);shooting=self.engine.rollout(z,actions)
-                        if np.linalg.norm(shooting[-1,1:]-goal[1:],axis=1).mean()<np.linalg.norm(prediction[-1,1:]-goal[1:],axis=1).mean():
-                            candidate['actions']=actions;prediction=shooting;candidate['reference']=shooting.copy()
+                        if distances(shooting[-1]).mean()<distances(prediction[-1]).mean():
+                            candidate['actions']=actions;prediction=shooting
+                            if node_indices is None and target_matrix is None:candidate['reference']=shooting.copy()
                     except TimeoutError:pass
-            distances=np.linalg.norm(prediction[-1,1:]-goal[1:],axis=1)
-            candidate.update(prediction=prediction,mean_error=float(distances.mean()),max_error=float(distances.max()),tolerance=float(tolerance),max_node=float(max_node))
+            errors=distances(prediction[-1])
+            candidate.update(prediction=prediction,mean_error=float(errors.mean()),max_error=float(errors.max()),tolerance=float(tolerance),max_node=float(max_node))
             candidate['qualified']=candidate['mean_error']<=tolerance and candidate['max_error']<=max_node
             attempts.append(dict(horizon=h,mean_mm=candidate['mean_error'],max_mm=candidate['max_error'],b_ms=(b_done-attempt_start)*1000,shooting_and_rollout_ms=(self.clock()-shooting_start)*1000,total_ms=(self.clock()-attempt_start)*1000,b_iterations=len(candidate['trace'])))
             if best is None or candidate['mean_error']<best['mean_error']:best=candidate
@@ -401,6 +490,61 @@ class HereditaryDeployment:
         best['attempts']=attempts
         best.update(planning_ms=(self.clock()-started)*1000,planning_config=config,planning_exit='qualified' if best['qualified'] else ('budget_exhausted' if self.clock()>=end else 'search_exhausted'))
         self.record('horizon_search',attempts=attempts,qualified=best['qualified'],planning_ms=best['planning_ms'],config=config,exit_reason=best['planning_exit'])
+        return best
+
+    def plan_any_segment(self, model_curve, tolerance=1., max_node=3., max_horizon=None,
+                         budget_s=15., cancel=None, iterations=24, shooting_nfev=30, horizon_step=20):
+        """Budgeted search of material intervals and both drawing directions.
+
+        Every candidate fits 32 samples along the whole curve. The chosen
+        correspondence is fixed in the returned plan for preview and feedback.
+        """
+        if not self.ready:raise ValueError('模型尚未通过部署预热')
+        if not np.isfinite([budget_s,tolerance,max_node]).all() or min(budget_s,tolerance,max_node)<=0:
+            raise ValueError('规划容限和预算必须为有限正数')
+        if any(isinstance(v,bool) or int(v)!=v or not 1<=v<=limit for v,limit in ((iterations,100),(shooting_nfev,200),(horizon_step,80))):
+            raise ValueError('规划迭代参数无效')
+        curve=resample_curve(model_curve,32)
+        started=self.clock();end=started+budget_s;screen_end=started+.55*budget_s
+        with self.lock:
+            z,u=self.state_at(started);snapshot=(z.copy(),u.copy(),self.version)
+        current=self.engine.observe(z,u)
+        length=np.linalg.norm(np.diff(curve,axis=0),axis=1).sum()
+        candidates=[]
+        for first in range(1,self.engine.n_nodes-1):
+            for last in range(first+1,self.engine.n_nodes):
+                ids=np.arange(first,last+1);matrix=segment_projection(self.engine.n_nodes,ids)
+                sampled=matrix@current
+                span=np.linalg.norm(np.diff(current[ids],axis=0),axis=1).sum()
+                for reverse in (False,True):
+                    samples=curve[::-1].copy() if reverse else curve.copy()
+                    rank=float(np.linalg.norm(sampled-samples,axis=1).mean()+abs(span-length))
+                    goal=current.copy();goal[ids]=resample_curve(samples,len(ids))
+                    candidates.append((rank,ids,matrix,samples,goal,reverse))
+        if not candidates:raise ValueError('模型活动节点不足以匹配一段曲线')
+        candidates.sort(key=lambda c:c[0]);attempts=[];best=None
+        settings=dict(tolerance=tolerance,max_node=max_node,max_horizon=max_horizon,cancel=cancel,horizon_step=horizon_step,snapshot=snapshot)
+        for _,ids,matrix,samples,goal,reverse in candidates:
+            if cancel is not None and cancel.is_set():raise ValueError('规划已取消')
+            remaining=screen_end-self.clock()
+            if best is not None and remaining<=0:break
+            plan=self.plan_to_tolerance(goal,**settings,budget_s=max(.001,min(.35,remaining)),
+                iterations=min(iterations,2),shooting_nfev=min(shooting_nfev,8),node_indices=ids,target_matrix=matrix,target_samples=samples)
+            plan['matching_reversed']=reverse
+            attempts.append(dict(node_indices=ids.tolist(),reversed=reverse,mean_mm=plan['mean_error'],max_mm=plan['max_error'],qualified=plan['qualified'],planning_ms=plan['planning_ms']))
+            if best is None or plan['mean_error']<best['mean_error']:best=plan
+            if plan['qualified']:best=plan;break
+        if not best['qualified'] and end-self.clock()>.01:
+            refined=self.plan_to_tolerance(best['goal'],**settings,budget_s=end-self.clock(),iterations=iterations,
+                shooting_nfev=shooting_nfev,node_indices=best['node_indices'],target_matrix=best['target_matrix'],target_samples=best['target_samples'])
+            if refined['qualified'] or refined['mean_error']<best['mean_error']:
+                refined['matching_reversed']=best['matching_reversed'];best=refined
+        best.update(matching_mode='any_segment',goal_curve=curve,matching_attempts=attempts,
+                    matching_candidates_total=len(candidates),planning_ms=(self.clock()-started)*1000)
+        best['planning_config'].update(matching_mode='any_segment',budget_s=budget_s,iterations=iterations,shooting_nfev=shooting_nfev)
+        best['planning_exit']='qualified' if best['qualified'] else ('budget_exhausted' if self.clock()>=end else 'search_exhausted')
+        self.record('segment_matching',node_indices=best['node_indices'],reversed=best['matching_reversed'],
+                    attempts=attempts,candidates_total=len(candidates),qualified=best['qualified'],planning_ms=best['planning_ms'])
         return best
 
     def feedback_snapshot(self):
@@ -445,10 +589,13 @@ class HereditaryDeployment:
             visible_target_error=None
             if getattr(self,'target_shape',None) is not None and len(evidence.pixels):
                 target_px=transform(self.target_shape,self.matrix)
-                ids=evidence.segments;a=target_px[ids];v=target_px[ids+1]-a
-                fraction=np.clip(np.sum((evidence.pixels-a)*v,axis=1)/np.maximum(np.sum(v*v,axis=1),1e-8),0,1)
-                residual=np.abs(np.linalg.norm(a+fraction[:,None]*v-evidence.pixels,axis=1)-radius)
-                visible_target_error=float(residual.mean()/np.linalg.norm(self.matrix[:2,0]))
+                selected=target_indices(self.engine.n_nodes,getattr(self,'target_node_indices',None))
+                valid=np.isin(evidence.segments,selected)&np.isin(evidence.segments+1,selected)
+                ids=evidence.segments[valid];pixels=evidence.pixels[valid]
+                a=target_px[ids];v=target_px[ids+1]-a
+                fraction=np.clip(np.sum((pixels-a)*v,axis=1)/np.maximum(np.sum(v*v,axis=1),1e-8),0,1)
+                residual=np.abs(np.linalg.norm(a+fraction[:,None]*v-pixels,axis=1)-radius)
+                if len(residual):visible_target_error=float(residual.mean()/np.linalg.norm(self.matrix[:2,0]))
             edges_done=self.clock()
             corrected,observer=edge_state_update(self.engine,z,u,evidence,self.matrix,radius,self.bounds)
             observer_done=self.clock()
@@ -469,7 +616,7 @@ class HereditaryDeployment:
             state=advance(self.engine,corrected,last,boundary-at,self.dt)
             control={'accepted':False,'reason':'no_evidence_or_suffix'};new=old.copy()
             if len(old) and observer['count']:
-                new,control=fast_suffix_b(self.engine,state,old,last,reference,self.bounds)
+                new,control=fast_suffix_b(self.engine,state,old,last,reference,self.bounds,node_indices=getattr(self,'control_node_indices',None),target_matrix=getattr(self,'control_target_matrix',None))
             return new,dict(edge_ms=(edges_done-started)*1000,observer_ms=(observer_done-edges_done)*1000,visible_target_error_mm=visible_target_error,prediction_px=transform(self.engine.observe(state,last),self.matrix),observer=observer,control=control,visibility=visibility,edges=len(evidence.pixels),frame_age_ms=(started-timestamp)*1000,compute_ms=(self.clock()-started)*1000)
 
     def close(self):
