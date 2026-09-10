@@ -287,6 +287,19 @@ class HereditaryDeployment:
         if self.matrix is None:raise ValueError('请先绘制当前完整形状建立对齐')
         self.alignment_confirmed=True;self.record('alignment_confirmed',matrix=self.matrix)
 
+    def prepare_rewarmup(self):
+        """Reuse geometry and known ACK history; readiness still needs new images."""
+        with self.lock:
+            if not self.initialized or not self.history or self.fault or self.pending:
+                raise ValueError(self.fault or '动作历史未知或指令未确认，不能复用部署状态')
+            if self.matrix is None or not self.alignment_confirmed:
+                raise ValueError('相机尚未对齐，请先确认完整形状')
+            if np.any(self.action<self.bounds.lower-1e-7) or np.any(self.action>self.bounds.upper+1e-7):
+                raise ValueError('当前压力超出模型范围，请先调整压力')
+            self.ready=False
+            self.set_phase('initial_hold',reason='reuse_alignment_for_warmup')
+            self.record('rewarmup_started',matrix=self.matrix,applied6=self.mapping.expand(self.action))
+
     def goal(self,camera_curve):
         if not self.alignment_confirmed:raise ValueError('请先确认对齐叠图')
         curve=resample_curve(camera_curve,self.engine.n_nodes)
@@ -431,13 +444,18 @@ class HereditaryDeployment:
             self.alignment_confirmed=False;self.ready=False
         return info
 
-    def plan_to_tolerance(self, goal, tolerance=1., max_node=3., max_horizon=None, budget_s=15., cancel=None, iterations=24, shooting_nfev=30, horizon_step=20, node_indices=None, target_matrix=None, target_samples=None, snapshot=None):
+    def plan_to_tolerance(self, goal, tolerance=1., max_node=3., max_horizon=None, budget_s=15., cancel=None, iterations=24, shooting_nfev=30, horizon_step=20, node_indices=None, target_matrix=None, target_samples=None, snapshot=None, reserve_steps=0):
         started=self.clock()
         ids=target_indices(self.engine.n_nodes,node_indices)
         if not self.ready:raise ValueError('模型尚未通过部署预热')
         if any(isinstance(v,bool) or int(v)!=v or not 1<=v<=limit for v,limit in ((iterations,100),(shooting_nfev,200),(horizon_step,80))):raise ValueError('规划迭代/评估次数和搜索步长超出范围')
         if not np.isfinite([tolerance,max_node,budget_s]).all() or min(tolerance,max_node,budget_s)<=0:raise ValueError('规划容限和预算必须为有限正数')
         if max_horizon is not None and not 2<=max_horizon<=self.meta['max_horizon']:raise ValueError('搜索长度超出模型包上限')
+        if isinstance(reserve_steps,bool) or not np.isfinite(reserve_steps) or int(reserve_steps)!=reserve_steps or not 0<=reserve_steps<=100:
+            raise ValueError('末端调整余量必须为 0..100 步整数')
+        reserve_steps=int(reserve_steps)
+        if int(max_horizon or self.meta['max_horizon'])+reserve_steps>200:
+            raise ValueError('主规划上限与末端余量合计不能超过 200 步')
         with self.lock:
             if snapshot is None:
                 z,u=self.state_at(self.clock());snapshot=(z.copy(),u.copy(),self.version)
@@ -450,7 +468,7 @@ class HereditaryDeployment:
         maximum=int(max_horizon or self.meta['max_horizon'])
         horizons=sorted(set([min(10,maximum),maximum]+list(range(horizon_step,maximum+1,horizon_step))))
         horizons=[h for h in horizons if h>=2]
-        config=dict(tolerance=tolerance,max_node=max_node,max_horizon=maximum,budget_s=budget_s,iterations=iterations,shooting_nfev=shooting_nfev,horizon_step=horizon_step,node_indices=ids.tolist())
+        config=dict(tolerance=tolerance,max_node=max_node,max_horizon=maximum,reserve_steps=reserve_steps,max_total_steps=maximum+reserve_steps,budget_s=budget_s,iterations=iterations,shooting_nfev=shooting_nfev,horizon_step=horizon_step,node_indices=ids.tolist())
         for h in horizons:
             if cancel is not None and cancel.is_set():raise ValueError('规划已取消')
             if attempts and self.clock()>end:break
@@ -480,12 +498,21 @@ class HereditaryDeployment:
                             candidate['actions']=actions;prediction=shooting
                             if node_indices is None and target_matrix is None:candidate['reference']=shooting.copy()
                     except TimeoutError:pass
+            primary_errors=distances(prediction[-1])
+            candidate.update(primary_steps=h,reserve_steps=reserve_steps,primary_mean_error=float(primary_errors.mean()),primary_max_error=float(primary_errors.max()))
+            if reserve_steps:
+                # Preview and both execution modes own exactly this finite tail.
+                # Hold pressure is feasible; online B may revise it using images.
+                candidate['actions']=np.vstack([candidate['actions'],np.tile(candidate['actions'][-1],(reserve_steps,1))])
+                terminal=goal if target_matrix is None else target_samples
+                candidate['reference']=np.concatenate([candidate['reference'],np.repeat(terminal[None],reserve_steps,axis=0)])
+                prediction=self.engine.rollout(z,candidate['actions'])
             errors=distances(prediction[-1])
             candidate.update(prediction=prediction,mean_error=float(errors.mean()),max_error=float(errors.max()),tolerance=float(tolerance),max_node=float(max_node))
             candidate['qualified']=candidate['mean_error']<=tolerance and candidate['max_error']<=max_node
             attempts.append(dict(horizon=h,mean_mm=candidate['mean_error'],max_mm=candidate['max_error'],b_ms=(b_done-attempt_start)*1000,shooting_and_rollout_ms=(self.clock()-shooting_start)*1000,total_ms=(self.clock()-attempt_start)*1000,b_iterations=len(candidate['trace'])))
             if best is None or candidate['mean_error']<best['mean_error']:best=candidate
-            seed=candidate['actions']
+            seed=candidate['actions'][:h]
             if candidate['qualified']:best=candidate;break
         best['attempts']=attempts
         best.update(planning_ms=(self.clock()-started)*1000,planning_config=config,planning_exit='qualified' if best['qualified'] else ('budget_exhausted' if self.clock()>=end else 'search_exhausted'))
@@ -493,7 +520,7 @@ class HereditaryDeployment:
         return best
 
     def plan_any_segment(self, model_curve, tolerance=1., max_node=3., max_horizon=None,
-                         budget_s=15., cancel=None, iterations=24, shooting_nfev=30, horizon_step=20):
+                         budget_s=15., cancel=None, iterations=24, shooting_nfev=30, horizon_step=20, reserve_steps=0):
         """Budgeted search of material intervals and both drawing directions.
 
         Every candidate fits 32 samples along the whole curve. The chosen
@@ -523,7 +550,7 @@ class HereditaryDeployment:
                     candidates.append((rank,ids,matrix,samples,goal,reverse))
         if not candidates:raise ValueError('模型活动节点不足以匹配一段曲线')
         candidates.sort(key=lambda c:c[0]);attempts=[];best=None
-        settings=dict(tolerance=tolerance,max_node=max_node,max_horizon=max_horizon,cancel=cancel,horizon_step=horizon_step,snapshot=snapshot)
+        settings=dict(tolerance=tolerance,max_node=max_node,max_horizon=max_horizon,cancel=cancel,horizon_step=horizon_step,snapshot=snapshot,reserve_steps=reserve_steps)
         for _,ids,matrix,samples,goal,reverse in candidates:
             if cancel is not None and cancel.is_set():raise ValueError('规划已取消')
             remaining=screen_end-self.clock()
@@ -617,7 +644,7 @@ class HereditaryDeployment:
             control={'accepted':False,'reason':'no_evidence_or_suffix'};new=old.copy()
             if len(old) and observer['count']:
                 new,control=fast_suffix_b(self.engine,state,old,last,reference,self.bounds,node_indices=getattr(self,'control_node_indices',None),target_matrix=getattr(self,'control_target_matrix',None))
-            return new,dict(edge_ms=(edges_done-started)*1000,observer_ms=(observer_done-edges_done)*1000,visible_target_error_mm=visible_target_error,prediction_px=transform(self.engine.observe(state,last),self.matrix),observer=observer,control=control,visibility=visibility,edges=len(evidence.pixels),frame_age_ms=(started-timestamp)*1000,compute_ms=(self.clock()-started)*1000)
+            return new,dict(evidence_pixels_px=evidence.pixels.copy(),edge_ms=(edges_done-started)*1000,observer_ms=(observer_done-edges_done)*1000,visible_target_error_mm=visible_target_error,prediction_px=transform(self.engine.observe(state,last),self.matrix),observer=observer,control=control,visibility=visibility,edges=len(evidence.pixels),frame_age_ms=(started-timestamp)*1000,compute_ms=(self.clock()-started)*1000)
 
     def close(self):
         self.log.close()

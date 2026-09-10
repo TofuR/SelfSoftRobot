@@ -29,10 +29,31 @@ class HereditaryExecutor:
         self.settle_s=settle_s
         self.max_skipped=max_skipped
         self.abort_event=threading.Event();self.hold_requested=False
+        self.completion_assessment=None
 
     def abort(self):self.hold_requested=False;self.abort_event.set()
 
     def hold(self):self.hold_requested=True;self.abort_event.set()
+
+    def assess_completion(self,plan,info):
+        """Describe the current estimate without certifying physical arrival."""
+        r=self.runtime
+        with r.lock:
+            stamp=self.clock();state,action=r.state_at(stamp)
+            shape=r.engine.observe(state,action)
+            errors=target_distances(shape,plan['goal'],plan.get('node_indices'),plan.get('target_matrix'),plan.get('target_samples'))
+            age=stamp-r.last_frame
+        supported=bool(self.use_correction and info.get('state_committed') and info.get('observer',{}).get('count',0)>0 and 0<=age<=.3)
+        finite=bool(np.isfinite(errors).all())
+        within=bool(finite and 'tolerance' in plan and 'max_node' in plan and errors.mean()<=plan['tolerance'] and errors.max()<=plan['max_node'])
+        return dict(estimated_mean_error_mm=float(errors.mean()) if finite else None,
+                    estimated_max_error_mm=float(errors.max()) if finite else None,
+                    estimate_within_tolerance=within,latest_image_supported=supported,
+                    last_frame_age_ms=float(age*1000) if np.isfinite(age) else None,
+                    coverage=info.get('visibility',{}).get('coverage'),
+                    physical_arrival_verified=False,
+                    reason='estimated_within_tolerance' if within else 'finite_plan_exhausted',
+                    semantics='Model estimate, possibly corrected by partial image evidence; not measured full-shape arrival. Final pressure is held; no automatic global replan.')
 
     def zero(self):
         last=None
@@ -41,6 +62,7 @@ class HereditaryExecutor:
             if self.archive:self.archive.command('zero',last)
             if last.status=='ack':
                 self.runtime.acknowledge(last)
+                self.runtime.ready=False
                 self.runtime.set_phase('stopped',reason='zero_ack')
                 return last
         self.runtime.fault='归零未获得 ACK，需要人工检查'
@@ -67,16 +89,21 @@ class HereditaryExecutor:
         r.control_target_matrix=None if 'target_matrix' not in plan else plan['target_matrix'].copy()
         r.control_node_indices=ids.copy();r.target_node_indices=ids.copy();r.target_shape=np.array(plan['goal'],copy=True)
         started=self.clock();receipts=[];misses=0;skipped=0
+        primary_steps=int(plan.get('primary_steps',len(old)))
+        reserve_steps=int(plan.get('reserve_steps',0))
+        if primary_steps<1 or reserve_steps<0 or primary_steps+reserve_steps!=len(old) or len(old)>200:
+            raise ValueError('主规划与末端余量长度不一致或超过 200 步')
         execution_id=uuid.uuid4().hex
         frames=r.run_dir/'executions'/execution_id/'frames'
         frames.mkdir(parents=True,exist_ok=False)
         from .experiment_archive import ExperimentArchive
         self.last_execution_dir=frames.parent
         self.archive=ExperimentArchive(frames.parent,started,dict(self.metadata,control_mode=self.control_mode,correction_enabled=self.use_correction,unqualified_trial=trial,planned_qualified=plan.get('qualified'),planned_mean_error=plan.get('mean_error'),planned_max_error=plan.get('max_error'),matching_mode=plan.get('matching_mode','fixed'),execution_id=execution_id,deployment_id=r.deployment_id,max_missing=self.max_missing,max_skipped=self.max_skipped,feedback_reserve_ms=3,control_dt=r.dt,settle_s=self.settle_s,selected_camera=self.selected_camera),self.evaluation_provider)
+        self.archive.metadata.update(primary_steps=primary_steps,reserve_steps=reserve_steps,total_steps=len(old))
         outcome='failed';timing=None
         r.set_phase('control',reason='execute_pressed')
         r.record('execute_begin',control_mode=self.control_mode,correction_enabled=self.use_correction,unqualified_trial=trial,planned_qualified=plan.get('qualified'),planned_mean_error=plan.get('mean_error'),planned_max_error=plan.get('max_error'),execution_id=execution_id,deployment_id=r.deployment_id,goal=plan['goal'],node_indices=ids,plan=old,reference=reference,planning_ms=plan.get('planning_ms'),planning_config=plan.get('planning_config'))
-        np.savez_compressed(frames.parent/'initial_plan.npz',actions_model=old,actions_kpa=r.mapping.expand(old),reference_mm=reference,state=plan.get('state',r.state),previous_model=plan.get('previous',r.action),goal_mm=plan['goal'],node_indices=ids,unqualified_trial=trial,control_mode=self.control_mode,correction_enabled=self.use_correction,planned_qualified=plan.get('qualified',True),**{key:plan[key] for key in ('target_matrix','target_samples','matching_mode','matching_reversed','goal_curve') if key in plan},version=plan['version'],execution_state=r.state,execution_action=r.action,execution_state_time=r.at,camera_matrix=r.matrix,expansion6=r.mapping.expansion,action_unit_to_kpa=r.mapping.scale,dt=r.dt)
+        np.savez_compressed(frames.parent/'initial_plan.npz',actions_model=old,actions_kpa=r.mapping.expand(old),primary_steps=primary_steps,reserve_steps=reserve_steps,reference_mm=reference,state=plan.get('state',r.state),previous_model=plan.get('previous',r.action),goal_mm=plan['goal'],node_indices=ids,unqualified_trial=trial,control_mode=self.control_mode,correction_enabled=self.use_correction,planned_qualified=plan.get('qualified',True),**{key:plan[key] for key in ('target_matrix','target_samples','matching_mode','matching_reversed','goal_curve') if key in plan},version=plan['version'],execution_state=r.state,execution_action=r.action,execution_state_time=r.at,camera_matrix=r.matrix,expansion6=r.mapping.expansion,action_unit_to_kpa=r.mapping.scale,dt=r.dt)
         try:
             with threadpool_limits(1):
                 for k in range(len(old)):
@@ -95,7 +122,7 @@ class HereditaryExecutor:
                     cycle_start=self.clock();before=old[k+1:].copy();version_before=r.version
                     timing=None
                     try:
-                        timing=dict(step=k,control_mode=self.control_mode,execution_id=execution_id,revision_status='command_failed',state_committed=False,version_before=version_before,remaining_before_model=before)
+                        timing=dict(step=k,plan_phase='reserve' if k>=primary_steps else 'primary',primary_steps=primary_steps,reserve_steps=reserve_steps,control_mode=self.control_mode,execution_id=execution_id,revision_status='command_failed',state_committed=False,version_before=version_before,remaining_before_model=before)
                         receipt=self.transport.send(action,(1,2),self.timeout)
                         next_deadline=receipt.t_command+r.dt
                         timing.update(command_id=receipt.command_id,t_command=receipt.t_command,t_ack=receipt.t_ack,feedback_deadline=next_deadline,command_jitter_ms=(receipt.t_command-deadline)*1000,ack_ms=(receipt.t_ack-receipt.t_command)*1000 if receipt.t_ack is not None else None,command_interval_ms=(receipt.t_command-receipts[-1].t_command)*1000 if receipts else None)
@@ -183,7 +210,9 @@ class HereditaryExecutor:
                             if self.callback:self.callback(timing)
             if misses or skipped:r.ready=False
             r.set_phase('final_hold',reason='plan_completed')
-            r.record('execute_completed',control_mode=self.control_mode,execution_id=execution_id,commands=len(receipts),final_pressure=r.mapping.expand(r.action))
+            self.completion_assessment=self.assess_completion(plan,timing or {})
+            self.archive.metadata['completion_assessment']=self.completion_assessment
+            r.record('execute_completed',control_mode=self.control_mode,execution_id=execution_id,commands=len(receipts),primary_steps=primary_steps,reserve_steps=reserve_steps,completion_assessment=self.completion_assessment,final_pressure=r.mapping.expand(r.action))
             outcome='completed_unobserved' if misses or skipped else 'completed';return receipts
         except Exception as error:
             if self.hold_requested and str(error)=='operator_abort':
