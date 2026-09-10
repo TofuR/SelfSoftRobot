@@ -12,6 +12,8 @@ scope: experiment plans, records, and historical simulation notes
 
 ## 当前使用
 
+- [YOLO26 软臂分割离线微调](robot_segmentation_student_20260911.md)：官方候选速度、mask 坐标恢复、序列分组与 tmux 训练。
+
 - [2026-09-11 实机反馈整改](hereditary_field_followup_20260911.md)：有限末端余量、复用配准、自动初始化与图像/模型证据区分。
 
 - [原生5/10 Hz全平台部署训练](../real_data/validation_deployment_hardware_and_training_20260910.md)：补齐同平台序列处理、独立tmux、验证选择和自动导出。
