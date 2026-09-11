@@ -2,9 +2,11 @@
 
 更新：2026-09-11。默认入口是四页模型验证 App，操作详见 [实验指南](HEREDITARY_GUIDE.md)。采集训练数据的 `real_capture` 是另一个程序。
 
-## 安装与启动
+独立发行包使用包根的 `install.bat`、`run.bat` 和一份 `README.md`；所有实验结果默认保存在包根 `results/`。发行包由 `python -m real_validation.tools.package_hereditary` 生成，只包含运行文件、选定模型和依赖。以下说明用于源码目录。
 
-建议使用独立的 **Python 3.10、64 位环境**。源码仓库中在项目根目录运行；独立 ZIP 解压后在包含 `real_validation/` 的目录运行：
+## 源码安装与启动
+
+建议使用独立的 **Python 3.10、64 位环境**，在源码仓库根目录运行：
 
 ```bash
 python -m pip install -r real_validation/requirements.txt
@@ -52,7 +54,7 @@ PyTorch / torchvision 固定为当前验证使用的 2.6.0 / 0.21.0 配对。req
 - 新 5 Hz、新 10 Hz 及旧参考：发布包的 `checkpoints/candidates/`；来源与选择指标见 [候选说明](checkpoints/candidates/README.md)。
 - JSON 中的 `dt` 决定控制模型频率，不根据相机帧率或文件名推断；换频率时换模型，不单改 `dt`。
 - SAM2 初始化需要 `checkpoints/sam2/sam2.1_hiera_tiny.pt`、`vendor/sam2/` 上游源码及其依赖。官方导出的完整 SAM 部署 ZIP 已包含源码和分割权重；仅复制 Git 源码目录不会自动包含这些被忽略的大文件。
-- YOLO 分割权重放在 `checkpoints/perception/yolo26{n,s}-seg_20260911_001/`，每个目录包含权重、推理配置、来源、指标与时延。第二页 **修正形状 / 高级设置 → 分割设置…** 可切换 n/s 和 CPU/CUDA；默认 n 版直接整图提取。详见 [YOLO 使用与目录说明](YOLO_DEPLOYMENT_PLAN.md)。
+- YOLO 分割权重放在 `checkpoints/perception/yolo26{n,s}-seg_20260911_001/`，发行目录包含运行权重和推理配置，训练来源写入内部发行清单。第二页 **修正形状 / 高级设置 → 分割设置…** 可切换 n/s 和 CPU/CUDA；默认 n 版直接整图提取。详见 [YOLO 使用与目录说明](YOLO_DEPLOYMENT_PLAN.md)。
 
 当前绿色是冻结帧分割，青色是模型估计，白点是可信可见边缘，紫色为规划预览，红色为目标。空闲且没有计划时有局部边缘反馈；手动调压期间按 ACK 历史预测；已生成计划后保持预览一致，不持续改变计划对应状态。外力摆动的连续分割跟随仍是后续工作。
 
@@ -100,3 +102,5 @@ python -c "from real_validation.gui.main_window import ValidationWindow; print('
 ## 旧 OpenLoop 兼容入口
 
 仅显式运行 `python -m real_validation.main --legacy-openloop` 时使用旧 `.pt + config.json + deploy_manifest.json`、离线 Anchor 与旧状态机，详见 [旧 GUI 指南](GUI_GUIDE.md)。这些不是默认四页流程的前置步骤。
+
+源码 GUI 的默认结果目录遵循项目路径配置 `workspace/runs/validation/`；独立包默认 `results/`。相对保存路径以 App 所在目录的父目录解析，改变启动工作目录不会改变结果位置。在加载控制模型前设置“保存根目录”，已打开会话继续使用其原目录。

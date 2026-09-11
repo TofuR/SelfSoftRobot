@@ -4,10 +4,10 @@
 
 ## 使用
 
-1. 解压新版完整 App，在包根目录运行 `python -m pip install -r real_validation/requirements-yolo.txt`；Windows 可双击 `real_validation/install_yolo_windows.bat`。
-2. 启动同一个 `real_validation/run_gui.bat`，加载控制模型并连接设备。
+1. 解压新版 App，双击包根 `install.bat` 安装运行环境。
+2. 双击包根 `run.bat`，加载控制模型并连接设备。
 3. 第二页点击 **自动提取当前完整形状**。默认 YOLO n 版整图推理，绿色是冻结帧 mask，黄线是中心线；检查 BASE/TIP 后点击 **确认形状并部署预热**。
-4. 要换 s 版或 CPU/CUDA，展开 **修正形状 / 高级设置 → 分割设置…**。分割方法下拉框可切回 SAM2 或传统分割。SAM2 需要另外安装 `requirements-sam2.txt`。
+4. 要换 s 版或 CPU/CUDA，展开 **修正形状 / 高级设置 → 分割设置…**。分割方法下拉框可切回 SAM2 或传统分割。完整发行包的安装脚本已包含 SAM2 依赖。
 
 YOLO 没有提示点接口；SAM 正/负提示按钮只在 SAM2 模式显示。无检测、多个机器人候选或不完整轮廓会明确提示，可手绘或切换 SAM2。手绘后的“结合图像微调草稿”也使用当前选择的分割方法。近景和背景改变后的结果仍需检查。
 
@@ -28,14 +28,11 @@ real_validation/
       yolo26n-seg_20260911_001/         # 默认，更快
       yolo26s-seg_20260911_001/         # 可选，mask 指标稍高
         best.pt                       # GUI 实际加载
-        best.onnx                     # 归档导出，GUI 当前用 pt
         inference.json                # 文件 hash 与原图坐标合同
-        provenance.json               # 训练来源和选择指标
-        metrics.json / latency.json   # 伪标签测试指标、服务器时延
   vendor/sam2/                        # 完整包内的 SAM2 源码
-  requirements-yolo.txt
-third_party_notices/Ultralytics-LICENSE.txt
-validation_samples/segmentation/       # 少量原图与 YOLO 输出检查样例
+  requirements.txt                    # 单一运行依赖清单
+  PACKAGE_MANIFEST.json               # 文件 hash、模型来源与选择指标
+  licenses/Ultralytics-LICENSE.txt
 ```
 
 两个分割模型都可服务于 5/10 Hz 控制模型，没有控制 dt 或腔道映射。服务器保留完整训练 study，以及 `workspace/models/deployment/robot_yolo26seg_20260911_001/` 发布副本；`real_validation/checkpoints/perception/` 是便于本机和独立包加载的发布副本，不包含训练数据。旧权重和旧独立包保留。
@@ -64,4 +61,4 @@ python scripts/evaluation/export_robot_segmentation.py --study workspace/runs/tr
 python -m real_validation.tools.package_hereditary --bundle <控制模型.npz> --out <新包.zip> --perception-dir <发布目录> --yolo-license <Ultralytics-LICENSE> [原有候选、SAM2、指南参数]
 ```
 
-导出拒绝覆盖；打包验证每个候选合同/hash，清单单列 perception_models，附模型来源、测试与许可证。上游依赖安装在 Python 环境中，训练集、整个 venv 和日志不随包复制。Windows 安装脚本使用当前 `python`，requirements 是联网安装清单；目标平台运行结果需在现场确认。
+导出拒绝覆盖；打包验证候选合同/hash，清单单列 perception_models 和模型来源；运行包只复制 `.pt` 和 `inference.json`，ONNX、测试指标与样例保留在服务器归档。上游依赖安装在 Python 环境中，训练集、整个 venv 和日志不随包复制。Windows 安装脚本创建包根 `.venv`，requirements 是联网安装清单；目标平台运行结果需在现场确认。

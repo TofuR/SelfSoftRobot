@@ -40,7 +40,9 @@ from .theme import QSS, CARD, STATE_BADGE_COLORS, configure_pyqtgraph
 
 import pyqtgraph as pg   # 可视化面板的气压/NDI 实时曲线(real_capture 右栏同款)
 
-APP_DIR = Path(__file__).resolve().parent.parent  # real_validation/ 包根(数据目录 config/checkpoints/data/runs 不变)
+from ..paths import default_results_root
+
+APP_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_ANCHOR_DATASET_ID = "seq_20260627_163921_n15_sam2_clean"
 
 
@@ -402,7 +404,8 @@ class ValidationWindow(QMainWindow):
         gb_exp = QGroupBox("实验与运行")
         exp = QVBoxLayout(gb_exp); exp.setContentsMargins(10, 12, 10, 10); exp.setSpacing(6)
         row = QHBoxLayout(); row.addWidget(QLabel("Run 根目录"))
-        self.run_root = QLineEdit(str(APP_DIR / "runs"))
+        self.run_root = QLineEdit(str(default_results_root()))
+        self.run_root.setToolTip('实验结果保存位置；更改后对新加载的模型会话生效')
         row.addWidget(self.run_root, 1); row.addWidget(self._browse_button(self.run_root, True))
         exp.addLayout(row)
         row = QHBoxLayout()

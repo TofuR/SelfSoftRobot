@@ -242,7 +242,8 @@ class HereditaryPanel(QWidget):
         self.canvas.draft=None;self.canvas.frozen=False;self.canvas.mode='view';self.alignment_error=None
         engine,meta=value
         self.clear_initial_roi();self.canvas.mask=None;self.canvas.prompts=[];self.draft_info={}
-        root=Path(self.host.run_root.text())/'hereditary'
+        from ..paths import resolve_results_root
+        root=resolve_results_root(self.host.run_root.text())/'hereditary'
         folder=root/(datetime.now().strftime('%Y%m%d_%H%M%S')+'_'+uuid.uuid4().hex[:6])
         self.runtime=HereditaryDeployment(engine,meta,folder)
         self.host.model_badge.setText('Hereditary · 4 输入 / Analytic B')

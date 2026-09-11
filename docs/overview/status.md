@@ -13,6 +13,8 @@ sources:
 
 # 项目状态快照
 
+2026-09-12：独立发行包改为运行文件清单、单一操作指南与安装/启动入口；结果统一到包根 `results/`，源码运行遵循项目 workspace 配置。使用见 [便携版操作指南](../../real_validation/PORTABLE_README.md)。
+
 2026-09-11：YOLO26 n/s 分割微调已完成，第二页可整图自动提取，默认 n 版；发布候选统一位于 App 的 `checkpoints/perception/`，详见 [分割部署说明](../../real_validation/YOLO_DEPLOYMENT_PLAN.md)。新 D415 现场泛化与持续跟随仍待验证。
 
 2026-09-11：同平台原生 5/10 Hz 的两个 300 epoch 训练均完成，候选权重及验证选择记录见[部署候选说明](../../real_validation/checkpoints/candidates/README.md)。用户实机报告起步慢、末端未到位、重复配准与 SAM 操作问题；整改与验收见[实机反馈记录](../experiments/hereditary_field_followup_20260911.md)。目前软件验证不替代现场压力跟踪与到位精度。
