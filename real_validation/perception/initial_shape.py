@@ -102,7 +102,7 @@ def extract_initial_shape(image, n_nodes, polarity='bright', roi=None, supplied_
     if info['arc_length_px'] < 5*radius:
         raise ValueError('候选区域不像细长臂身，请检查背景或手动描画')
     return curve, mask, dict(info, radius_px=radius, warnings=warnings, roi=None if region is None else region.tolist(),
-                            method='sam2_mask' if supplied_mask is not None else ('roi_otsu_grabcut' if roi is not None else 'otsu_opening'),
+                            method='supplied_mask' if supplied_mask is not None else ('roi_otsu_grabcut' if roi is not None else 'otsu_opening'),
                             base_rule='upper endpoint; operator must review or reverse', area_px=int(area))
 
 
@@ -180,7 +180,7 @@ def refine_initial_shape(image, draft, polarity='bright', search_px=0., preserve
     if np.max(np.linalg.norm(curve-draft, axis=1)) > 2*search_px:
         raise ValueError('短边修正偏移过大，请手动检查端点')
     return curve, mask, dict(radius_px=radius, search_px=float(search_px), automatic_search=automatic_search,
-                            method='sam2_guide_cross_sections' if supplied_mask is not None else 'guide_otsu_grabcut_cross_sections',manual_sections=sorted(missing_sections),
+                            method='supplied_mask_guide_cross_sections' if supplied_mask is not None else 'guide_otsu_grabcut_cross_sections',manual_sections=sorted(missing_sections),
                             endpoints_preserved=preserve_endpoints or tip_reason=='operator_review_required',
                             max_shift_px=float(np.linalg.norm(curve-draft, axis=1).max()),
                             tip_endpoint_fix_reason=tip_reason, base_endpoint_fix_reason=base_reason,

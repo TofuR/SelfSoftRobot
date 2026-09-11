@@ -50,3 +50,6 @@ sam2/sam2_src/
 sam2/checkpoints/
 sam2/masks/
 sam2/_jpeg_tmp/
+
+# Published perception model copies for the validation App
+/real_validation/checkpoints/perception/*/

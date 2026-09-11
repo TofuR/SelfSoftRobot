@@ -17,6 +17,8 @@ def main():
     p.add_argument('--candidates-dir',type=Path,help='Explicit directory of named NPZ/JSON pairs and optional README.md')
     p.add_argument('--sam2-source',type=Path,help='Unmodified upstream SAM2 repository to bundle with its licenses')
     p.add_argument('--sam2-checkpoint',type=Path,help='Explicit SAM2.1 Tiny checkpoint for offline initialization')
+    p.add_argument('--perception-dir',type=Path,help='Published YOLO candidates with inference contracts')
+    p.add_argument('--yolo-license',type=Path,help='Ultralytics distribution license to include with YOLO')
     p.add_argument('--extra',nargs=2,action='append',default=[],metavar=('SOURCE','ARCHIVE_PATH'),help='Include an explicit supplementary document, image or evidence file')
     a=p.parse_args();bundle=Path(a.bundle);_,default_meta=load_bundle(bundle)
     root=Path(__file__).resolve().parents[1];out=Path(a.out)
@@ -56,6 +58,24 @@ def main():
         add(a.sam2_checkpoint,'real_validation/checkpoints/sam2/sam2.1_hiera_tiny.pt')
         third_party.append(dict(name='SAM2',source='https://github.com/facebookresearch/sam2',license='Apache-2.0',
                                 checkpoint_sha256=hashlib.sha256(a.sam2_checkpoint.read_bytes()).hexdigest()))
+    perception=[]
+    if a.perception_dir:
+        from ..perception.yolo_initial import load_contract
+        contracts=sorted(a.perception_dir.glob('*/inference.json'))
+        if not contracts:raise ValueError('No YOLO candidate contracts found')
+        if not a.yolo_license:raise ValueError('YOLO distribution license required')
+        readme=a.perception_dir/'README.md'
+        if readme.is_file():add(readme,'real_validation/checkpoints/perception/README.md')
+        for contract in contracts:
+            config=load_contract(contract.parent)
+            prefix='real_validation/checkpoints/perception/'+contract.parent.name+'/'
+            for name in [*config['files'],'inference.json','provenance.json','metrics.json','latency.json']:
+                add(contract.parent/name,prefix+name)
+            perception.append(dict(path=prefix+'inference.json',method='yolo26_seg',
+                                   weights_sha256=config['files']['best.pt']))
+        add(a.yolo_license,'third_party_notices/Ultralytics-LICENSE.txt')
+        third_party.append(dict(name='Ultralytics YOLO',version='8.4.146',license='AGPL-3.0',
+                                source='https://github.com/ultralytics/ultralytics'))
     if a.guide:
         add(a.guide,'real_validation/HEREDITARY_GUIDE.html')
         key='real_validation/HEREDITARY_GUIDE.md'
@@ -74,7 +94,7 @@ def main():
             if dest in entries or any(key.startswith(dest.rstrip('/')+'/') for key in entries):return match.group(0)
             return label+'（源码仓库路径：`'+target+'`）'
         entries[name]=re.sub(r'(?<!!)\[([^]\n]+)\]\(([^)\n]+)\)',link,data.decode('utf-8')).encode('utf-8')
-    manifest=dict(schema='hereditary_portable_package_v2',models=models,third_party=third_party,
+    manifest=dict(schema='hereditary_portable_package_v2',models=models,perception_models=perception,third_party=third_party,
                   files={name:hashlib.sha256(data).hexdigest() for name,data in entries.items()})
     if 'PACKAGE_MANIFEST.json' in entries:raise ValueError('Reserved manifest path')
     entries['PACKAGE_MANIFEST.json']=(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n').encode('utf-8')

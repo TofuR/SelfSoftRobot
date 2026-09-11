@@ -47,6 +47,8 @@ class HereditaryPanel(QWidget):
         self.initial_roi=None;self.roi_camera_key=None;self.sam_points=[];self.sam_labels=[];self.draft_info={}
         from ..perception.sam_initial import SamInitialSegmenter,default_checkpoint
         self.sam_segmenter=SamInitialSegmenter()
+        from ..perception.yolo_initial import YoloInitialSegmenter,candidates
+        self.yolo_segmenter=YoloInitialSegmenter()
         self.draft_stamp=None;self.draft_version=None;self.auto_prompt_pending=False;self.evidence_stamp=-float('inf')
         self.display_controls=QWidget();display=QHBoxLayout(self.display_controls)
         self.display_mode=QComboBox();self.display_mode.addItems(['整体形状 + 中心线','仅骨架中心线'])
@@ -82,13 +84,17 @@ class HereditaryPanel(QWidget):
         self.initial_tools_toggle.toggled.connect(self.initial_tools.setVisible)
         self.polarity=QComboBox();self.polarity.addItem('亮色臂身 / 较暗背景','bright');self.polarity.addItem('黑色剪影 / 明亮背景','dark');detail.addWidget(self.polarity)
         self.polarity.currentIndexChanged.connect(self.invalidate_plan)
-        row=QHBoxLayout();self.initial_method=QComboBox();self.initial_method.addItem('SAM2 初始化（推荐，可较慢）','sam2');self.initial_method.addItem('传统分割（免 SAM 依赖）','classical');row.addWidget(self.initial_method)
-        self.sam_settings=QDialog(self);self.sam_settings.setWindowTitle('SAM2 初始化设置');sf=QFormLayout(self.sam_settings)
+        row=QHBoxLayout();self.initial_method=QComboBox();self.initial_method.addItem('YOLO 自动分割（推荐）','yolo');self.initial_method.addItem('SAM2 提示分割','sam2');self.initial_method.addItem('传统分割（免 SAM 依赖）','classical');row.addWidget(self.initial_method)
+        self.sam_settings=QDialog(self);self.sam_settings.setWindowTitle('初始化分割设置');sf=QFormLayout(self.sam_settings)
+        self.yolo_model=QComboBox()
+        for candidate in candidates():self.yolo_model.addItem(candidate.parent.name,str(candidate.parent))
+        sf.addRow('YOLO 分割候选',self.yolo_model)
+        if not self.yolo_model.count():self.initial_method.setCurrentIndex(1)
         self.sam_path=QLineEdit(str(default_checkpoint()));sf.addRow('SAM2.1 Tiny 权重',self.sam_path)
-        browse_sam=QPushButton('选择分割权重');browse_sam.clicked.connect(self.browse_sam);sf.addRow(browse_sam)
+        browse_sam=QPushButton('选择 SAM2 权重');browse_sam.clicked.connect(self.browse_sam);sf.addRow(browse_sam)
         self.sam_device=QComboBox();self.sam_device.addItems(['auto','cpu','cuda']);sf.addRow('推理设备',self.sam_device)
         sf.addRow(QLabel('仅在初始化使用。CPU 可运行，首次加载较慢；不会改变气压。'))
-        settings_button=QPushButton('SAM 设置');settings_button.clicked.connect(self.sam_settings.show);row.addWidget(settings_button);detail.addLayout(row)
+        settings_button=QPushButton('分割设置…');settings_button.clicked.connect(self.sam_settings.show);row.addWidget(settings_button);detail.addLayout(row)
         row=QHBoxLayout();self.roi_button=QPushButton('框选完整臂身（排除支架）');self.roi_button.clicked.connect(lambda:self.begin_initial('roi'));row.addWidget(self.roi_button)
         self.clear_roi_button=QPushButton('清除框选');self.clear_roi_button.clicked.connect(self.clear_initial_roi);row.addWidget(self.clear_roi_button);detail.addLayout(row)
         self.align_button=QPushButton('手动重画当前中心线（base → tip）');self.align_button.clicked.connect(lambda:self.set_mode('align'));detail.addWidget(self.align_button)
@@ -98,7 +104,7 @@ class HereditaryPanel(QWidget):
         self.keep_endpoints=QCheckBox('微调时保留我标定的 BASE / TIP（无需算法识别短边）');self.keep_endpoints.setChecked(True);detail.addWidget(self.keep_endpoints)
         row=QHBoxLayout();self.positive_button=QPushButton('点选臂身 +');self.positive_button.clicked.connect(lambda:self.prompt_mode(True));row.addWidget(self.positive_button)
         self.negative_button=QPushButton('排除支架/背景 −');self.negative_button.clicked.connect(lambda:self.prompt_mode(False));row.addWidget(self.negative_button)
-        self.rerun_sam_button=QPushButton('按提示重新分割');self.rerun_sam_button.clicked.connect(self.resegment_initial);row.addWidget(self.rerun_sam_button);detail.addLayout(row)
+        self.rerun_sam_button=QPushButton('按 SAM 提示重新分割');self.rerun_sam_button.clicked.connect(self.resegment_initial);row.addWidget(self.rerun_sam_button);detail.addLayout(row)
         self.mask_check=QCheckBox('叠加分割掩膜（绿色）');self.mask_check.setChecked(True);self.mask_check.toggled.connect(self.show_initial_mask);detail.addWidget(self.mask_check)
         row=QHBoxLayout()
         self.flip_button=QPushButton('交换 base / tip');self.flip_button.clicked.connect(self.flip_draft);row.addWidget(self.flip_button)
@@ -111,6 +117,8 @@ class HereditaryPanel(QWidget):
         for i in range(warm_form.count()):warm_form.itemAt(i).widget().hide()
         detail.addWidget(self.warmup_options)
         initial.addWidget(self.initial_tools);self.initial_tools.hide()
+        self.initial_method.currentIndexChanged.connect(self.update_segmentation_tools)
+        self.update_segmentation_tools()
         self.confirm_button=QPushButton('确认形状并部署预热');self.confirm_button.clicked.connect(self.confirm_alignment);initial.addWidget(self.confirm_button)
         self.alignment_label=QLabel('自动提取后检查 BASE/TIP；有歧义时在臂身中间点一下。修正工具按需展开。');self.alignment_label.setWordWrap(True);initial.addWidget(self.alignment_label)
         self.goal_mode=QComboBox();self.goal_mode.addItems(['完整形状','局部目标（末端 / 一段）']);goal.addWidget(self.goal_mode)
@@ -181,7 +189,7 @@ class HereditaryPanel(QWidget):
         note.setWordWrap(True);run.addWidget(note)
         for layout in layouts:layout.addStretch()
         self.controls=[self.open_loop_check,self.trial_check,self.refine_button,self.refine_radius,self.goal_mode,self.local_options,self.path,browse,self.load_button,self.polarity,*self.mapping,self.mapping_button,self.auto_button,self.align_button,self.flip_button,self.cancel_button,self.confirm_button,self.goal_button,self.horizon,self.tolerance,self.max_node,self.plan_button,self.planning_settings,*self.planning_fields,self.arm_check,self.execute_button,self.probe_button,self.occlusion_controls,self.max_missing,self.max_skipped,self.feedback_settle,*self.warmup_fields]
-        self.controls.extend([self.initial_tools_toggle,self.initial_method,self.roi_button,self.clear_roi_button,self.positive_button,self.negative_button,self.rerun_sam_button,self.keep_endpoints,self.sam_path,self.sam_device,browse_sam])
+        self.controls.extend([self.initial_tools_toggle,self.initial_method,self.roi_button,self.clear_roi_button,self.positive_button,self.negative_button,self.rerun_sam_button,self.keep_endpoints,self.sam_path,self.sam_device,browse_sam,self.yolo_model])
         self.controls.append(self.feedback_interval)
         from .chamber_control import ChamberControl
         self.chambers=ChamberControl(self)
@@ -355,6 +363,10 @@ class HereditaryPanel(QWidget):
         self.draft_stamp=frame[1];self.draft_version=r.version;self.camera_identity=self._camera_key()
         return frame
 
+    def update_segmentation_tools(self,*_):
+        sam=self.initial_method.currentData()=='sam2'
+        for widget in (self.positive_button,self.negative_button,self.rerun_sam_button):widget.setVisible(sam)
+
     def browse_sam(self):
         path,_=QFileDialog.getOpenFileName(self,'选择 SAM2.1 Tiny 权重',self.sam_path.text(),'SAM2 (*.pt)')
         if path:self.sam_path.setText(path)
@@ -388,9 +400,13 @@ class HereditaryPanel(QWidget):
             raise ValueError('框选后相机配置已改变，请清除框选或重新框选')
         return dict(method=self.initial_method.currentData(),polarity=self.polarity.currentData(),
                     roi=self.initial_roi,checkpoint=self.sam_path.text(),device=self.sam_device.currentText(),
+                    yolo_directory=self.yolo_model.currentData(),
                     points=list(self.sam_points),labels=list(self.sam_labels))
 
     def segment_initial(self,image,config,guide=None):
+        if config['method']=='yolo':
+            if not config.get('yolo_directory'):raise ValueError('未找到 YOLO 候选，请使用完整部署包')
+            return self.yolo_segmenter.segment(image,config['yolo_directory'],config['device'])
         if config['method']!='sam2':return None,{}
         mask,info=self.sam_segmenter.segment(image,config['checkpoint'],config['device'],
                                               config['roi'],guide,config['points'],config['labels'],polarity=config['polarity'])
@@ -398,7 +414,9 @@ class HereditaryPanel(QWidget):
 
     def initial_result(self,image,config,guide=None,preserve=True):
         from ..perception.initial_shape import extract_initial_shape,refine_initial_shape
-        mask,sam_info=self.segment_initial(image,config,guide)
+        started=time.perf_counter()
+        mask,segmentation_info=self.segment_initial(image,config,guide)
+        shape_started=time.perf_counter()
         try:
             if guide is None:
                 curve,mask,info=extract_initial_shape(image,self.runtime.engine.n_nodes,config['polarity'],config['roi'],mask)
@@ -406,8 +424,14 @@ class HereditaryPanel(QWidget):
                 curve,mask,info=refine_initial_shape(image,guide,config['polarity'],config.get('search_px',0),preserve,mask)
         except ValueError as error:
             if mask is None:raise
-            return None,mask,dict(sam=sam_info,extraction_error=str(error))
-        info['sam']=sam_info
+            return None,mask,dict(segmentation=segmentation_info,extraction_error=str(error),
+                                  total_ms=(time.perf_counter()-started)*1000)
+        if mask is not None and config['method'] in ('sam2','yolo'):
+            info['method']=config['method']+('_mask' if guide is None else '_guide_cross_sections')
+        info['segmentation']=segmentation_info
+        if config['method']=='sam2':info['sam']=segmentation_info
+        info['mask_to_nodes_ms']=(time.perf_counter()-shape_started)*1000
+        info['total_ms']=(time.perf_counter()-started)*1000
         return curve,mask,info
 
     def publish_initial(self,image,value,source):
@@ -419,15 +443,15 @@ class HereditaryPanel(QWidget):
         self.runtime.record('initial_shape_draft',source=source,frame=name+'.png',timestamp=self.draft_stamp,curve=curve,diagnostics=info)
         if curve is None:
             self.canvas.mask=mask;self.canvas.update()
-            self.message('SAM 掩膜已显示，但中心线仍需修正：'+info['extraction_error']+'。可补正/负提示重分割或手绘；已有草稿保留。')
+            self.message('分割掩膜已显示，但中心线仍需修正：'+info['extraction_error']+'。可手工修正，或切换 SAM2 加提示重分割；已有草稿保留。')
             return
         self.draft_info=info;self.canvas.draft=curve.astype(float);self.canvas.mask=mask
         self.canvas.radius=info['radius_px'];self.canvas.mode='edit';self.canvas.update()
         self.draft_changed(curve,operator=False)
         warning='；'.join(info.get('warnings',[]))
         if info.get('endpoints_preserved'):warning+=' 两端采用人工位置，未由算法认证短边。'
-        self.alignment_label.setText('绿色是分割，黄线是待确认中心线。可拖动黄点；SAM 误选可加正/负提示重分割。'+warning)
-        timing=info.get('sam',{});elapsed=timing.get('elapsed_ms')
+        self.alignment_label.setText('绿色是分割，黄线是待确认中心线。可拖动黄点修正。'+warning)
+        timing=info.get('segmentation',{});elapsed=timing.get('elapsed_ms')
         duration='' if elapsed is None else f' 分割 {elapsed/1000:.2f}s。'
         self.message('草稿已生成，请检查完整臂身与 BASE/TIP，再确认部署。'+duration+warning)
 
@@ -469,12 +493,12 @@ class HereditaryPanel(QWidget):
                 if error:
                     self.auto_prompt_pending=config['method']=='sam2'
                     if self.auto_prompt_pending:self.canvas.mode='sam_positive'
-                    self.message(error+'；图像已冻结。可在臂身中间点一下重试，或展开修正工具。');return
+                    self.message(error+('；图像已冻结，可在臂身中间点一下重试。' if self.auto_prompt_pending else '；图像已冻结，可展开修正工具切换分割方法或手工修正。'));return
                 if mode=='auto':self.publish_initial(frame[0],result,'initial')
                 else:
                     self.canvas.mode=mode
                     self.message('拖动框选完整臂身，尽量排除支架' if mode=='roi' else '从实际 BASE 短边中心连续画到 TIP 短边中心；松开后可拖动黄点')
-            self.message('确认当前保持压力并获取图像；SAM 首次加载可能较慢，后台处理不改变目标压力。')
+            self.message('确认当前保持压力并获取图像；首次加载分割模型可能较慢，请等待草稿。')
             self._job(work,done)
         except Exception as e:self.fail(e)
 

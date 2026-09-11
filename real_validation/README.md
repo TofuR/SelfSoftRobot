@@ -17,13 +17,13 @@ Windows 可双击 `real_validation/run_gui.bat`。基础依赖已经包含传统
 
 | 功能 | 安装命令或文件 |
 | --- | --- |
-| SAM2 初始化（当前默认） | `python -m pip install -r real_validation/requirements-sam2.txt`，或 Windows 双击 `install_sam2_windows.bat` |
+| SAM2 提示分割（备用） | `python -m pip install -r real_validation/requirements-sam2.txt`，或 Windows 双击 `install_sam2_windows.bat` |
 | 两组真实串口阀 | `python -m pip install pyserial` |
 | RealSense D415 / 兼容彩色流设备 | `python -m pip install pyrealsense2` |
 | 普通 UVC 摄像头 | 基础 OpenCV 和操作系统视频驱动即可，不需要 RealSense SDK |
 | 可选 NDI Aurora | `python -m pip install scikit-surgerynditracker`；SciPy 已在基础依赖中 |
 | 一次装齐现有硬件依赖 | `python -m pip install -r real_validation/requirements-hardware.txt` |
-| YOLO 分割候选的离线检查 | `requirements-yolo.txt`；**当前 GUI 尚未接入 YOLO**，安装依赖不会出现新的运行功能 |
+| YOLO 自动初始化（新版包默认） | `python -m pip install -r real_validation/requirements-yolo.txt`，或 Windows 双击 `install_yolo_windows.bat` |
 
 PyTorch / torchvision 固定为当前验证使用的 2.6.0 / 0.21.0 配对。requirements 不指定 CUDA 轮子来源；需要 GPU 时按 [PyTorch 对应版本安装说明](https://pytorch.org/get-started/previous-versions/#v260)选择适合驱动的轮子，再安装本目录依赖。没有 NVIDIA GPU 可使用 CPU。服务器验证不等于每台 Windows 电脑都已验收。
 
@@ -52,7 +52,7 @@ PyTorch / torchvision 固定为当前验证使用的 2.6.0 / 0.21.0 配对。req
 - 新 5 Hz、新 10 Hz 及旧参考：发布包的 `checkpoints/candidates/`；来源与选择指标见 [候选说明](checkpoints/candidates/README.md)。
 - JSON 中的 `dt` 决定控制模型频率，不根据相机帧率或文件名推断；换频率时换模型，不单改 `dt`。
 - SAM2 初始化需要 `checkpoints/sam2/sam2.1_hiera_tiny.pt`、`vendor/sam2/` 上游源码及其依赖。官方导出的完整 SAM 部署 ZIP 已包含源码和分割权重；仅复制 Git 源码目录不会自动包含这些被忽略的大文件。
-- YOLO 训练在服务器离线进行，目前不参与初始化或实时反馈；接入后作为同一 App 内可选择的分割方法，权重、配置和依赖随 real_validation 完整部署包提供，在第二页直接使用。分割权重与控制权重仅在包内分目录保存，见 [YOLO 方法接入与随包部署方案](YOLO_DEPLOYMENT_PLAN.md)。
+- YOLO 分割权重放在 `checkpoints/perception/yolo26{n,s}-seg_20260911_001/`，每个目录包含权重、推理配置、来源、指标与时延。第二页 **修正形状 / 高级设置 → 分割设置…** 可切换 n/s 和 CPU/CUDA；默认 n 版直接整图提取。详见 [YOLO 使用与目录说明](YOLO_DEPLOYMENT_PLAN.md)。
 
 当前绿色是冻结帧分割，青色是模型估计，白点是可信可见边缘，紫色为规划预览，红色为目标。空闲且没有计划时有局部边缘反馈；手动调压期间按 ACK 历史预测；已生成计划后保持预览一致，不持续改变计划对应状态。外力摆动的连续分割跟随仍是后续工作。
 

@@ -10,7 +10,7 @@
 python -m real_validation.main
 ```
 
-Windows 也可用 `run_gui.bat`。建议 Python 3.10（64 位）；在包含 `real_validation/` 的目录安装 `real_validation/requirements.txt`。SAM 初始化另装 `requirements-sam2.txt`，真实 USB/串口按设备添加依赖或安装 `requirements-hardware.txt`；完整发行 ZIP 带所选权重和 SAM 源码，不依赖 `src/` 或 `real_capture/`。安装矩阵见 [README](README.md)。旧 OpenLoop 在 `--legacy-openloop` 兼容入口保留。YOLO 目前只在离线训练，依赖和发行内容见 [后续部署方案](YOLO_DEPLOYMENT_PLAN.md)。
+Windows 也可用 `run_gui.bat`。建议 Python 3.10（64 位）；在包含 `real_validation/` 的目录安装 `real_validation/requirements.txt`。SAM 初始化另装 `requirements-sam2.txt`，真实 USB/串口按设备添加依赖或安装 `requirements-hardware.txt`；完整发行 ZIP 带所选权重和 SAM 源码，不依赖 `src/` 或 `real_capture/`。安装矩阵见 [README](README.md)。旧 OpenLoop 在 `--legacy-openloop` 兼容入口保留。新版包默认用 YOLO 自动初始化，安装 `requirements-yolo.txt`；模型位置与结果见 [YOLO 使用说明](YOLO_DEPLOYMENT_PLAN.md)。
 
 ## 1 设备模型
 
@@ -45,13 +45,13 @@ Windows 也可用 `run_gui.bat`。建议 Python 3.10（64 位）；在包含 `re
 
 ## 2 初始化、尺度拟合与部署预热
 
-初始化允许使用较慢的 SAM2；不要求 100 ms 完成。SAM2 不参与第四页的实时控制循环。先用六腔工具调到希望的初压，再结束调压并保持。
+初始化默认使用 YOLO，SAM2 可用于提示修正；初始化分割不参与第四页的实时控制循环。先用六腔工具调到希望的初压，再结束调压并保持。
 
 ### 推荐：自动提取 → 检查 → 确认
 
-1. 新独立包带 SAM2.1 Tiny 权重和上游源码。首次使用安装 `requirements-sam2.txt`（Windows 可运行 `install_sam2_windows.bat`）。默认选择 SAM2，设置在 **修正形状 / 高级设置** 中。
-2. 点击 **自动提取当前完整形状**。根据图像亮暗、中心位置和区域几何生成候选提示，无需正常流程先框选；此候选不是训练过的语义检测器。场景有歧义时图像冻结，在臂身中间点一下即可重新分割。
-3. 绿色为冻结 SAM 掩膜，黄色为待确认中心线。检查完整臂身与 BASE/TIP，必要时拖动黄点；错误时展开修正工具，使用框选、负提示、手绘及图像微调。
+1. 新独立包带 YOLO n/s 两个微调候选，默认 n 版。首次安装 `requirements-yolo.txt`（Windows 可运行 `install_yolo_windows.bat`）。在 **修正形状 / 高级设置 → 分割设置…** 中切换候选与 CPU/CUDA。SAM2 备用需要 `requirements-sam2.txt`。
+2. 点击 **自动提取当前完整形状**。YOLO 直接对整张相机图像检测分割，再采样中心线和修正短边；不需要先给框或点。若无检测或出现多个臂身候选会提示检查，可切换 SAM2 加正/负提示，或手绘。
+3. 绿色为冻结分割掩膜，黄色为待确认中心线。检查完整臂身与 BASE/TIP，必要时拖动黄点；错误时展开修正工具，使用框选、负提示、手绘及图像微调。
 4. 点击 **确认形状并部署预热**。后台拟合相机统一尺度、旋转、base 与有界记忆状态，再进行连续新图像预热。
 
 SAM 模型缓存和同一冻结图像的编码复用；所有入口使用一致的 CPU 线程限制。日志分开记录加载、编码、解码及总耗时。首次加载仍可能耗时数秒；场景含支架、同色背景时自动候选可能失败，需要人工修正。D415 近景不采用固定训练像素坐标。
@@ -62,6 +62,7 @@ SAM 模型缓存和同一冻结图像的编码复用；所有入口使用一致�
 
 **可以直接点击手动重画，不必先让自动提取成功。** 从实际 BASE 端面中心画到 TIP 端面中心，松开后可拖动黄点。手绘草稿可以直接确认；也可以先点 **结合图像微调草稿**。
 
+- YOLO 模式：重新整图分割，再沿手绘草稿附近的 mask 横截面居中。
 - SAM2 模式：手绘内部点作为正提示分割，再沿草稿局部横截面居中。
 - 传统模式：草稿附近自适应阈值、GrabCut 颜色分割和横截面居中，避免选到与臂身相连的整块支架。
 - 默认勾选 **微调时保留我标定的 BASE/TIP**，保留人工端点，不再强制要求算法识别短边。取消该选项时尝试自动端面修正；不可靠则保留端点并要求复核。

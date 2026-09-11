@@ -41,7 +41,7 @@ class RobustInitialSegmentationTests(unittest.TestCase):
         image=np.full((300,300,3),(90,120,130),np.uint8)
         mask=np.zeros((300,300),np.uint8);cv2.rectangle(mask,(125,35),(175,265),255,-1)
         curve,_,info=extract_initial_shape(image,15,supplied_mask=mask)
-        self.assertEqual(info['method'],'sam2_mask')
+        self.assertEqual(info['method'],'supplied_mask')
         np.testing.assert_allclose(curve[[0,-1]],[[150,35],[150,265]],atol=2.)
 
 
