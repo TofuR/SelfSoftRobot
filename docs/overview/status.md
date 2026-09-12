@@ -13,6 +13,8 @@ sources:
 
 # 项目状态快照
 
+2026-09-12：已整理首批实机会话 `20260912_002251_76c5e1`：22 次均为 5 Hz，15 次完整执行归档到 [real_robot_20260912_001](../../workspace/runs/validation/real_robot_20260912_001/README.md)，另 6 次矫正超时保护停止、1 次末段反馈未确认。原图证实包含实物遮挡、开环/矫正及左右全形状/末端任务；实测到位误差尚未统一评价，不能以模型内残差替代。
+
 2026-09-12：独立发行包改为运行文件清单、单一操作指南与安装/启动入口；结果统一到包根 `results/`，源码运行遵循项目 workspace 配置。使用见 [便携版操作指南](../../real_validation/PORTABLE_README.md)。
 
 2026-09-11：YOLO26 n/s 分割微调已完成，第二页可整图自动提取，默认 n 版；发布候选统一位于 App 的 `checkpoints/perception/`，详见 [分割部署说明](../../real_validation/YOLO_DEPLOYMENT_PLAN.md)。新 D415 现场泛化与持续跟随仍待验证。
