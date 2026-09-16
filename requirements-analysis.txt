@@ -1,0 +1,11 @@
+# Additional Python dependencies for offline analysis, reports and paper tools.
+# Install alongside the project's requirements.txt; see scripts/experiments/README.md.
+pandas
+scikit-image
+python-docx
+lxml
+
+# External tools (not installed by pip):
+# Node.js + optional Data Analytics deliver_portable_artifact.mjs helper for HTML delivery.
+# Set SELF_SOFT_REPORT_DELIVERY to the helper path when needed.
+# Pandoc for scripts/paper/update_v3_section36_docx.py.
