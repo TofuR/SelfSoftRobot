@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>从压力历史到全身形态 · 交互式方法讲解</title>
+<style>
+:root{--bg:#f4f6f9;--paper:#fff;--ink:#192838;--muted:#526575;--line:#dbe3ea;--blue:#2459ad;--path:#b66a0b;--time:#077d77;--violet:#7650a6;--tint:#eef4fc;--shadow:0 8px 35px #1a304009;color-scheme:light}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:24px}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.85 system-ui,-apple-system,"Microsoft YaHei",sans-serif}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}button,input,select{font:inherit}button,select{border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink);padding:7px 13px}button{cursor:pointer}button:hover{border-color:var(--blue);background:var(--tint)}button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid #72a6ed;outline-offset:3px}button.primary{background:var(--blue);color:white;border-color:var(--blue)}button:disabled{opacity:.45;cursor:default}input[type=range]{width:100%;accent-color:var(--blue)}.side{position:fixed;left:0;top:0;bottom:0;width:246px;background:var(--paper);border-right:1px solid var(--line);padding:28px 19px;overflow:auto}.brand{font-size:19px;font-weight:750;line-height:1.5;margin-bottom:14px}.side small{color:var(--muted)}nav{margin:20px 0}nav a{display:block;color:var(--muted);font-size:14px;padding:7px 10px;border-radius:7px;line-height:1.45;margin:3px 0}nav a.active{color:var(--blue);background:var(--tint);font-weight:700}.progress{height:4px;background:var(--line);border-radius:9px;overflow:hidden}.progress i{display:block;height:100%;background:var(--time);width:0}.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}.toolbar button{font-size:12px;padding:5px 8px}main{margin-left:246px;padding:45px 4vw 70px;max-width:1420px}header{padding:5px 0 24px}.eyebrow{color:var(--time);font-size:13px;letter-spacing:.12em;font-weight:700}h1{font-size:clamp(30px,3.4vw,45px);line-height:1.35;letter-spacing:-.04em;margin:12px 0 18px}h2{font-size:27px;line-height:1.5;margin:0 0 18px}h3{font-size:20px;margin:28px 0 10px}h4{font-size:17px;margin:18px 0 8px}p{margin:12px 0}section{background:var(--paper);border:1px solid var(--line);border-radius:16px;margin:25px 0;padding:30px;box-shadow:var(--shadow)}.lede{font-size:18px;color:var(--muted);max-width:800px}.num{font:600 13px/1.4 ui-monospace,monospace;color:var(--time);display:block;margin-bottom:9px}.note,.insight{border-left:4px solid var(--blue);background:var(--tint);padding:12px 17px;border-radius:0 8px 8px 0;margin:18px 0}.insight{border-color:var(--time)}.note p:first-child,.insight p:first-child{margin-top:0}.note p:last-child,.insight p:last-child{margin-bottom:0}.muted,figcaption,.caption{color:var(--muted);font-size:14px}.eq{background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:16px 20px;margin:16px 0;font:19px/1.85 "Cambria Math","STIX Two Math",Georgia,serif;overflow-x:auto}.eq .eqno{float:right;font:12px/2 system-ui;color:var(--muted);margin-left:12px}.eq small{font:14px/1.6 system-ui;color:var(--muted)}.eq sub,.eq sup{font-size:70%}.math{font-family:"Cambria Math",Georgia,serif}.path{color:var(--path)}.time{color:var(--time)}.ref{color:var(--blue)}.violet{color:var(--violet)}.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}.triple{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.mini{border:1px solid var(--line);border-radius:10px;padding:16px}.mini p{font-size:14px}.flow{display:flex;align-items:stretch;gap:7px;flex-wrap:wrap;margin:22px 0}.flow div{border:1px solid var(--line);background:var(--bg);border-radius:10px;padding:12px;flex:1;min-width:110px;font-size:14px}.flow b{display:block}.flow span{align-self:center;color:var(--muted)}.table-wrap{overflow:auto;margin:15px 0}table{border-collapse:collapse;width:100%;font-size:14px;white-space:normal}th,td{text-align:left;border-bottom:1px solid var(--line);padding:9px 10px;vertical-align:top}th{background:var(--bg);font-weight:650}td.number{font-variant-numeric:tabular-nums}.chosen td{background:#e9f5f2;color:#124b49;font-weight:650}code,pre{font:14px/1.75 ui-monospace,SFMono-Regular,Consolas,monospace}code{background:var(--bg);padding:2px 4px;border-radius:4px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:15px}details{border:1px solid var(--line);border-radius:9px;margin:15px 0;padding:0 16px}summary{cursor:pointer;padding:12px 0;font-weight:650}details[open]{padding-bottom:14px}details p{font-size:15px}.lab{border:1px solid #c3d3e6;background:linear-gradient(135deg,var(--tint),var(--paper));padding:22px;border-radius:12px;margin:22px 0}.lab h3{margin-top:0}.controls{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;align-items:start}.controls label{display:block;font-size:14px}.controls output{font-weight:750;color:var(--blue)}.buttons{display:flex;gap:9px;flex-wrap:wrap;margin:14px 0}.plot{display:block;width:100%;height:auto;min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:10px;margin:13px 0}.plot text{font-family:system-ui,sans-serif;fill:var(--muted)}.calc{background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:14px 18px;margin-top:13px;font-variant-numeric:tabular-nums}.calc p{margin:6px 0}.legend{display:flex;gap:18px;flex-wrap:wrap;font-size:13px}.legend i{display:inline-block;width:19px;height:3px;vertical-align:middle;margin-right:6px}.tag{display:inline-block;border-radius:4px;padding:2px 8px;font-size:12px;background:var(--bg);color:var(--muted);margin:2px 5px 2px 0}.search{width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink)}.symbols{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}.symbol{border:1px solid var(--line);border-radius:8px;padding:12px}.symbol b{font-size:18px;color:var(--blue)}.symbol p{font-size:14px;margin:3px 0}footer{color:var(--muted);font-size:13px;padding:20px 0}.readout{max-height:400px;overflow:auto}.step-badge{font-weight:750;color:var(--time)}.mobile-menu{display:none}.checks{color:var(--time);font-size:13px}.sources a{overflow-wrap:anywhere}.hidden{display:none!important}body.dark{--bg:#111d2a;--paper:#192938;--ink:#e3ebf3;--muted:#aebfcd;--line:#364a5e;--blue:#83b4ff;--path:#edb662;--time:#6bccc2;--violet:#c6acf5;--tint:#203448;--shadow:none;color-scheme:dark}body.dark .chosen td{background:#254b48;color:#e1f6f2}body.dark button.primary{color:#132539}.skip{position:absolute;top:-60px;left:12px;background:white;padding:10px;z-index:10}.skip:focus{top:10px}ul,ol{padding-left:24px}li{margin:7px 0}
+@media(max-width:1000px){.side{width:215px;padding:22px 12px}main{margin-left:215px;padding:30px 22px}section{padding:24px}.grid,.triple{grid-template-columns:1fr}.controls{grid-template-columns:1fr 1fr}}
+@media(max-width:700px){.side{position:relative;width:auto;border-right:0;border-bottom:1px solid var(--line);padding:15px 19px}.side nav{display:none}.side.open nav{display:block;columns:2}.mobile-menu{display:inline-block}main{margin:0;padding:24px 14px}.brand{font-size:17px;margin-bottom:6px}.toolbar{margin-top:10px}.progress{display:none}section{padding:20px 16px;border-radius:11px}.symbols,.controls{grid-template-columns:1fr}h2{font-size:23px}.eq{font-size:17px;padding:12px}.lab{padding:16px}.flow{gap:5px}.flow div{min-width:100px}.flow span{display:none}}
+@media print{.side,.buttons,.controls,.toolbar,.search,.progress,.skip,input,select{display:none}main{margin:0;max-width:none;padding:0}body{background:white;color:black;font-size:11pt}section{box-shadow:none;break-inside:auto;border:0;border-bottom:1px solid #ccc;border-radius:0;padding:14px 0}h2,h3,summary{break-after:avoid}.lab,.calc,.eq{break-inside:avoid}.plot{max-height:240px}a{color:inherit}details{border:0}footer{font-size:9pt}}
+</style>
+</head>
+<body>
+<a class="skip" href="#start">跳到正文</a>
+<aside class="side" id="sidebar">
+<div class="brand">压力历史如何<br>变成身体形状</div><small>HOV 方法 · 逐步计算讲解</small>
+<div class="progress"><i id="progress"></i></div>
+<div class="toolbar"><button class="mobile-menu" id="menuButton">章节目录</button><button id="themeButton">切换深浅色</button><button id="detailsButton">展开全部推导</button><button id="printButton">打印 / PDF</button></div>
+<nav aria-label="章节目录">
+<a href="#start">00　先看完整路线</a><a href="#notation">01　读懂符号与维度</a><a href="#drive">02　压力 → 驱动坐标</a><a href="#reference">03　当前输入的参考形态</a><a href="#play">04　路径记忆：记住怎么走</a><a href="#time">05　时间记忆：记住过去多久</a><a href="#sandbox">06　把整条链算一遍</a><a href="#geometry">07　角度与长度 → 骨架</a><a href="#training">08　训练究竟学什么</a><a href="#kernel">09　记忆如何形成全身位移</a><a href="#plugin">10　记忆模块如何复用</a><a href="#control">11　模型如何用于规划与反馈</a><a href="#actual">12　查看当前模型的真实计算</a><a href="#questions">13　容易混淆的地方</a><a href="#sources">14　代码与公式对应</a>
+</nav></aside>
+<main>
+<header><div class="eyebrow">SELF-MODELING · AN INTERACTIVE WALKTHROUGH</div><h1>从一串压力，<br>到一条完整的软臂骨架。</h1><p class="lede">按“收到什么 → 做什么计算 → 得到什么 → 为什么有用”的顺序，理解当前模型。先亲手算小例子，再看真实检查点中的四通道计算。</p><span class="tag">中文详细讲解</span><span class="tag">公式逐项解释</span><span class="tag">离线可交互</span><span class="tag">依据当前方法与实现</span></header>
+
+<section id="start"><span class="num">00 / THE WHOLE PICTURE</span><h2>先用一句话抓住模型的工作</h2>
+<p>模型回答的是：<strong>给这条软臂施加这样的压力，考虑它此前经历过的动作，现在会形成什么形状？</strong>“当前压力”给出形变的主要趋势；两类记忆补充相同压力下的历史差别；几何生成把这些信息变成相互连接的节点位置。</p>
+<div class="flow"><div><b>四路压力历史</b>做过哪些动作</div><span>→</span><div><b>当前参考 + 两类记忆</b>现在在哪条响应路径上</div><span>→</span><div><b>局部角度与段长</b>身体各处怎样变形</div><span>→</span><div><b>15个骨架节点</b>全身占据哪些位置</div></div>
+<div class="eq"><span class="eqno">论文式（1）</span><b>z</b><sub>t</sub> = F<sub>θ</sub>(<b>z</b><sub>t−1</sub>, <b>u</b><sub>t</sub>, Δt)<br><b>X̂</b><sub>t</sub> = G(R<sub>θ</sub>(<b>u</b><sub>t</sub>, <b>z</b><sub>t</sub>))</div>
+<p>第一行是<strong>更新记忆</strong>：用“上一步记忆 + 新动作 + 经过的时间”得到现在的记忆。第二行是<strong>生成形状</strong>：先把当前动作和记忆翻译成几何量，再把几何量拼成骨架。F、R、G分别是这三项工作的函数名，θ表示训练得到的一组参数。</p>
+<div class="grid"><div class="mini"><h4>训练时，相机提供答案</h4><p>RGB图像 → SAM2掩码 → 有序中心线 → 15个节点。这些节点告诉模型“这段动作之后，软臂实际长成这样”。模型据此调整参数。</p></div><div class="mini"><h4>前向预测时，模型使用动作与记忆</h4><p>给定动作和已有记忆，模型就能输出骨架。图像可以在下游反馈中修正内部状态；它并非这条动作到形状预测链每一步都要输入的特征。</p></div></div>
+<div class="insight"><b>一个有用的抽象：</b>把模型看作“带记忆的身体计算器”。它保存的是一份可更新的历史摘要。输入新动作后，计算器先更新摘要，再算出身体形状。</div>
+<p class="caption">本页的可调手算例子使用明确给出的教学系数；第12节另列当前正式模型的真实检查点与固定验证窗口。两者分别帮助理解计算和核对实现。</p></section>
+
+<section id="notation"><span class="num">01 / READ THE SYMBOLS</span><h2>符号看起来多，其实只有几类东西</h2>
+<p>下标 <b>t</b> 表示第几个时刻，<b>c</b> 表示第几个压力通道，<b>i</b> 表示沿软臂的第几个节点。粗体表示把多个数字排成一个向量或矩阵；帽子“ˆ”表示模型预测。求和符号“∑”就是“把指定的一串项加起来”。</p>
+<input id="symbolSearch" class="search" type="search" placeholder="搜索：例如 q、时间、角度、参数、矩阵" aria-label="搜索符号含义">
+<div class="symbols" id="symbols">
+<div class="symbol"><b>u / a / e</b><p>u：物理压力命令；a=u/150：归一化压力；e=φ(a)：记忆算子使用的驱动坐标。论文常把归一化吸收到u的定义中。</p></div>
+<div class="symbol"><b>p / q</b><p>p：play内部保留的位置；q=e−p：当前驱动与保留位置的差，也是送给几何读出的路径记忆量。</p></div>
+<div class="symbol"><b>h / d</b><p>h：缓慢跟随驱动的时间记忆状态；d=h−e：跟随状态与当前驱动的差，是送给读出的时间特征。</p></div>
+<div class="symbol"><b>r / τ / α</b><p>r：路径阈值；τ：时间常数，单位秒；α=exp(−Δt/τ)：经过一个采样间隔后保留旧状态的比例。</p></div>
+<div class="symbol"><b>β / θ / λ / ℓ</b><p>β：局部转角；θ：相对固定坐标轴的累计方向角；λ：段长比例的自然对数；ℓ：实际离散区间长度。</p></div>
+<div class="symbol"><b>ξ / X</b><p>ξ：角度与对数段长组成的几何坐标；X：节点笛卡尔坐标。前者描述“如何弯”，后者描述“点在哪”。</p></div>
+<div class="symbol"><b>W / J</b><p>W：训练得到的记忆读出矩阵，把历史数字转换成几何变化；J：几何Jacobian，把微小几何变化转换成节点位移。</p></div>
+<div class="symbol"><b>θ（参数） / z（状态）</b><p>参数θ在训练时学习，部署时通常固定。状态z=(p,h)随动作每步更新。参数集合θ与方向角θᵢ依语境区分。</p></div>
+</div>
+<h3>向量、矩阵不是新的计算规则</h3><p>向量只是有顺序的一串数。矩阵乘法就是<strong>多组“乘权重再相加”</strong>。例如两种记忆 q₁=0.2、q₂=−0.1，要预测两个角度的变化：</p>
+<pre>[ δβ₁ ]   [ 0.3   0.5 ] [  0.2 ]   [ 0.3×0.2 + 0.5×(−0.1) ]   [ 0.01 ]
+[ δβ₂ ] = [−0.2   0.4 ] [ −0.1 ] = [−0.2×0.2 + 0.4×(−0.1) ] = [−0.08 ]</pre>
+<p>第一行说：两种记忆对第一个角度的影响部分抵消，最后增加0.01 rad。第二行说：它们对第二个角度的影响相加，最后减少0.08 rad。<strong>矩阵的每一行回答“这个输出受哪些输入影响”，每一列回答“这个记忆会影响身体哪些位置”。</strong></p>
+<div class="table-wrap"><table><thead><tr><th>当前模型的一次预测</th><th>大小</th><th>如何数出来</th></tr></thead><tbody><tr><td>动作窗口</td><td>20×4</td><td>20个时刻，每个4路压力</td></tr><tr><td>路径记忆 q / 状态 p</td><td>各8维</td><td>4通道×2个阈值</td></tr><tr><td>时间特征 d / 状态 h</td><td>各24维</td><td>4通道×6个时间常数</td></tr><tr><td>递推状态 z</td><td>32维</td><td>保存8个p与24个h；q、d由当前e重算</td></tr><tr><td>几何坐标 ξ</td><td>16维</td><td>14个局部转角 + 2个分段对数长度</td></tr><tr><td>骨架 X</td><td>15×2（概念）</td><td>基座 + 14个区间末端；代码保存15×3，第三坐标固定</td></tr></tbody></table></div></section>
+
+<section id="drive"><span class="num">02 / PRESSURE TO DRIVE</span><h2>第一步：把压力换成模型更容易使用的坐标</h2>
+<p><b>输入：</b>当前四路有效压力。<b>输出：</b>四个驱动坐标 e。真实采集保存六路命令，通过气腔联动提取四维有效输入。这里逐通道计算，所以先看一路。</p>
+<p>例如压力为60 kPa，工作范围为0–150 kPa，归一化后 a=60/150=0.4。归一化只是在换刻度：0表示下限，1表示上限。随后用一个<strong>可学习、单调不减的折线函数</strong>φ，把a换成e。</p>
+<div class="eq">a = u / 150，　e = φ(a)<br>φ(a) = ∑<sub>k</sub> w<sub>k</sub> max(a−κ<sub>k</sub>, 0)，　w<sub>k</sub> ≥ 0</div>
+<p>κ是折线开始增加斜率的位置；max(a−κ,0)在a没有到κ之前为0，超过κ后才增长。给这些“铰链”非负权重，加起来就是单调折线。当前实现还将权重整体缩放，使φ(1)=1，因此路径阈值r具有一致的驱动尺度。</p>
+<div class="lab"><h3>把压力滑过一条非线性驱动曲线</h3><p class="caption">教学折线：κ=(0,0.4,0.7)，原始权重=(1,0.8,0.4)，再除以上限处的值1.6。</p><label for="drivePressure">压力 / kPa <output id="drivePressureOut"></output></label><input id="drivePressure" type="range" min="0" max="150" step="1" value="90"><svg id="drivePlot" class="plot" viewBox="0 0 680 250" role="img" aria-label="归一化压力到驱动坐标的折线"></svg><div id="driveCalc" class="calc" aria-live="polite"></div></div>
+<div class="insight"><b>意义：</b>同样增加10 kPa，在不同压力区间对形变的影响可以不同。φ用少量参数调整压力轴上的敏感程度，让后面的历史算子在更适合这条软臂的坐标上工作。φ本身只看当前输入，历史信息从下一步的递推产生。</div>
+<details><summary>更深一层：非负、单调、可学习分别意味着什么？</summary><p>代码用softplus(v)=log(1+exp(v))把任意实数参数v变成正权重。训练更新的是v，实际使用的是变换后的权重。当前5个铰链位于0、0.25、0.5、0.75、1。设正权重为sₖ，实际有效权重为wₖ=sₖ/[∑ⱼsⱼ(1−κⱼ)]，因此上限处的输出为1。</p><p>非负铰链保证每个单通道e随a不减，且斜率也不下降。这是一种受限的单调凸折线。最终节点坐标仍可以增大或减小，因为几何读出的系数可以带正负号，多个气腔也可以相互作用。</p><p>e是学习得到的无量纲驱动坐标。它的变化可用来组织历史，但其数值不直接等同于可测材料应变或腔内实测压力。</p></details></section>
+
+<section id="reference"><span class="num">03 / CURRENT-INPUT REFERENCE</span><h2>第二步：先给当前输入一个参考形态</h2>
+<p><b>输入：</b>当前四维归一化压力a。<b>输出：</b>14个参考转角与2个参考对数长度，合成 ξ<sub>ref</sub>。这一步先回答：“只看现在的驱动，身体大致应该弯成什么样？”</p>
+<div class="eq">ξ<sub>ref</sub>(a) = b + ∑<sub>c</sub> v<sub>c</sub> f<sub>c</sub>(a<sub>c</sub>) + ∑<sub>c&lt;c′</sub> v<sub>cc′</sub> a<sub>c</sub>a<sub>c′</sub></div>
+<p>这里b是基准几何坐标，v<sub>c</sub>表示第c个通道对各个几何量的影响，f<sub>c</sub>是参考映射自己的单通道驱动函数。最后一项是两通道压力乘积，允许“两个气腔同时充气”的作用随组合而变。四通道共有6个不同的两两组合。</p>
+<div class="note">实现中有两套作用不同的驱动变换：参考项使用预拟合并固定的单通道函数 f；记忆分支使用前一节的可学习 φ。它们都由当前输入计算，但参数和用途各自独立。</div>
+<h3>先手算一个参考转角</h3><p>假设一个局部转角满足 β<sub>ref</sub>=0.1+0.3a₁−0.2a₂+0.1a₁a₂，当前a₁=0.4、a₂=0.6，则：</p><pre>βref = 0.1 + 0.3×0.4 − 0.2×0.6 + 0.1×0.4×0.6
+     = 0.1 + 0.12 − 0.12 + 0.024
+     = 0.124 rad ≈ 7.10°</pre>
+<p>第一通道增加的弯曲与第二通道引起的反向弯曲在这里抵消，通道组合额外贡献0.024 rad。真实模型同时计算16个这样的几何坐标；参考函数的具体曲线和权重由训练数据拟合。</p>
+<div class="insight"><b>参考形态的地位：</b>它是一条容易学习的主要趋势。加载与卸载到同一压力时，参考项相同，而历史修正可以不同。持续持压时，时间项逐渐消失，路径项仍可能保留，所以参考项并不必然等于所有加载历史共有的最终形态。</div></section>
+
+<section id="play"><span class="num">04 / PATH MEMORY</span><h2>第三步：路径记忆怎样记住“从哪边走过来”</h2>
+<p>想象有一个<strong>以当前驱动e为中心、左右各宽r的滑动小盒子</strong>，里面放着一个标记p。盒子移动时，只要p仍在盒内，它就留在原处；当盒子边界越过p时，边界会把p推着走。这个简单规则就是play算子。</p>
+<div class="eq"><span class="eqno">论文式（2）</span>p<sub>t</sub> = clip(p<sub>t−1</sub>, e<sub>t</sub>−r, e<sub>t</sub>+r)<br>q<sub>t</sub> = e<sub>t</sub>−p<sub>t</sub></div>
+<p>clip(x,L,U)的意思：小于L就取L，大于U就取U，在两者之间就保留x。p负责储存“上次被边界推到哪里”；q表示“盒子中心离这个保留位置还有多远”。q被限制在[−r,r]内，送给后面的几何读出。</p>
+<h3>把每次移动写出来：r=0.2</h3>
+<div class="table-wrap"><table><thead><tr><th>当前e</th><th>上一p</th><th>盒子范围[e−r,e+r]</th><th>新的p</th><th>q=e−p</th><th>发生了什么</th></tr></thead><tbody><tr><td>0</td><td>0</td><td>[−0.2,0.2]</td><td>0</td><td>0</td><td>初始化</td></tr><tr><td>0.4</td><td>0</td><td>[0.2,0.6]</td><td>0.2</td><td>0.2</td><td>下边界把p推到0.2</td></tr><tr><td>0.8</td><td>0.2</td><td>[0.6,1.0]</td><td>0.6</td><td>0.2</td><td>继续加载，q到达正边界</td></tr><tr><td>0.6</td><td>0.6</td><td>[0.4,0.8]</td><td>0.6</td><td>0</td><td>开始反转，p还在盒内</td></tr><tr><td>0.4</td><td>0.6</td><td>[0.2,0.6]</td><td>0.6</td><td>−0.2</td><td>反向行程累计0.4，到达负边界</td></tr><tr><td>0.4</td><td>0.6</td><td>[0.2,0.6]</td><td>0.6</td><td>−0.2</td><td>保持输入，路径记忆保留</td></tr></tbody></table></div>
+<p><strong>关键就在两次e=0.4：</strong>第一次由低值加载上来，q=+0.2；第二次由高值卸载下来，q=−0.2。同样当前驱动，现在有了两个不同的历史标签，模型可以给出两个不同形态。</p>
+<div class="eq"><span class="eqno">论文式（6）的第一行</span>q<sub>t</sub> = clip(q<sub>t−1</sub> + Δe<sub>t</sub>, −r, r)，　Δe<sub>t</sub>=e<sub>t</sub>−e<sub>t−1</sub></div>
+<p>这也是同一个规则，读作“把这次驱动变化加入已有记忆，再截到允许范围”。从+r走到−r需要累计反向变化2r，因此它不只是识别“正在充气还是放气”，还表达<strong>反转之后已经走了多远</strong>。</p>
+<details><summary>为什么两个公式完全等价？展开代数看看</summary><p>由q<sub>t−1</sub>=e<sub>t−1</sub>−p<sub>t−1</sub>可知，若p仍留在盒内，则q<sub>t</sub>=e<sub>t</sub>−p<sub>t−1</sub>=q<sub>t−1</sub>+Δe<sub>t</sub>。当这个数超过+r或低于−r，p恰好被相应边界推动，q截成+r或−r。于是三种情况正好合成clip公式。</p><p>保持e时Δe=0，q保持原值。在相同初始状态和相同驱动路径下，仅改变停留时间不会改变这一支的q。采样需要捕获路径的反转点，遗漏反转仍会改变计算结果。</p></details>
+<div class="insight"><b>多个阈值的意义：</b>小r对较小的反转行程就会到达另一边界；大r可保留更长的反向行程信息。当前每个通道使用r=0.02和0.5两个固定阈值，读出学习如何组合它们。本页手算采用r=0.2，方便看清过程。</div></section>
+
+<section id="time"><span class="num">05 / TIME MEMORY</span><h2>第四步：时间记忆怎样记住“变化发生多久了”</h2>
+<p>路径记忆在持压时保持不变，但软臂的形状仍可能继续变化。时间记忆为此引入一个<strong>缓慢追赶当前驱动的跟随量h</strong>。新目标突然升高，h一时跟不上；保持一段时间后，它才逐渐靠近新目标。</p>
+<div class="eq"><span class="eqno">论文式（3）</span>α = exp(−Δt/τ)<br>h<sub>t</sub> = αh<sub>t−1</sub> + (1−α)e<sub>t</sub><br>d<sub>t</sub> = h<sub>t</sub>−e<sub>t</sub></div>
+<p>α位于0和1之间，是“旧跟随量占多少”；1−α是“当前目标占多少”。τ越大，α越接近1，旧状态保留越多，追赶越慢。输入增长时常见d&lt;0，输入下降时可能d&gt;0。这个差值的符号与持续时间都携带信息。</p>
+<h3>算一次从0跳到0.4的响应</h3><p>设Δt=0.2 s、τ=1 s，起始h=0。α=exp(−0.2)=0.81873。</p><pre>第1次更新：h₁ = 0.81873×0 + 0.18127×0.4 = 0.072508
+           d₁ = 0.072508 − 0.4 = −0.327492
+保持0.4，再更新：h₂ = 0.81873×0.072508 + 0.18127×0.4 = 0.131872
+                d₂ = 0.131872 − 0.4 = −0.268128</pre><p>当前输入没变，但d的绝对值变小了。读出可以把这段衰减转换成随时间继续发展的角度或长度变化。d&lt;0本身不能直接说明向哪边弯：空间方向由W<sub>h</sub>的系数决定。</p>
+<div class="lab"><h3>调整时间常数，看追赶速度</h3><div class="controls"><label>τ / s：<output id="tauOut"></output><input id="tauSlider" type="range" min="0.2" max="3" step="0.1" value="1"></label><label>观察经过时间 / s：<output id="holdOut"></output><input id="holdSlider" type="range" min="0" max="5" step="0.2" value="1"></label><label>目标驱动e：<output id="targetOut"></output><input id="targetSlider" type="range" min="0.1" max="1" step="0.1" value="0.4"></label></div><svg id="timePlot" class="plot" viewBox="0 0 680 275" role="img" aria-label="恒定目标下时间记忆h的追赶曲线"></svg><div id="timeCalc" class="calc" aria-live="polite"></div></div>
+<h3>为什么是exp？τ到底意味着什么？</h3><p>若驱动在一个时间间隔内保持不变，一阶跟随方程 dh/dt=(e−h)/τ 的精确解就是指数追赶。经过τ秒后，初始差值还剩exp(−1)≈36.8%；经过3τ后还剩约5%。它描述一段时间尺度，不代表一个“到点就完成”的硬截止时间。</p>
+<div class="eq"><span class="eqno">论文式（6）的第二行</span>d<sub>t</sub> = α(d<sub>t−1</sub>−Δe<sub>t</sub>)<br>d<sub>t</sub> = α<sup>t</sup>d<sub>0</sub> − ∑<sub>a=1…t</sub> α<sup>t−a+1</sup>Δe<sub>a</sub></div>
+<p>后一行把递推展开：每次过去的驱动变化都留下一个贡献，越久以前的变化，乘上的衰减越多。<strong>路径分支是有边界的行程累积，时间分支是会逐渐衰减的历史变化累积。</strong></p>
+<details><summary>从h公式推到d公式；以及5 Hz和10 Hz怎么对应</summary><p>因为h<sub>t−1</sub>=d<sub>t−1</sub>+e<sub>t−1</sub>，代入得到d<sub>t</sub>=α(d<sub>t−1</sub>+e<sub>t−1</sub>)+(1−α)e<sub>t</sub>−e<sub>t</sub>=α(d<sub>t−1</sub>−Δe<sub>t</sub>)。再不断代入上一步，就得到带求和的展开式。</p><p>同一个τ下，5 Hz的α₅=exp(−0.2/τ)，10 Hz的α₁₀=exp(−0.1/τ)，因此α₁₀²=α₅。在相同恒定输入、相同初始状态下，两个0.1 s更新与一个0.2 s更新一致。若两次0.1 s之间动作已经改变，10 Hz捕获了更多输入细节，两种预测就可能不同。原生10 Hz建模还要保持时间常数和实际时间定义一致。</p></details>
+<div class="insight"><b>当前模型学到什么：</b>使用6个固定时间常数，覆盖0.6–2.0 s；训练主要学习这些快慢成分分别如何影响身体各处。其τ和路径阈值r在当前配置中是固定网格，学习的是组合与几何作用。</div></section>
+
+<section id="sandbox"><span class="num">06 / CALCULATE THE WHOLE CHAIN</span><h2>第五步：把三部分相加，一步一步算完整预测</h2>
+<p>现在把参考、路径、时间三部分放在一起。先使用一个缩小模型：<strong>1个输入通道、1个路径单元、1个时间单元、3个几何区间</strong>。设e=a，便于手算；三个区间各有一个转角，并共用一个对数长度λ。</p>
+<div class="eq"><span class="eqno">论文式（4）</span>ξ = ξ<sub>ref</sub> + <span class="path">W<sub>p</sub>q</span> + <span class="time">W<sub>h</sub>d</span>，　ξ=[β₁,β₂,β₃,λ]<sup>T</sup></div>
+<pre>教学参考 ξref = [0.50e, 0.30e, −0.15e, 0.03e]ᵀ
+教学路径系数 Wp = [0.30, −0.20, 0.10, 0.01]ᵀ
+教学时间系数 Wh = [−0.40, −0.20, 0.15, −0.02]ᵀ
+参考区间长度 ℓ⁰ = 50 mm；基点 = (0,0)</pre>
+<p>例如第一个角度的时间系数是−0.40，如果d=−0.20，那么时间修正为(−0.40)×(−0.20)=+0.08 rad。正负号乘起来决定实际增加还是减小；其他几何量同样逐项计算。</p>
+<div class="lab"><h3>交互实验：你来推进动作</h3><div class="controls"><label>教学动作序列<select id="scenario"><option value="loop">加载 → 反转 → 保持</option><option value="load">加载到0.4后保持</option><option value="unload">从0.8卸载到0.4后保持</option><option value="pulse">短暂加载后回到0</option></select></label><label>路径阈值r：<output id="rOut"></output><input id="rSlider" type="range" min="0.05" max="0.5" step="0.05" value="0.2"></label><label>时间常数τ / s：<output id="sandboxTauOut"></output><input id="sandboxTau" type="range" min="0.2" max="3" step="0.1" value="1"></label></div>
+<p class="caption">Δt=0.2 s。输入为便于演示历史效应的教学序列。首帧初始化p=h=e₀，所以q=d=0。</p>
+<div class="buttons"><button id="prevStep">← 上一步</button><button class="primary" id="nextStep">下一步 →</button><button id="resetStep">回到首步</button><button id="downloadToy">导出逐步计算CSV</button></div><label>当前计算时刻：<span id="stepLabel" class="step-badge"></span><input id="stepSlider" type="range" min="0" max="7" value="4" step="1"></label>
+<div class="grid"><div><svg id="historyPlot" class="plot" viewBox="0 0 620 280" role="img" aria-label="教学输入e、路径记忆q和时间特征d随时间变化"></svg><div class="legend"><span><i style="background:var(--blue)"></i>输入e</span><span><i style="background:var(--path)"></i>路径q</span><span><i style="background:var(--time)"></i>时间d</span></div></div><div><svg id="toyShape" class="plot" viewBox="0 0 620 280" role="img" aria-label="教学参考骨架与记忆修正后的骨架"></svg><div class="legend"><span><i style="background:#8794a3"></i>当前输入参考</span><span><i style="background:var(--violet)"></i>加入两类记忆</span></div></div></div>
+<div id="stepCalc" class="calc" aria-live="polite"></div>
+<h4>当前时刻的四个几何量怎么合成</h4><div id="toyReadout" class="table-wrap"></div>
+<details open><summary>所有时刻的中间数值</summary><div id="toyHistoryTable" class="table-wrap"></div></details>
+<p class="caption">改变r或τ会重新计算整段教学历史；箭头和滑条只改变你正在查看的时刻。图中x、y均为平面坐标，单位mm。</p></div>
+<h3>从这个小例子扩展到真实模型</h3><p>真实模型有8个q和24个d。有效W<sub>p</sub>为16×8，W<sub>h</sub>为16×24。它们各自输出16个修正量，再与16维参考相加。因此真实模型的矩阵乘法只是把上面的“一个q乘一列系数”扩成“很多个q各乘一列，再相加”。</p>
+<details><summary>实际代码的“增益 × 方向 × 尺度”如何对应W？</summary><p>代码为每个记忆单元保存一个非负增益g、一个16维单位方向v以及统一的几何尺度s。该单元的有效列权重就是w=s⊙(gv)，其中⊙表示对应元素相乘。几何方向v带有正负号，因此非负g仍允许任意方向的身体修正。</p><p>弯曲部分还通过固定基矩阵B转换到14个局部转角。当前使用完整14维弯曲表示；可以把B并入有效W。教程第12节显示的是已经完成这些变换的实际角度、长度修正，所以能与论文的相加公式直接对应。</p></details></section>
+
+<section id="geometry"><span class="num">07 / FROM ANGLES TO POINTS</span><h2>第六步：把转角和长度真正拼成一条臂</h2>
+<p>模型目前得到的是“怎样弯曲”，还没有得到坐标。下面沿着软臂从基座向末端走：先确定每一小段朝哪，再确定走多远，最后把位移逐段累加。</p>
+<div class="eq"><span class="eqno">论文式（5）</span>θ<sub>i</sub> = ∑<sub>a=1…i</sub> β<sub>a</sub><br>ℓ<sub>i</sub> = ℓ<sub>i</sub><sup>0</sup> exp(λ<sub>s(i)</sub>)<br><b>x</b><sub>i</sub> = <b>x</b><sub>i−1</sub> + ℓ<sub>i</sub>[cos θ<sub>i</sub>, sin θ<sub>i</sub>]<sup>T</sup></div>
+<div class="triple"><div class="mini"><b>① 累加转角</b><p>β₁是首区间相对+x轴的方向；β₂起是相邻区间的方向变化。若β=(30°,20°,−10°)，则累计方向θ=(30°,50°,40°)。</p></div><div class="mini"><b>② 把对数变回长度</b><p>若λ=ln(1.1)≈0.09531，exp(λ)=1.1。参考长度50 mm就变成55 mm。指数保证区间长度始终为正。</p></div><div class="mini"><b>③ 分解并累加位移</b><p>长度ℓ沿方向θ走出去，横向位移是ℓcosθ，纵向位移是ℓsinθ。加到上一个节点上，就得到下一个节点。</p></div></div>
+<h3>第一段的具体计算</h3><pre>θ₁=30°，ℓ₁=55 mm，x₀=(0,0)
+Δx₁=55×cos30°=47.631 mm
+Δy₁=55×sin30°=27.500 mm
+x₁=(47.631,27.500) mm
+
+第二段：θ₂=50°，Δx₂=35.353，Δy₂=42.132
+x₂=x₁+(35.353,42.132)=(82.985,69.632) mm</pre>
+<div class="lab"><h3>改变中间转角，看看哪些节点会跟着动</h3><div class="controls"><label>第二个局部转角β₂ / °：<output id="bendOut"></output><input id="bendSlider" type="range" min="-60" max="60" step="1" value="20"></label><label>长度比例：<output id="lengthOut"></output><input id="lengthSlider" type="range" min="0.8" max="1.25" step="0.01" value="1.1"></label><div class="caption">固定β₁=30°，β₃=−10°。三个区间参考长度均50 mm。</div></div><svg id="geometryPlot" class="plot" viewBox="0 0 680 310" role="img" aria-label="由局部转角累积生成的三段骨架"></svg><div id="geometryTable" class="table-wrap"></div></div>
+<p><strong>为什么上游转角能影响下游多个点？</strong>因为β₂进入θ₂和θ₃，第二、第三段都转了。第一节点不受β₂影响，第二节点和末端都会移动。这种几何累积正是“局部记忆修正形成全身位移”的关键。</p>
+<details><summary>对应当前15节点实现的几个约定</summary><p>15个节点产生14个相邻区间。代码按7+7把区间分成两段，每段共用一个长度比例；标签节点按弧长构造，分组连接节点的位置需要与实际本体连接位置分别理解。每个区间拥有自己的转角，所以一整段不必都是常曲率圆弧。</p><p>β₁包含第一段相对固定x轴的方向；之后的β是相邻切向变化。计算使用弧度：1 rad≈57.30°。代码将λ限制在[−0.25,0.25]内，对应长度比例约0.779–1.284，再执行指数。第三空间坐标固定，训练接口仍保存xyz。</p><p>连接性与正长度由几何生成保证。避障、自交约束和接触力学需要额外任务或物理条件，不能单凭相邻点连接就推出。</p></details></section>
+
+<section id="training"><span class="num">08 / WHAT LEARNING CHANGES</span><h2>第七步：模型究竟怎样从数据中学会这些系数</h2>
+<p>前面已经假设我们有参考映射和W。训练的任务就是确定这些数，让预测骨架靠近图像提取的监督骨架。公式规定了身体计算器的结构，数据决定这条具体软臂的参数。</p>
+<div class="flow"><div><b>训练数据</b>动作历史 + 视觉节点</div><span>→</span><div><b>建立参考与初始化读出</b>先拟合主要几何关系</div><span>→</span><div><b>递推并预测</b>得到窗末骨架</div><span>→</span><div><b>算误差、更新参数</b>反复减小训练损失</div></div>
+<ol><li><b>准备监督：</b>把图像中的中心线转成节点，按训练数据确定坐标中心与尺度。输入窗口包含20帧动作，监督对应最后一帧骨架。</li><li><b>预拟合参考：</b>先学习当前动作与主要角度、长度的关系，确定参考几何和单通道驱动基。</li><li><b>初始化记忆读出：</b>从训练动作计算q、d，对参考尚未解释的几何偏差拟合初始读出。这样，联合训练的第一个epoch之前模型已经接受过训练数据。</li><li><b>联合训练：</b>每个窗口从首动作建立初始p、h，再按时间递推，生成窗末骨架，计算损失并反向传播。可训练的参考系数、记忆驱动与读出共同更新。</li><li><b>验证选取检查点：</b>根据验证误差确定学习率和预算内最佳epoch。正式测试使用冻结配置和选定检查点。</li></ol>
+<details><summary>骨架标签怎样反过来告诉模型“角度和长度应该是多少”？</summary><p>先算相邻节点位移vᵢ=xᵢ−xᵢ₋₁；区间长度是‖vᵢ‖，方向是θᵢ=atan2((vᵢ)ᵧ,(vᵢ)ₓ)。atan2先接收纵分量，再接收横分量，算出向量朝向并区分象限。第一个转角β₁=θ₁，后续转角βᵢ=θᵢ−θᵢ₋₁，并把跨越±π的等价角度处理到一致区间。</p><p>例如相邻位移为(3,4) mm，则长度√(3²+4²)=5 mm，方向atan2(4,3)=53.13°。若前一段朝30°，这次局部转角就是23.13°。某一分段的总长若从参考100 mm变为110 mm，则λ=ln(110/100)=0.09531。</p><p>参考区间长度从训练窗末骨架的相邻距离统计得到。参考预拟合同时利用这些几何量与重建骨架误差，建立主要压力响应；随后几何坐标残差可用于初始化记忆读出。</p></details>
+<details><summary>初始W怎样拟合？先看最小二乘的意义</summary><p>每个训练窗口计算一行历史特征v=[q;d]，同时计算该窗口的几何残差y=ξobs−ξref。把所有v排成设计矩阵V，把所有y排成Y，就要求V A接近Y，其中A相当于读出W的转置。</p><div class="eq">A* = arg min<sub>A</sub> [ ‖VA−Y‖²/N + ρ‖A‖² ]<br>A* = (V<sup>T</sup>V/N+ρI)<sup>−1</sup>V<sup>T</sup>Y/N</div><p>第一项让历史特征解释几何残差；第二项惩罚过大的系数，使拟合更稳定。I是单位矩阵，转置T交换行列。实际求解使用线性方程，并先对特征和几何坐标缩放。上式表达其核心含义，避免把不同单位和数量级混在一起。</p><p>只有一个特征时尤其直观：q=(0.1,0.2)，希望修正的角度y=(0.02,0.04) rad，不加正则时w=(0.1×0.02+0.2×0.04)/(0.1²+0.2²)=0.2。于是每个q乘0.2正好得到两个角度修正。真实初始化一次拟合多个特征、多个几何量，之后仍允许联合训练继续调整。</p></details>
+<div class="table-wrap"><table><thead><tr><th>对象</th><th>当前实现怎么处理</th><th>为什么这样分工</th></tr></thead><tbody><tr><td>驱动函数φ的权重</td><td>联合训练时可学习</td><td>调整记忆坐标中的压力敏感程度</td></tr><tr><td>参考角度、长度、通道耦合系数</td><td>预拟合/初始化后联合优化</td><td>修正当前输入的主要趋势</td></tr><tr><td>路径、时间读出的增益与方向</td><td>可学习</td><td>把不同历史成分连接到全身几何</td></tr><tr><td>路径阈值r与时间常数τ</td><td>当前正式配置中固定</td><td>给定一组幅值尺度与时间尺度，再学习组合</td></tr><tr><td>参考单通道驱动基、几何基准</td><td>由训练数据建立后固定</td><td>提供一致的参考坐标</td></tr><tr><td>p、h</td><td>随每条输入历史递推</td><td>描述这一时刻的历史条件；并非全数据共用的一组权重</td></tr></tbody></table></div>
+<div class="eq"><span class="eqno">论文式（9）</span>L = 平均<sub>训练窗口</sub> [ MSE(X̂̃, X̃) + λ<sub>tip</sub> MSE(x̂̃<sub>tip</sub>, x̃<sub>tip</sub>) ]<br><small>当前λ<sub>tip</sub>=0.25；波浪号表示坐标已经归一化。</small></div>
+<p>MSE就是“对应坐标相减 → 平方 → 求平均”。平方让偏差大的点受到更大惩罚；末端项进一步提高远端在训练中的权重。训练MSE与报告用的骨架欧氏距离是相关但不同的量，前者便于优化，后者直接用mm解释误差。</p>
+<details><summary>用一个有15节点的简化误差例子算损失</summary><p>假设只有末端预测错了(1,2,0) mm，其余14个节点都准确，坐标尺度s=10 mm。归一化后末端误差为(0.1,0.2,0)，平方和为0.05。整体MSE=0.05/(15×3)=0.001111；末端MSE=0.05/3=0.016667。因此总损失=0.001111+0.25×0.016667=0.005278。</p><p>末端已在整体项中出现，又获得附加权重。按单坐标贡献看，末端的系数是普通节点的1+15×0.25=4.75倍。坐标中心做减法、尺度做除法，使优化使用一致数量级；最终误差换回物理坐标后以mm报告。</p></details>
+<details><summary>760个参数具体分布在哪里？</summary><p>当前参考角度、长度和通道耦合共有176个可训练系数；记忆驱动φ有20个原始权重；路径读出有8个增益和8×16=128个方向系数；时间读出有24个增益和24×16=384个方向系数。合计176+20+8+128+24+384=740。</p><p>再计入已经预拟合并冻结的20个参考驱动权重，模型记录的参数或拟合系数为760。归一化参数化会带来冗余，因此这个数不等于独立自由度。32个p/h是每个运行实例的动态状态，不计为全局学习参数。</p></details>
+<h3>“反向传播”也可以先只看一个数</h3><p>把网络缩小成 ŷ=1+wq，给定q=0.2，目标y=1.5，开始w=1。预测1.2，误差−0.3，损失0.09。梯度 ∂L/∂w=2(ŷ−y)q=−0.12，说明增大w会让损失下降。</p>
+<div class="lab"><h3>手动做一次参数学习</h3><div class="eq">w<sub>new</sub> = w − η · 2(1+0.2w−1.5) · 0.2，　η=0.5</div><div class="buttons"><button id="learnStep" class="primary">更新一次w</button><button id="learnReset">重置w=1</button></div><div id="learnCalc" class="calc" aria-live="polite"></div><p class="caption">这是标量梯度下降教学例子。真实训练由自动微分穿过矩阵、指数、三角函数和递推计算梯度，再用Adam更新参数。</p></div>
+<div class="insight"><b>怎样理解早期精度较好：</b>结构先把任务限制为“参考 + 历史几何修正”，预拟合与读出初始化又提供了较好的起点。第一个联合优化epoch之后误差较小，可以支持早期精度的描述；样本效率需要减少训练数据量的对照，在线学习能力需要实际在线参数更新实验。</div>
+<details><summary>窗口初始化与连续部署为什么要分别理解？</summary><p>当前窗口初始化取p₀=h₀=e₀，所以q₀=d₀=0。这是一种明确的有限历史边界条件，并不说明任意真实首帧都没有迟滞。20点窗口内首点负责初始化，随后进行19次更新。假如设定初态与未知真实初态之间存在差异，最大时间常数2 s对应的这部分初态误差，经过3.8 s后仍可能保留exp(−3.8/2)≈15%；路径项也可能保留更久以前的影响。</p><p>离线窗口误差评价的是给定历史预算与初始化方式的预测能力。连续部署保存p、h并接着更新，因此能持续承接历史，但需要连续预测与任务数据验证。每次新动作只推进一次；读取已经更新好的状态时不应再次推进时间。</p></details></section>
+
+<section id="kernel"><span class="num">09 / WHY MEMORY MOVES THE WHOLE ARM</span><h2>再往深一层：记忆怎样经几何累积形成全身位移</h2>
+<p>这里把你关心的“节点空间增益规律”讲清楚。前面的W只告诉我们记忆怎样改变角度或长度；节点移动多远，还取决于当前身体姿态以及这个角度位于臂的什么位置。</p>
+<div class="eq"><span class="eqno">论文式（7）</span>m = W<sub>p</sub>q + W<sub>h</sub>d<br>ΔX = G(ξ<sub>ref</sub>+m)−G(ξ<sub>ref</sub>)<br>ΔX ≈ J W<sub>p</sub>q + J W<sub>h</sub>d，　J=∂G/∂ξ</div>
+<p><strong>Jacobian J就是一张局部敏感度表：</strong>“某个转角增加一点，第几个节点的x、y会分别变化多少？”近似号表示在当前参考形态附近采用线性近似。完整模型依然使用三角函数与指数进行非线性生成。</p>
+<h3>一个直接看出空间规律的例子</h3><p>让三段臂笔直沿+x，每段50 mm。第一个角度增加0.01 rad时，三段方向都变化，末端法向位移近似(50+50+50)×0.01=1.5 mm。若只让第二角度增加0.01 rad，末端约移动1.0 mm；只改变第三角度，约移动0.5 mm。<strong>上游变化影响更长的下游臂段，几何累积自然产生不同的空间增益。</strong></p>
+<details><summary>把“上游角度影响后续节点”写成导数</summary><div class="eq">∂x<sub>i</sub>/∂β<sub>a</sub> = ∑<sub>j=a…i</sub> ℓ<sub>j</sub>[−sinθ<sub>j</sub>, cosθ<sub>j</sub>]<sup>T</sup>，a≤i<br>∂x<sub>i</sub>/∂β<sub>a</sub> = 0，a&gt;i</div><p>β<sub>a</sub>出现在所有j≥a的累计方向θ<sub>j</sub>中，所以要把这些区间的方向导数相加。方向导数与原区间垂直，形成法向位移。分段λ的导数则把该段已累计的区间向量相加，形成切向伸缩；长度裁剪边界处要按代码的分段导数处理。</p></details>
+<h3>时间卷积核到底是什么</h3><p>把d的历史展开式代入J W<sub>h</sub>d。先固定参考姿态，把初始项单独拿出来，那么每次驱动变化Δe对节点的后续位移贡献，就由一个随时间衰减的系数K决定：</p>
+<div class="eq">K<sub>i,c</sub>(ℓ) = −∑<sub>k</sub> (J W<sub>h</sub>)<sub>i,c,k</sub> α<sub>k</sub><sup>ℓ+1</sup><br>ΔX<sub>i,t</sub><sup>time</sup> ≈ 初始状态项 + ∑<sub>ℓ≥0,c</sub> K<sub>i,c</sub>(ℓ) Δe<sub>c,t−ℓ</sub></div>
+<p>ℓ=0表示这次刚发生的输入增量，已经经过当前一次更新，所以指数是1。K的单位是“每单位驱动增量产生多少mm位移”。它是时间记忆递推、学到的几何读出和当前姿态的几何敏感度合成的结果。</p>
+<div class="lab"><h3>看同一组时间尺度怎样形成不同节点波形</h3><label>教学读出设置<select id="kernelMode"><option value="one">一个时间尺度：空间增益不同、波形相同</option><option value="two">两个时间尺度：不同节点混合比例不同</option></select></label><svg id="kernelPlot" class="plot" viewBox="0 0 680 290" role="img" aria-label="三个节点的法向时间响应核"></svg><div id="kernelCalc" class="calc"></div><p class="caption">教学参考臂沿+x，图示法向y位移核。单尺度τ=1 s；双尺度τ=(0.6,2.0) s。系数明确由示例给定，展示的是结构如何工作。</p></div>
+<h3>“共同时间波形 × 节点增益 + 节点差异”如何理解</h3><div class="eq">K<sub>i</sub>(t) ≈ g<sub>i</sub> φ(t) + ε<sub>i</sub>(t)</div><p>φ表示多个节点共享的主要时间变化形状，g<sub>i</sub>表示第i个节点被放大或缩小的程度，ε表示这个节点与共同波形不同的部分。一个时间常数、固定参考姿态时，这种分解本来就能精确成立；多个时间常数和不同局部读出会引入波形差别。</p><p>因此，发现节点波形相似，首先说明时间基与几何传播共同组织了响应。要进一步说明“模型学到了这条软臂特有的规律”，还要看学到的增益与真实形态变化是否对应、跨参考姿态是否稳定，以及相同结构的未训练读出是否也出现类似模式。</p>
+<details><summary>怎样用真实数值检查这段解释？</summary><p>记观测相对于参考预测的残差r=vec(X<sub>obs</sub>−X<sub>ref</sub>)，记一阶两分支位移c=JW<sub>p</sub>q+JW<sub>h</sub>d。计算η=1−∑‖r−c‖²/∑‖r‖²。如果η=0.5，意思是几何修正解释掉原残差平方能量的一半；若η&lt;0则使误差增加。</p><p>还可以比较一阶预测与完整非线性预测的差，检验局部线性化是否适合当前修正幅度。r中也含参考模型误差、分割误差等，因此η直接评价预测残差的减少，不能自动解释为“辨识出了多少真实材料迟滞”。</p></details></section>
+
+<section id="plugin"><span class="num">10 / REUSING THE MEMORY</span><h2>记忆模块怎样接到线性模型或MLP上</h2>
+<p>两种记忆从动作历史计算出来，并不要求后面一定接骨架几何生成器。最直接的复用方式是把当前压力和记忆拼接，交给新的预测模型。</p>
+<div class="eq"><span class="eqno">论文式（8）</span>η<sub>t</sub>=[a<sub>t</sub>; q<sub>t</sub>; d<sub>t</sub>] ∈ ℝ<sup>36</sup><br>X̂<sub>t</sub> = g<sub>ψ</sub>(η<sub>t</sub>)</div><p>分号表示按顺序接在后面：4维当前输入 + 8维路径 + 24维时间 = 36维。线性模型对这36个数加权；MLP再学习非线性组合。这样，同样当前压力的两个样本能因q、d不同而获得不同预测。</p>
+<div class="grid"><div class="mini"><h4>当前几何模型</h4><p>动作与记忆 → 16维几何坐标 → 连通骨架。读出的每个量有角度或长度意义。</p></div><div class="mini"><h4>插件接入坐标MLP</h4><p>动作与记忆 → MLP → 45维节点坐标。历史编码可以复用，但节点连接关系没有由显式几何构造直接规定。</p></div></div>
+<p>当前插件实验使用新建算子的固定初始参数生成记忆特征，再训练各基础映射；它考察的是<strong>历史特征结构的复用</strong>，与迁移已经训练好的HOV驱动函数和几何读出是不同的实验。基础模型需要用自己的监督重新拟合读出，才能使用新增的历史信息。</p>
+<details><summary>为什么要有静态扩展和窗口MLP两种对照？</summary><p>静态扩展也提供36维输入，帮助判断收益是否仅来自更多当前输入特征。窗口MLP直接获得20×4=80维历史，帮助判断紧凑记忆摘要与直接访问历史的差别。状态更紧凑是表示上的特点，是否同时更准确、更快，需要分别测量。</p></details></section>
+
+<section id="control"><span class="num">11 / USING THE MODEL TO CHOOSE ACTIONS</span><h2>形状模型怎样变成规划和视觉反馈</h2>
+<p>建模完成后，参数固定，我们可以把候选动作交给模型，在执行前算出它们可能造成的形状。控制因此多了一层“在模型里试动作”的过程。</p>
+<h3>① 规划：选择预测误差较小的动作</h3>
+<div class="eq"><span class="eqno">论文式（10）</span>U<sup>*</sup> = arg min<sub>U</sub> 平均<sub>未来时刻k、目标节点i</sub> ‖x̂<sub>i,t+k</sub>(z<sub>t</sub>,U)−x<sub>i,t+k</sub><sup>target</sup>‖²<br><small>约束：压力在允许范围内，相邻动作变化不超过驱动速率限制。</small></div>
+<p>arg min的意思是“找出让后面的代价最小的那个输入”。U是一串待执行动作；每个候选U都必须从<strong>同一份当前状态z</strong>开始递推，才能公平比较。</p>
+<pre>教学一步例子：目标某节点x=11 mm
+候选A预测x=10 mm → 平方误差1
+候选B预测x=13 mm → 平方误差4
+候选C预测x=11.5 mm → 平方误差0.25
+只看该目标与这三个合法候选时，选择C。</pre><p>实际任务把多个节点与未来时刻的误差一起累加。如果只选末端，得到末端目标；如果选择全身节点，就把身体路径也纳入目标。50 kPa/s的变化率限制与0.2 s控制周期对应每步最多变化10 kPa。</p>
+<h3>② 观测：相机只提供能看见的那部分证据</h3>
+<div class="eq"><span class="eqno">论文式（11）</span>y<sub>t</sub> = H<sub>Ω</sub>(X<sub>t</sub>) + ε<sub>t</sub></div>
+<p>H<sub>Ω</sub>表示将完整骨架映射到相机中，并只取可见区域Ω的观测。ε表示测量误差。当前反馈实现使用可见臂身侧边缘，与预测中心线生成的轮廓建立对应；隐藏区域主要由历史模型补全。</p>
+<h3>③ 校正：让历史先验与可见证据共同确定状态</h3>
+<div class="eq"><span class="eqno">论文式（12）</span>z<sup>+</sup> = arg min<sub>z∈Z</sub> [ 可见轮廓的预测误差 + (z−z<sup>−</sup>)<sup>T</sup>Λ(z−z<sup>−</sup>) ]</div>
+<p>z<sup>−</sup>是动作递推得到的先验，z<sup>+</sup>是加入观测后的校正状态。第二项表示“改变历史状态要付出多少代价”，Λ控制约束强度。Z是状态允许范围，例如p要与当前驱动和路径阈值相容。完整实现还使用可靠性权重与鲁棒误差，降低异常边缘匹配的作用。</p>
+<details><summary>用一个标量，手算“信观测还是信预测”</summary><p>假设一个简化模型的可见位置为x=10+2z，先验z⁻=0，相机测得x=11。取代价(10+2z−11)²+4(z−0)²=(2z−1)²+4z²。令导数为0：4(2z−1)+8z=0，所以z⁺=0.25，校正后x=10.5。</p><p>若没有先验项，会选z=0.5完全贴合观测；加入先验后只修正一部分，以平衡测量与历史。真实系统可能有多个状态都符合局部观测，所以局部可见信息通常不足以唯一确定所有历史变量。</p></details>
+<div class="insight"><b>闭环的完整顺序：</b>动作推进记忆 → 预测完整形状 → 相机提供局部证据 → 校正内部状态 → 用校正状态重新评估候选动作 → 执行下一步。这里更新的是状态；部署期间的模型参数通常保持固定。</div></section>
+
+<section id="actual"><span class="num">12 / ONE REAL MODEL TRACE</span><h2>把教学计算对应到当前模型的真实数字</h2>
+<p>下面来自本轮正式HOV的<strong>seed 100检查点</strong>，读取首条验证记录的第一个20点窗口。这个窗口按固定顺序选取，用来展示模型内部计算。前19帧用于形成窗口历史，主实验评价的是第20帧输出。</p>
+<div id="realMeta" class="note"></div>
+<div class="lab"><h3>沿真实压力历史逐步查看</h3><label>窗口内时刻：<span id="realStepOut" class="step-badge"></span><input id="realStep" type="range" min="0" max="19" step="1" value="19"></label><div class="controls"><label>查看驱动通道<select id="realChannel"><option value="0">通道1</option><option value="1">通道2</option><option value="2">通道3</option><option value="3">通道4</option></select></label><div id="realAction" class="caption"></div></div>
+<div class="grid"><div><svg id="realHistoryPlot" class="plot" viewBox="0 0 620 290" role="img" aria-label="真实窗口的四通道归一化压力历史"></svg><div id="realMemory" class="table-wrap"></div></div><div><svg id="realShapePlot" class="plot" viewBox="0 0 620 430" role="img" aria-label="真实模型参考、历史条件预测及窗末视觉骨架"></svg><p class="caption">灰线：参考；紫线：完整预测；绿线：窗末视觉监督（仅最后一帧显示）。</p></div></div>
+<details open><summary>16个几何量：参考 + 路径修正 + 时间修正</summary><div id="realCoordinates" class="table-wrap readout"></div></details>
+<details><summary>15个节点的最终坐标 / mm</summary><div id="realNodes" class="table-wrap readout"></div></details>
+<details><summary>当前压力怎样生成e？最小阈值与最快时间单元怎样更新？</summary><div id="realDriveCalc" class="calc"></div></details>
+<details><summary>选择一个真实记忆量，展开它的乘权重计算</summary><div id="realDotProduct" class="calc"></div></details>
+<div class="buttons"><button id="downloadReal">导出真实窗口JSON</button></div><p id="realVerification" class="checks"></p></div>
+<p>你可以先看“参考 + 两类修正”的第一行β₁，再看完整骨架如何改变。即使某个角度修正很小，累积到较长臂段后仍可能产生可观察的位移；角度和节点距离需要通过几何关系联系起来。</p></section>
+
+<section id="questions"><span class="num">13 / PUTTING THE IDEAS TOGETHER</span><h2>理解模型时，几个最关键的区分</h2>
+<details open><summary>我们要拟合的是“迟滞”，还是“形状”？</summary><p>直接监督目标是全身形状。迟滞和时间相关响应是这个输入—形状关系的重要历史特性。模型通过有结构的记忆表达这些特性，让同一当前动作在不同历史下得到不同形状。它学到的是特定驱动装置与软臂组成系统的前向映射。</p></details>
+<details><summary>p和h是身体里真的存在的两种物理量吗？</summary><p>它们是模型内部的历史摘要，具有明确的递推规则。p保留路径，h表达时间跟随。可解释性来自更新规则和几何作用可分析；将它们进一步认定为某一种真实材料内变量，需要独立测量与辨识证据。</p></details>
+<details><summary>有p、h，为什么还要算q、d？</summary><p>p、h适合保存和递推；q=e−p和d=h−e表达相对于当前驱动的历史偏移，适合叠加到当前输入参考上。已知e时可以相互转换：p=e−q，h=e+d。它们是不同角色的坐标表达，并没有额外增加一倍记忆维数。</p></details>
+<details><summary>时间项消失，是否意味着迟滞完全消失？</summary><p>持压时d逐渐趋于0，q仍可能保留路径偏置，因此最终预测可为ξref+Wp q。模型允许时间相关暂态消退后，加载路径造成的差别继续存在。</p></details>
+<details><summary>两类分支是否一定能把两种物理机制唯一分开？</summary><p>分支的数学性质不同，但有限数据中的输入变化、保持时间和形变可能相关，两类读出可能部分补偿彼此。要支持更强的机制区分，需要同路径变速、同压不同历史、持压等专门数据；也可以检查修正方向与残差的关系。</p></details>
+<details><summary>为什么递推可以很快？</summary><p>每来一个新动作，只更新8个p、24个h，再生成16个几何量和15个节点，状态规模不会随运行时间增长。若每次重新计算20点窗口，会额外重复历史更新。单次前向耗时支持的是模型求值吞吐，完整控制频率还包含图像、通信、状态校正与规划。</p></details>
+<details><summary>模型更小，为什么训练不一定更快？</summary><p>训练耗时还取决于计算的组织方式。MLP的密集矩阵乘法容易批量并行；递推模型要沿时间顺序处理状态，几何、初始化和自动微分也有成本。因此参数量、训练速度和在线单步预测速度应分别测量。</p></details>
+<details><summary>如何判断我已经理解了？</summary><p>可以尝试解释四件事：①为什么同一e能得到两个q；②为什么e保持时q不变而d衰减；③为什么某个β变化能移动多个下游节点；④为什么训练更新W、部署通常只更新p和h。能用第6节的数字说明这四点，就已经抓住模型的主体。</p></details></section>
+
+<section id="sources" class="sources"><span class="num">14 / SOURCE MAP</span><h2>公式与当前实现的对应</h2>
+<p>本页作为阅读教程独立保存；论文方法正文仍在 <a href="draft.md">draft.md</a>。以下链接在项目目录内打开时可定位相关源码。</p>
+<div class="table-wrap"><table><thead><tr><th>讲解对象</th><th>公式</th><th>当前实现入口</th></tr></thead><tbody>
+<tr><td>驱动坐标φ</td><td>式（2）前的驱动定义</td><td><a href="../../src/operators/static_drive.py">static_drive.py · MonotoneSplineDrive</a></td></tr>
+<tr><td>play更新</td><td>（2）、（6）</td><td><a href="../../src/operators/play_bank.py">play_bank.py · step</a></td></tr>
+<tr><td>时间更新</td><td>（3）、（6）</td><td><a href="../../src/operators/maxwell_bank.py">maxwell_bank.py · step</a></td></tr>
+<tr><td>参考映射、耦合项</td><td>（4）的参考项</td><td><a href="../../src/benchmarks/modeling_geometry_calibration.py">modeling_geometry_calibration.py · _reference</a></td></tr>
+<tr><td>记忆读出、前向计算</td><td>（1）、（4）、（7）</td><td><a href="../../src/models/model_hereditary_geometry.py">model_hereditary_geometry.py · _structured_memory / step_state</a></td></tr>
+<tr><td>初始化状态</td><td>窗口使用方式</td><td><a href="../../src/models/model_hereditary_operator.py">model_hereditary_operator.py · _burn_in</a></td></tr>
+<tr><td>骨架几何</td><td>（5）</td><td><a href="../../src/models/model_ishsm.py">model_ishsm.py · generalized_to_skeleton</a></td></tr>
+<tr><td>正式训练</td><td>（9）</td><td><a href="../../scripts/experiments/run_modeling_unified_repetitions.py">run_modeling_unified_repetitions.py</a></td></tr>
+<tr><td>规划和状态反馈</td><td>（10）–（12）</td><td><a href="../../src/control/hereditary_feedback.py">hereditary_feedback.py</a>；<a href="../../src/control/partial_image.py">partial_image.py</a></td></tr>
+</tbody></table></div>
+<p>真实快照来自 <code>modeling_unified20_20260913_004/formal/hov/seed_100/best_eval_model.pt</code>，只读取一个固定验证窗口。<a href="method_walkthrough.data.json">快照数据</a>和<a href="../../scripts/experiments/build_modeling_method_walkthrough.py">生成脚本</a>保留了数值来源。教学计算在页面内完成，打开后可离线使用。</p>
+<p id="pageChecks" class="checks"></p></section>
+<footer>依据 docs/icra2027/draft.md 与当前模型源码整理。教学示例用于解释计算；真实窗口来源与导出核验见第12、14节。</footer>
+</main>
+<script id="realData" type="application/json">__REAL_TRACE_JSON__</script>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const REAL=JSON.parse($('realData').textContent);
+const COLORS={ref:'#3269b5',path:'#b77a20',time:'#087e78',full:'#8650ac',gray:'#8794a3',target:'#20906b'};
+const f=(x,n=4)=>Math.abs(x)<.5*Math.pow(10,-n)?(0).toFixed(n):Number(x).toFixed(n);
+const esc=x=>String(x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const clamp=(x,lo,hi)=>Math.max(lo,Math.min(hi,x));
+const sum=a=>a.reduce((x,y)=>x+y,0);
+const dot=(a,b)=>sum(a.map((v,i)=>v*b[i]));
+const vadd=(...arrays)=>arrays[0].map((_,i)=>sum(arrays.map(a=>a[i])));
+function table(headers,rows,selected=-1){return '<table><thead><tr>'+headers.map(x=>'<th>'+x+'</th>').join('')+'</tr></thead><tbody>'+rows.map((r,i)=>'<tr'+(i===selected?' class="chosen"':'')+'>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>').join('')+'</tbody></table>';}
+function text(x,y,value,extra=''){return '<text x="'+x+'" y="'+y+'" font-size="12" '+extra+'>'+esc(value)+'</text>';}
+function lineChart(id,curves,options={}){
+ const element=$(id), vb=element.getAttribute('viewBox').split(' ').map(Number),W=vb[2],H=vb[3];
+ const pad={l:60,r:20,t:32,b:40},w=W-pad.l-pad.r,h=H-pad.t-pad.b;
+ const points=curves.flatMap(c=>c.points),xs=points.map(p=>p[0]),ys=points.map(p=>p[1]);
+ let xmin=options.xmin??Math.min(...xs),xmax=options.xmax??Math.max(...xs),ymin=options.ymin??Math.min(0,...ys),ymax=options.ymax??Math.max(...ys);
+ if(xmax===xmin)xmax=xmin+1;if(ymax===ymin)ymax=ymin+1;
+ if(options.ymin===undefined){const margin=(ymax-ymin)*.12;ymax+=margin;ymin-=margin;}
+ const sx=x=>pad.l+(x-xmin)/(xmax-xmin)*w,sy=y=>pad.t+h-(y-ymin)/(ymax-ymin)*h;
+ let svg='';
+ for(let i=0;i<=4;i++){const y=ymin+(ymax-ymin)*i/4,py=sy(y),x=xmin+(xmax-xmin)*i/4,px=sx(x);svg+='<path d="M'+pad.l+' '+py+'H'+(W-pad.r)+'" stroke="var(--line)"/>'+text(pad.l-9,py+4,f(y,2),'text-anchor="end"')+text(px,H-15,f(x,1),'text-anchor="middle"');}
+ svg+=text(pad.l,19,options.yLabel||'数值')+text(W-pad.r,H-1,options.xLabel||'时间 / s','text-anchor="end"');
+ for(const c of curves){svg+='<polyline fill="none" stroke="'+c.color+'" stroke-width="'+(c.width||2.5)+'" '+(c.dash?'stroke-dasharray="6 5"':'')+' points="'+c.points.map(p=>sx(p[0])+','+sy(p[1])).join(' ')+'"/>';}
+ if(options.cursor!==undefined){const px=sx(options.cursor);svg+='<path d="M'+px+' '+pad.t+'V'+(H-pad.b)+'" stroke="var(--ink)" opacity=".4" stroke-dasharray="4 4"/>';for(const c of curves){const p=c.points.reduce((a,b)=>Math.abs(b[0]-options.cursor)<Math.abs(a[0]-options.cursor)?b:a);svg+='<circle cx="'+sx(p[0])+'" cy="'+sy(p[1])+'" r="4" fill="'+c.color+'"/>';}}
+ element.innerHTML=svg;
+}
+function skeleton(beta,lambda,lengths=[50,50,50],groups=[0,0,0],base=[0,0]){
+ const nodes=[base.slice(0,2)],angles=[],actual=[];let angle=0;
+ beta.forEach((b,i)=>{angle+=b;const ll=lengths[i]*Math.exp(clamp(lambda[groups[i]],-.25,.25)),old=nodes.at(-1);nodes.push([old[0]+ll*Math.cos(angle),old[1]+ll*Math.sin(angle)]);angles.push(angle);actual.push(ll);});
+ return {nodes,angles,lengths:actual};
+}
+function shapeChart(id,curves,options={}){
+ const el=$(id),vb=el.getAttribute('viewBox').split(' ').map(Number),W=vb[2],H=vb[3],pad=53;
+ const points=curves.flatMap(c=>c.nodes),xmin=Math.min(...points.map(p=>p[0])),xmax=Math.max(...points.map(p=>p[0])),ymin=Math.min(...points.map(p=>p[1])),ymax=Math.max(...points.map(p=>p[1]));
+ const cx=(xmin+xmax)/2,cy=(ymin+ymax)/2,scale=Math.min((W-2*pad)/Math.max(20,xmax-xmin),(H-2*pad)/Math.max(20,ymax-ymin))*.88;
+ const sx=x=>W/2+(x-cx)*scale,sy=y=>H/2+(options.yDown?1:-1)*(y-cy)*scale;
+ const xlo=cx-(W/2-pad)/scale,xhi=cx+(W/2-pad)/scale,ylo=cy-(H/2-pad)/scale,yhi=cy+(H/2-pad)/scale;
+ let svg='';for(let i=0;i<=4;i++){const x=xlo+(xhi-xlo)*i/4,y=ylo+(yhi-ylo)*i/4;svg+='<path d="M'+sx(x)+' '+pad+'V'+(H-pad)+' M'+pad+' '+sy(y)+'H'+(W-pad)+'" stroke="var(--line)" opacity=".65"/>'+text(sx(x),H-29,f(x,0),'text-anchor="middle"')+text(pad-9,sy(y)+4,f(y,0),'text-anchor="end"');}
+ svg+=text(pad,21,options.yDown?'y / mm（向下为正）':'y / mm（向上为正）')+text(W-pad,H-7,'x / mm','text-anchor="end"');
+ for(const c of curves){svg+='<polyline fill="none" stroke="'+c.color+'" stroke-width="'+(c.width||3)+'" '+(c.dash?'stroke-dasharray="6 4"':'')+' points="'+c.nodes.map(p=>sx(p[0])+','+sy(p[1])).join(' ')+'"/>';c.nodes.forEach((p,i)=>{svg+='<circle cx="'+sx(p[0])+'" cy="'+sy(p[1])+'" r="'+(i?3:5)+'" fill="'+c.color+'"/>';if(c.labels)svg+=text(sx(p[0])+8,sy(p[1])-8,i);});}
+ el.innerHTML=svg;
+}
+function updateDrive(){const p=+$('drivePressure').value,a=p/150,hinges=[a,Math.max(a-.4,0),Math.max(a-.7,0)],e=dot(hinges,[1,.8,.4])/1.6;$('drivePressureOut').textContent=f(p,0);lineChart('drivePlot',[{color:COLORS.ref,points:Array.from({length:101},(_,i)=>{const a=i/100;return[a,(a+.8*Math.max(a-.4,0)+.4*Math.max(a-.7,0))/1.6];})}],{cursor:a,ymin:0,ymax:1,xLabel:'归一化压力a',yLabel:'驱动坐标e'});$('driveCalc').innerHTML='<p>① a='+f(p,0)+'/150=<b>'+f(a)+'</b></p><p>② 三个铰链值 = ['+hinges.map(x=>f(x)).join(', ')+']</p><p>③ e=('+f(hinges[0])+'+0.8×'+f(hinges[1])+'+0.4×'+f(hinges[2])+')/1.6=<b>'+f(e)+'</b></p><p>这一步只改变驱动刻度；还没有累计任何历史。</p>';}
+function updateTime(){const tau=+$('tauSlider').value,t=+$('holdSlider').value,e=+$('targetSlider').value,alpha5=Math.exp(-.2/tau),alpha10=Math.exp(-.1/tau),d=-e*Math.exp(-t/tau),h=e+d,n=Math.round(t/.2);$('tauOut').textContent=f(tau,1);$('holdOut').textContent=f(t,1);$('targetOut').textContent=f(e,1);lineChart('timePlot',[{color:COLORS.gray,dash:true,points:[[0,e],[5,e]]},{color:COLORS.time,points:Array.from({length:101},(_,i)=>{const t=i/20;return[t,e*(1-Math.exp(-t/tau))];})}],{cursor:t,ymin:0,ymax:e*1.15,xLabel:'目标切换后的时间 / s',yLabel:'h追赶恒定目标e'});$('timeCalc').innerHTML='<p>α₅Hz=exp(−0.2/'+f(tau,1)+')=<b>'+f(alpha5,6)+'</b>；α₁₀Hz=<b>'+f(alpha10,6)+'</b></p><p>经过'+f(t,1)+' s，5 Hz更新'+n+'次；d=−'+f(e,1)+'×exp(−'+f(t,1)+'/'+f(tau,1)+')=<b class="time">'+f(d,6)+'</b>；h=e+d=<b>'+f(h,6)+'</b>。</p><p>10 Hz更新'+2*n+'次，得到相同的 h='+f(e*(1-Math.pow(alpha10,2*n)),6)+'。恒定输入下，两者表达相同的物理经过时间。</p>';}
+const SCENARIOS={loop:[0,.4,.8,.6,.4,.4,.4,.4],load:[0,.2,.4,.4,.4,.4,.4,.4],unload:[.8,.6,.4,.4,.4,.4,.4,.4],pulse:[0,0,.4,0,0,0,0,0]};
+const WP=[.3,-.2,.1,.01],WH=[-.4,-.2,.15,-.02];
+function toyTrace(sequence,r,tau){let p=sequence[0],h=sequence[0];const alpha=Math.exp(-.2/tau);return sequence.map((e,t)=>{const prevP=p,prevH=h,delta=t?e-sequence[t-1]:0;if(t){p=clamp(p,e-r,e+r);h=alpha*h+(1-alpha)*e;}const q=e-p,d=h-e,ref=[.5*e,.3*e,-.15*e,.03*e],path=WP.map(w=>w*q),time=WH.map(w=>w*d),total=vadd(ref,path,time),shape=skeleton(total.slice(0,3),[total[3]]),reference=skeleton(ref.slice(0,3),[ref[3]]);return{t,e,prevP,prevH,p,h,q,d,delta,ref,path,time,total,shape,reference,alpha};});}
+let currentToy=[];
+function updateSandbox(){const r=+$('rSlider').value,tau=+$('sandboxTau').value,t=+$('stepSlider').value,seq=SCENARIOS[$('scenario').value];currentToy=toyTrace(seq,r,tau);const s=currentToy[t];$('rOut').textContent=f(r,2);$('sandboxTauOut').textContent=f(tau,1);$('stepLabel').textContent='t='+t+'，名义经过'+f(.2*t,1)+' s，e='+f(s.e,2);$('prevStep').disabled=t===0;$('nextStep').disabled=t===seq.length-1;lineChart('historyPlot',[{color:COLORS.ref,points:currentToy.map(v=>[v.t*.2,v.e])},{color:COLORS.path,points:currentToy.map(v=>[v.t*.2,v.q])},{color:COLORS.time,points:currentToy.map(v=>[v.t*.2,v.d])}],{cursor:t*.2,xLabel:'名义经过时间 / s',yLabel:'输入与记忆（无量纲）'});shapeChart('toyShape',[{nodes:s.reference.nodes,color:COLORS.gray,dash:true},{nodes:s.shape.nodes,color:COLORS.full,labels:true}]);
+ const explanation=t===0?'<p>首点：p₀=h₀=e₀='+f(s.e)+'，所以q₀=d₀=0。</p>':'<p>① 当前e='+f(s.e)+'，变化Δe='+f(s.delta)+'。</p><p class="path">② p=clip('+f(s.prevP)+', '+f(s.e-r)+', '+f(s.e+r)+')='+f(s.p)+'；q=e−p=<b>'+f(s.q)+'</b>。</p><p class="time">③ h='+f(s.alpha,6)+'×'+f(s.prevH)+'+'+f(1-s.alpha,6)+'×'+f(s.e)+'='+f(s.h)+'；d=h−e=<b>'+f(s.d)+'</b>。</p>';
+ $('stepCalc').innerHTML=explanation+'<p>④ 第一个转角：β₁='+f(s.ref[0])+'+('+f(s.path[0])+')+('+f(s.time[0])+')=<b>'+f(s.total[0])+' rad</b>。</p><p>⑤ 几何累加后，末端坐标=<b>('+s.shape.nodes.at(-1).map(v=>f(v,3)).join(', ')+') mm</b>。</p>';
+ $('toyReadout').innerHTML=table(['输出','参考值','路径：系数×q','时间：系数×d','合成结果'],s.total.map((v,i)=>[i<3?'β'+(i+1)+' / rad':'λ / 无量纲',f(s.ref[i]),f(WP[i],2)+'×'+f(s.q)+' = '+f(s.path[i]),f(WH[i],2)+'×'+f(s.d)+' = '+f(s.time[i]),'<b>'+f(v,6)+'</b>']));
+ $('toyHistoryTable').innerHTML=table(['时刻','e','Δe','p','q=e−p','h','d=h−e','β₁/rad','末端(x,y)/mm'],currentToy.map(v=>[v.t,f(v.e,2),f(v.delta,2),f(v.p),f(v.q),f(v.h),f(v.d),f(v.total[0]),v.shape.nodes.at(-1).map(x=>f(x,2)).join(', ')]),t);
+}
+function updateGeometry(){const b=+$('bendSlider').value,k=+$('lengthSlider').value,beta=[30,b,-10].map(x=>x*Math.PI/180),shape=skeleton(beta,[Math.log(k)]);$('bendOut').textContent=f(b,0);$('lengthOut').textContent=f(k,2)+'（λ='+f(Math.log(k),5)+'）';shapeChart('geometryPlot',[{nodes:shape.nodes,color:COLORS.full,labels:true}]);$('geometryTable').innerHTML=table(['区间','局部β/°','累计θ/°','长度/mm','Δx/mm','Δy/mm','节点(x,y)/mm'],shape.angles.map((a,i)=>[i+1,f(beta[i]*180/Math.PI,1),f(a*180/Math.PI,1),f(shape.lengths[i],3),f(shape.nodes[i+1][0]-shape.nodes[i][0],3),f(shape.nodes[i+1][1]-shape.nodes[i][1],3),shape.nodes[i+1].map(x=>f(x,3)).join(', ')]));}
+let learnW=1,learnCount=0,learnLast='';
+function updateLearning(){const pred=1+.2*learnW,loss=(pred-1.5)**2,g=2*(pred-1.5)*.2;$('learnCalc').innerHTML='<p>已更新'+learnCount+'次；当前w=<b>'+f(learnW,6)+'</b>。</p><p>预测ŷ=1+0.2w=<b>'+f(pred,6)+'</b>，目标1.5，损失=<b>'+f(loss,8)+'</b>。</p><p>当前梯度='+f(g,6)+'，下一次w将变为'+f(learnW-.5*g,6)+'。</p>'+(learnLast?'<p class="muted">上一步：'+learnLast+'</p>':'');}
+function kernelCurves(mode){const times=Array.from({length:51},(_,i)=>i*.2),taus=mode==='one'?[1]:[.6,2],coeffs=mode==='one'?[[.02,.01,.005]]:[[.02,.01,0],[-.008,.004,.016]];
+ const gains=[0,1,2].map(i=>taus.map((_,k)=>sum(coeffs[k].slice(0,i+1).map((v,a)=>(i-a+1)*50*v))));
+ return {taus,gains,curves:gains.map((g,i)=>({color:[COLORS.ref,COLORS.path,COLORS.time][i],points:times.map(t=>[t,-sum(taus.map((tau,k)=>g[k]*Math.exp(-(t+.2)/tau)))])}))};}
+function updateKernel(){const mode=$('kernelMode').value,k=kernelCurves(mode);lineChart('kernelPlot',k.curves,{xLabel:'该次输入增量的滞后 / s',yLabel:'法向位移核 / (mm·驱动增量⁻¹)'});$('kernelCalc').innerHTML='<p>蓝、橙、绿分别对应第1、2、3个非基座节点。时间尺度τ=['+k.taus.join(', ')+'] s。</p>'+table(['节点','每个时间尺度对应的几何增益/mm'],k.gains.map((g,i)=>[i+1,g.map(v=>f(v,3)).join(', ')]))+'<p>'+(mode==='one'?'只有一个时间尺度时：Kᵢ(ℓ)=−gᵢ exp[−(ℓ+1)Δt/τ]。每个节点共享同一个指数波形，区别是gᵢ。':'每个节点都叠加快、慢两个指数，但权重比例不同，因此节点波形可以不相似，甚至在不同时间呈现不同符号。')+'</p>';}
+function updateReal(){const t=+$('realStep').value,c=+$('realChannel').value,s=REAL.trace[t],e=s.drive[c];$('realStepOut').textContent='第'+(t+1)+'/20点；原始帧 '+s.frame_id;$('realAction').innerHTML='四路压力 / kPa：<b>['+s.pressure_kpa.map(v=>f(v,2)).join(', ')+']</b><br>选中通道的驱动e='+f(e,6);
+ lineChart('realHistoryPlot',[0,1,2,3].map((j)=>({color:[COLORS.ref,COLORS.path,COLORS.time,COLORS.full][j],width:j===c?3.5:1.6,points:REAL.trace.map(v=>[v.t*.2,v.action[j]])})),{cursor:t*.2,xLabel:'窗口名义时间 / s',yLabel:'四路归一化压力a'});
+ const curves=[{nodes:s.reference_nodes,color:COLORS.gray,dash:true},{nodes:s.nodes,color:COLORS.full}];if(t===19)curves.push({nodes:REAL.target,color:COLORS.target,dash:true});shapeChart('realShapePlot',curves,{yDown:true});
+ const mem=[...s.p[c].map((p,j)=>['路径'+(j+1),'r='+f(REAL.thresholds[j],4),'p='+f(p,6),'q='+f(s.q[c][j],6)]),...s.h[c].map((h,j)=>['时间'+(j+1),'τ='+f(REAL.taus[j],4)+' s','h='+f(h,6),'d='+f(s.d[c][j],6)])];$('realMemory').innerHTML=table(['单元','阈值/时间尺度','内部状态','读出特征'],mem);
+ $('realCoordinates').innerHTML=table(['坐标','参考','路径修正','时间修正','合成值'],s.total.map((v,i)=>[i<14?'β'+(i+1)+' / rad':'λ'+(i-13),f(s.reference[i],6),f(s.path[i],6),f(s.time[i],6),f(v,6)]));
+ $('realNodes').innerHTML=table(['节点','预测x/mm','预测y/mm',...(t===19?['监督x/mm','监督y/mm','距离/mm']:[])],s.nodes.map((p,i)=>[i,f(p[0],4),f(p[1],4),...(t===19?[f(REAL.target[i][0],4),f(REAL.target[i][1],4),f(Math.hypot(...p.map((x,j)=>x-REAL.target[i][j])),4)]:[])]));
+ const hinge=REAL.drive_knots.map(k=>Math.max(s.action[c]-k,0)),weights=REAL.drive_weights[c];
+ $('realDriveCalc').innerHTML='<p>归一化压力a='+f(s.pressure_kpa[c],4)+'/150='+f(s.action[c],6)+'。</p>'+table(['铰链κ','max(a−κ,0)','有效权重w','乘积'],hinge.map((v,j)=>[f(REAL.drive_knots[j],2),f(v,6),f(weights[j],6),f(weights[j]*v,8)]))+'<p>把5项乘积相加：e=<b>'+f(dot(hinge,weights),8)+'</b>。</p>'+(t?'<p>最小阈值：p=clip('+f(REAL.trace[t-1].p[c][0],6)+', '+f(e-REAL.thresholds[0],6)+', '+f(e+REAL.thresholds[0],6)+')='+f(s.p[c][0],6)+'；q='+f(s.q[c][0],6)+'。</p><p>最快时间单元：h='+f(REAL.alphas[0],6)+'×'+f(REAL.trace[t-1].h[c][0],6)+'+'+f(1-REAL.alphas[0],6)+'×'+f(e,6)+'='+f(s.h[c][0],6)+'；d='+f(s.d[c][0],6)+'。</p>':'<p>首点以当前e初始化所有p和h；q=d=0。</p>');
+ const rows=[...s.q[c].map((v,j)=>['q'+(j+1),f(REAL.wp[0][c*2+j],6),f(v,6),f(REAL.wp[0][c*2+j]*v,8)]),...s.d[c].map((v,j)=>['d'+(j+1),f(REAL.wh[0][c*6+j],6),f(v,6),f(REAL.wh[0][c*6+j]*v,8)])];
+ $('realDotProduct').innerHTML='<p>以β₁为例，下表展开<b>通道'+(c+1)+'</b>的8个记忆贡献，系数来自真实有效W的第一行。</p>'+table(['记忆量','有效W系数','当前特征','该项角度贡献/rad'],rows)+'<p>所有四通道合计：路径修正='+f(dot(REAL.wp[0],s.q.flat()),8)+' rad；时间修正='+f(dot(REAL.wh[0],s.d.flat()),8)+' rad。</p><p>β₁='+f(s.reference[0],6)+'+('+f(s.path[0],6)+')+('+f(s.time[0],6)+')='+f(s.total[0],6)+' rad。</p>';
+ $('realVerification').textContent=t===19?'该窗末帧的平均节点距离：'+f(REAL.checkpoint_node_error_mm,4)+' mm。该值用于理解这一帧，不代表整个验证集平均。':'这一步展示有限历史的中间状态；主实验使用20点窗口的末帧评价。';
+}
+function download(name,content,mime){const parts=mime.startsWith('text/csv')?['\ufeff',content]:[content],url=URL.createObjectURL(new Blob(parts,{type:mime})),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+function runChecks(){let count=0;const check=(ok,label)=>{if(!ok)throw Error('计算核验失败：'+label);count++;};
+ const tr=toyTrace(SCENARIOS.loop,.2,1);check(Math.abs(tr[1].q-.2)<1e-12,'加载q');check(Math.abs(tr[4].q+.2)<1e-12,'卸载q');check(Math.abs(tr[1].h-.0725076987688073)<1e-12,'第一次时间更新');
+ for(let t=1;t<tr.length;t++){const s=tr[t],old=tr[t-1];check(Math.abs(s.q-clamp(old.q+s.delta,-.2,.2))<1e-12,'路径等价式');check(Math.abs(s.d-s.alpha*(old.d-s.delta))<1e-12,'时间等价式');check(s.shape.lengths.every(x=>x>0),'正长度');}
+ for(const tau of [.6,1,2])check(Math.abs(Math.exp(-.1/tau)**2-Math.exp(-.2/tau))<1e-12,'采样间隔一致');
+ const geom=skeleton([30,20,-10].map(x=>x*Math.PI/180),[Math.log(1.1)]);check(Math.abs(geom.nodes[1][0]-47.63139720814412)<1e-10,'cos几何');check(Math.abs(geom.nodes[1][1]-27.5)<1e-10,'sin几何');
+ let maxReal=0;REAL.trace.forEach((s,t)=>{const q=s.q.flat(),d=s.d.flat();for(let i=0;i<16;i++){check(Math.abs(s.reference[i]+s.path[i]+s.time[i]-s.total[i])<1e-6,'真实坐标相加');check(Math.abs(dot(REAL.wp[i],q)-s.path[i])<1e-6,'真实路径读出');check(Math.abs(dot(REAL.wh[i],d)-s.time[i])<1e-6,'真实时间读出');}if(t){const old=REAL.trace[t-1];for(let c=0;c<4;c++){for(let j=0;j<2;j++)check(Math.abs(s.p[c][j]-clamp(old.p[c][j],s.drive[c]-REAL.thresholds[j],s.drive[c]+REAL.thresholds[j]))<1e-6,'真实play递推');for(let j=0;j<6;j++)check(Math.abs(s.h[c][j]-(REAL.alphas[j]*old.h[c][j]+(1-REAL.alphas[j])*s.drive[c]))<1e-6,'真实时间递推');}}
+ const groups=REAL.section_intervals.flatMap((n,i)=>Array(n).fill(i)),shape=skeleton(s.total.slice(0,14),s.total.slice(14),REAL.reference_lengths,groups,REAL.base);shape.nodes.forEach((p,i)=>p.forEach((x,j)=>{maxReal=Math.max(maxReal,Math.abs(x-s.nodes[i][j]));}));});
+ check(maxReal<1e-4,'浏览器几何重算与PyTorch输出一致');window.tutorialChecks={passed:true,count,maxRealGeometryErrorMm:maxReal};$('pageChecks').textContent='教学递推与真实快照的数值一致性核验通过。浏览器独立重算真实几何的最大差为'+maxReal.toExponential(2)+' mm。';
+}
+function initialize(){
+ $('realMeta').innerHTML='<p>来源：<b>'+esc(REAL.group)+'</b> 的首个验证窗口；seed '+REAL.seed+'，验证选定epoch '+REAL.selected_epoch+'。</p><p>路径阈值=['+REAL.thresholds.map(v=>f(v,2)).join(', ')+']；时间常数τ=['+REAL.taus.map(v=>f(v,4)).join(', ')+'] s；每步采用名义Δt='+REAL.dt+' s。真实数据坐标的y正方向沿图像向下。</p>';
+ [['drivePressure',updateDrive],['tauSlider',updateTime],['holdSlider',updateTime],['targetSlider',updateTime],['rSlider',updateSandbox],['sandboxTau',updateSandbox],['stepSlider',updateSandbox],['bendSlider',updateGeometry],['lengthSlider',updateGeometry],['realStep',updateReal]].forEach(([id,fn])=>$(id).addEventListener('input',fn));
+ $('scenario').addEventListener('change',updateSandbox);$('kernelMode').addEventListener('change',updateKernel);$('realChannel').addEventListener('change',updateReal);
+ $('prevStep').addEventListener('click',()=>{$('stepSlider').value=Math.max(0,+$('stepSlider').value-1);updateSandbox();});$('nextStep').addEventListener('click',()=>{$('stepSlider').value=Math.min(7,+$('stepSlider').value+1);updateSandbox();});$('resetStep').addEventListener('click',()=>{$('stepSlider').value=0;updateSandbox();});
+ $('learnStep').addEventListener('click',()=>{const g=2*(1+.2*learnW-1.5)*.2,old=learnW;learnW-=.5*g;learnCount++;learnLast='w='+f(old,6)+' − 0.5×('+f(g,6)+') = '+f(learnW,6);updateLearning();});$('learnReset').addEventListener('click',()=>{learnW=1;learnCount=0;learnLast='';updateLearning();});
+ $('downloadToy').addEventListener('click',()=>download('toy-memory-calculation.csv','t,e,delta_e,p,q,h,d,beta1,beta2,beta3,lambda,tip_x_mm,tip_y_mm\n'+currentToy.map(s=>[s.t,s.e,s.delta,s.p,s.q,s.h,s.d,...s.total,...s.shape.nodes.at(-1)].join(',')).join('\n'),'text/csv;charset=utf-8'));
+ $('downloadReal').addEventListener('click',()=>download('hov-seed100-validation-trace.json',JSON.stringify(REAL,null,2),'application/json'));
+ $('symbolSearch').addEventListener('input',()=>{const term=$('symbolSearch').value.trim().toLowerCase();document.querySelectorAll('.symbol').forEach(el=>el.classList.toggle('hidden',!el.textContent.toLowerCase().includes(term)));});
+ $('themeButton').addEventListener('click',()=>{document.body.classList.toggle('dark');});
+ $('menuButton').addEventListener('click',()=>{$('sidebar').classList.toggle('open');});
+ let allOpen=false;$('detailsButton').addEventListener('click',()=>{allOpen=!allOpen;document.querySelectorAll('details').forEach(el=>el.open=allOpen);$('detailsButton').textContent=allOpen?'折叠全部推导':'展开全部推导';});
+ $('printButton').addEventListener('click',()=>{document.querySelectorAll('details').forEach(el=>el.open=true);window.print();});
+ if(typeof IntersectionObserver!=='undefined'){const navs=Array.from(document.querySelectorAll('nav a'));const observer=new IntersectionObserver(entries=>{entries.forEach(entry=>{if(entry.isIntersecting){navs.forEach(a=>a.classList.toggle('active',a.getAttribute('href')==='#'+entry.target.id));}});},{rootMargin:'-10% 0px -65% 0px'});document.querySelectorAll('main section').forEach(el=>observer.observe(el));}
+ window.addEventListener('scroll',()=>{const denom=document.documentElement.scrollHeight-window.innerHeight;$('progress').style.width=(denom>0?100*window.scrollY/denom:0)+'%';},{passive:true});
+ updateDrive();updateTime();updateSandbox();updateGeometry();updateLearning();updateKernel();updateReal();runChecks();
+}
+initialize();
+</script>
+</body></html>
