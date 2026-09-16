@@ -155,6 +155,8 @@ def load_sequences(manifest_path, roles=('train', 'val', 'test')):
                 raise ValueError('Temporal split does not cover original sequence')
             if any(a['stop'] != b['start'] for a,b in zip(parts,parts[1:])):
                 raise ValueError('Overlapping or missing temporal split frames')
+            if any(r['frames'] != r['stop'] - r['start'] for r in parts):
+                raise ValueError('Temporal slice frames must equal stop-start')
             if len({r['parent_sha256'] for r in parts}) != 1:
                 raise ValueError('Temporal slices have different parent sequences')
     seen = set()

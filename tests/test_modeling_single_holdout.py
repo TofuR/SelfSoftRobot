@@ -47,6 +47,31 @@ class SingleHoldoutTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'Overlapping'):
                 load_sequences(target,roles=('train',))
 
+    def test_actual_slice_length_must_match_declared_interval(self):
+        for role in ('train', 'val', 'test'):
+            for delta in (-1, 1):
+                with self.subTest(role=role, delta=delta), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    rows = []
+                    for i, split in enumerate(('train', 'val', 'test')):
+                        start, stop = i * 10, (i + 1) * 10
+                        frames = 10 + (delta if split == role else 0)
+                        path = root / f'{split}.npz'
+                        np.savez(path, **synthetic_sequence(frames=frames),
+                                 frame_ids=np.arange(start, start + frames),
+                                 timestamps=np.arange(start, start + frames) * .2)
+                        rows.append(dict(group='s0', role=split, start=start, stop=stop,
+                                         original_frames=30, parent_sha256='same-parent',
+                                         frames=frames, path=path.name, sha256=sha256(path)))
+                    manifest = root / 'manifest.json'
+                    write_json(manifest, dict(schema='shape_modeling_temporal_pool_v1',
+                               length_unit='mm', node_order='base_to_tip', dt=.2, files=rows))
+                    # Arrays, frame IDs and hashes agree with frames, but not start/stop.
+                    # Validate even excluded roles before opening any slice arrays.
+                    for roles in (('train', 'val', 'test'), ('train',), ()):
+                        with self.subTest(roles=roles), self.assertRaisesRegex(ValueError, 'frames.*stop-start'):
+                            load_sequences(manifest, roles=roles)
+
     def test_pcc_straight_limit_and_koopman_causality(self):
         model=PCCShape(16,dict(rest_lengths=[70.,70.],base=[0.,0.,0.]),([0.,0.,0.],1.))
         action=torch.rand(2,20,4)
