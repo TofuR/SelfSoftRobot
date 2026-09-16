@@ -57,6 +57,7 @@ CONFIG_DEFAULTS = {
     "qc_frames": "",
     "repair_frames": "",
     "out_root": None,
+    "intermediate_root": None,
 }
 ANCHOR_CONFIG_DEFAULTS = {
     "n_bg": 500,
@@ -174,6 +175,7 @@ def resolve_pipeline_args(args):
         "repair_frames": [int(value) for value in
                           resolved["repair_frames"].split(",") if value],
         "out_root": resolved["out_root"],
+        "intermediate_root": resolved["intermediate_root"],
         "anchor": resolved["anchor"],
     }
     return argparse.Namespace(**resolved)
@@ -225,6 +227,14 @@ def resolve_preprocess_layout(args, paths=None):
     dataset_id = f"{seq_name}_n{args.n_points}_sam2_{state_suffix}"
     recipe_id = dataset_id
     derived = paths.intermediate_sequence("real", seq_name, recipe_id)
+    if getattr(args, "intermediate_root", None):
+        requested = Path(args.intermediate_root).expanduser()
+        derived = (requested if requested.is_absolute()
+                   else paths.repo_root / requested).resolve(strict=False)
+        paths.artifact_uri(derived)
+    # Outputs must never alias or contain source recordings, including symlinks.
+    if derived == seq or seq in derived.parents or derived in seq.parents:
+        raise ValueError("intermediate output must be disjoint from raw sequence")
     mask_dir = derived / "sam2_masks"
     if args.out_root:
         requested = Path(args.out_root).expanduser()
@@ -234,6 +244,8 @@ def resolve_preprocess_layout(args, paths=None):
         out_root = paths.processed_dataset("real", dataset_id)
     # 显式路径可以改写 workspace 内的布局，但不能重新启用历史写入根。
     paths.artifact_uri(out_root)
+    if out_root == seq or seq in out_root.parents or out_root in seq.parents:
+        raise ValueError("processed output must be disjoint from raw sequence")
     return {
         "seq": seq,
         "sequence_id": seq_name,
@@ -296,6 +308,11 @@ def validate_sam2(image_dir, mask_dir):
                           cv2.IMREAD_GRAYSCALE)
         if mask is None:
             raise RuntimeError(f"SAM2 mask无法读取: frame={frame}")
+        image = cv2.imread(os.path.join(image_dir, f"{frame:05d}.png"))
+        if image is None or mask.shape != image.shape[:2]:
+            raise RuntimeError(f"SAM2 mask/image shape mismatch: frame={frame}")
+        if not np.any(mask > 127):
+            raise RuntimeError(f"SAM2 empty mask: frame={frame}")
         areas.append(int(np.count_nonzero(mask > 127)))
     values = np.asarray(areas, dtype=np.float64)
     summary = {
@@ -717,6 +734,8 @@ def build_parser():
                         help="显式删除本序列已有SAM2 mask后重算")
     parser.add_argument("--out-root", default=None,
                         help="显式workspace内输出；历史数据根保持只读")
+    parser.add_argument("--intermediate-root", default=None,
+                        help="新版本中间产物目录，须在workspace内且与原始数据分离")
     return parser
 
 
@@ -812,7 +831,10 @@ def main(argv=None):
                        "--anchor-manifest", os.path.join(derived, "anchor_manifest.csv"),
                        "--out", mask_dir, "--chunk-size", str(args.chunk_size),
                        "--shards", str(len(gpu_ids)), "--shard", str(shard),
-                       "--device", "cuda:0"]
+                       "--device", "cuda:0", "--trim-base-attachment",
+                       "--base-side", str(args.anchor["base_side"]),
+                       "--base-trim-width-ratio", str(args.anchor["base_trim_width_ratio"]),
+                       "--base-trim-stable-span", str(args.anchor["base_trim_stable_span"])]
             env_update = {**common_env, "CUDA_VISIBLE_DEVICES": gpu}
             rendered = display_command(command, env_update)
             print(f"\n>>> {rendered}", flush=True)

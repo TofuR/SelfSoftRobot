@@ -27,11 +27,13 @@
 import argparse
 import csv
 import glob
+import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
 import sys
+import tempfile
 import traceback
 
 # ---- SAM2_HOME 必须在 import sam2 前设(指向持久 sam2_src) ----
@@ -51,6 +53,7 @@ from src.registry import (  # noqa: E402
     canonical_output, resolve_candidate_masks, resolve_raw_sequence,
     resolve_repaired_masks,
 )
+from scripts.real.prepare_sam2_anchors import trim_wide_base_attachment
 
 CKPT = os.path.join(HERE, "checkpoints", "sam2.1_hiera_tiny.pt")
 CONFIG_DIR = os.path.join(SAM2_SRC, "sam2", "configs")
@@ -138,6 +141,14 @@ def select_anchor(anchor_mask_dir, chunk_frames, med_area, anchor_manifest=None)
     return anchor, pool[anchor][2]
 
 
+def create_jpeg_workspace(cache_parent, sequence_name, shard):
+    """Give each invocation exclusive JPEG ownership, even for inputs named crop."""
+    cache_parent = Path(cache_parent)
+    cache_parent.mkdir(parents=True, exist_ok=True)
+    return tempfile.mkdtemp(
+        prefix=f"{sequence_name}_shard{shard}_", dir=str(cache_parent))
+
+
 def prepare_jpeg_dir(cam0, chunk_frames, jpeg_dir):
     """SAM2 load_video_frames 只吃 .jpg; 拷块内帧为连续名 JPEG。缺原图→False。"""
     os.makedirs(jpeg_dir, exist_ok=True)
@@ -149,13 +160,42 @@ def prepare_jpeg_dir(cam0, chunk_frames, jpeg_dir):
     return True
 
 
+def file_digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def block_source(cam0, anchor_mask_dir, frames, anchor_manifest, inference_config):
+    return {"schema": 1, "images": str(Path(cam0).resolve()),
+            "anchors": str(Path(anchor_mask_dir).resolve()),
+            "image_hashes": {str(f): file_digest(Path(cam0)/f"{f:05d}.png") for f in frames},
+            "anchor_hashes": {str(f): file_digest(Path(anchor_mask_dir)/f"{f:05d}.png")
+                              for f in frames if (Path(anchor_mask_dir)/f"{f:05d}.png").is_file()},
+            "anchor_selection": {str(f): (anchor_manifest or {}).get(f, {}) for f in frames},
+            "inference": inference_config or {}}
+
+
+def block_receipt(out_dir, frames):
+    return Path(out_dir)/"provenance"/f"chunk_{frames[0]:05d}_{frames[-1]:05d}.json"
+
+
 def write_mask(out_dir, frame, m):
-    cv2.imwrite(os.path.join(out_dir, f"{frame:05d}.png"), (m.astype(np.uint8)) * 255)
+    if not cv2.imwrite(os.path.join(out_dir, f"{frame:05d}.png"), (m.astype(np.uint8)) * 255):
+        raise OSError(f"Failed to write mask {frame}")
 
 
-def chunk_done(out_dir, chunk_frames):
-    """块内所有输出帧已存在→True(断点续跑跳过)。"""
-    return all(os.path.isfile(os.path.join(out_dir, f"{f:05d}.png")) for f in chunk_frames)
+def chunk_done(out_dir, chunk_frames, source=None):
+    """Resume only with matching input/settings AND verified output fingerprints."""
+    receipt = block_receipt(out_dir, chunk_frames)
+    if source is None or not receipt.is_file():
+        return False
+    try:
+        saved = json.loads(receipt.read_text())
+        if saved["source"] != source or len(saved["outputs"]) != len(chunk_frames):
+            return False
+        return all(file_digest(Path(out_dir)/f"{f:05d}.png") == saved["outputs"][str(f)]
+                   for f in chunk_frames)
+    except (OSError, ValueError, KeyError):
+        return False
 
 
 def _overlay_mask(image_bgr, mask, color):
@@ -225,10 +265,18 @@ def save_sam2_qc(cam0, candidate_dir, sam_dir, shard, n=12):
 
 
 def process_chunk(predictor, cam0, anchor_mask_dir, out_dir, jpeg_root, c_start, c_end,
-                  med_area, anchor_manifest=None):
+                  med_area, anchor_manifest=None, inference_config=None,
+                  trim_base_attachment=False, base_side="top",
+                  base_trim_width_ratio=1.5, base_trim_stable_span=5):
     """处理一块 [c_start, c_end]: 选锚→双向传播→写 mask。返回 [(frame, area)] / None(失败) / [](跳过)。"""
     chunk_frames = list(range(c_start, c_end + 1))
-    if chunk_done(out_dir, chunk_frames):
+    trim_options = dict(base_side=base_side, width_ratio=base_trim_width_ratio,
+                        stable_span=base_trim_stable_span)
+    source = block_source(cam0, anchor_mask_dir, chunk_frames, anchor_manifest,
+                          dict(inference_config or {}, med_area=float(med_area),
+                               trim_base_attachment=trim_base_attachment,
+                               base_trim=trim_options))
+    if chunk_done(out_dir, chunk_frames, source):
         print(f"  [skip] 块 {c_start}-{c_end} 已完成({len(chunk_frames)} 帧)", flush=True)
         return []
     anchor, amask = select_anchor(
@@ -254,6 +302,8 @@ def process_chunk(predictor, cam0, anchor_mask_dir, out_dir, jpeg_root, c_start,
             state, start_frame_idx=anchor_local,
             max_frame_num_to_track=c_end - anchor, reverse=False):
         m = (mt[0].cpu().numpy() > 0).squeeze().astype(np.uint8)
+        if trim_base_attachment:
+            m = trim_wide_base_attachment(m, **trim_options)
         gf = chunk_frames[fi]
         if gf not in written:
             write_mask(out_dir, gf, m)
@@ -265,6 +315,8 @@ def process_chunk(predictor, cam0, anchor_mask_dir, out_dir, jpeg_root, c_start,
                 state, start_frame_idx=anchor_local,
                 max_frame_num_to_track=anchor - c_start, reverse=True):
             m = (mt[0].cpu().numpy() > 0).squeeze().astype(np.uint8)
+            if trim_base_attachment:
+                m = trim_wide_base_attachment(m, **trim_options)
             gf = chunk_frames[fi]
             if gf not in written:
                 write_mask(out_dir, gf, m)
@@ -273,7 +325,16 @@ def process_chunk(predictor, cam0, anchor_mask_dir, out_dir, jpeg_root, c_start,
     shutil.rmtree(jpeg_dir, ignore_errors=True)
     missing = [f for f in chunk_frames if f not in written]
     if missing:
-        print(f"    [warn] 块 {c_start}-{c_end} 缺 {len(missing)} 帧: {missing[:5]}...", flush=True)
+        raise RuntimeError(f"块 {c_start}-{c_end} 缺帧: {missing[:5]}")
+    if any(a == 0 for _, a in areas):
+        raise RuntimeError(f"块 {c_start}-{c_end} contains empty masks")
+    receipt = block_receipt(out_dir, chunk_frames)
+    receipt.parent.mkdir(exist_ok=True)
+    value = {"source": source, "outputs": {
+        str(f): file_digest(Path(out_dir)/f"{f:05d}.png") for f in chunk_frames}}
+    temporary = receipt.with_name(receipt.name+f".{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(value, indent=2)+"\n")
+    os.replace(temporary, receipt)
     return areas
 
 
@@ -296,6 +357,12 @@ def main():
     pa.add_argument("--start-frame", type=int, default=0)
     pa.add_argument("--end-frame", type=int, default=None, help="默认到最后一帧")
     pa.add_argument("--device", default="cuda:0")
+    pa.add_argument("--trim-base-attachment", action="store_true",
+                    help="Remove wide support attachment from each propagated robot mask")
+    pa.add_argument("--base-side", choices=("top", "bottom", "left", "right", "none"),
+                    default="top", help="Attachment side; none disables trimming")
+    pa.add_argument("--base-trim-width-ratio", type=float, default=1.5)
+    pa.add_argument("--base-trim-stable-span", type=int, default=5)
     args = pa.parse_args()
 
     paths = ProjectPaths.load(workspace_root=args.workspace_root)
@@ -314,8 +381,8 @@ def main():
     anchor_manifest = load_anchor_manifest(manifest_path)
     out_dir = str(canonical_output(paths, args.out or canonical_intermediate(
         paths, seq_name, SAM2_VIDEO_RECIPE)))
-    jpeg_root = str(paths.workspace_root / "cache" / "sam2_jpeg" /
-                    f"{seq_name}_shard{args.shard}")
+    jpeg_root = create_jpeg_workspace(
+        paths.workspace_root / "cache" / "sam2_jpeg", seq_name, args.shard)
     canonical_checkpoint = paths.pretrained_model_dir(
         "sam2") / "sam2.1_hiera_tiny.pt"
     CKPT = str(args.checkpoint or (
@@ -344,6 +411,9 @@ def main():
 
     import torch  # noqa: F401
     predictor = build_predictor(args.device)
+    inference_config = {"checkpoint_sha256": file_digest(CKPT),
+                        "config": CONFIG_FILE, "script_sha256": file_digest(__file__),
+                        "base_trim_sha256": file_digest(Path(PROJECT_ROOT)/"scripts/real/prepare_sam2_anchors.py")}
 
     area_log = os.path.join(out_dir, "area_curve.txt")
     fail_log = os.path.join(out_dir, f"failures_shard{args.shard}.txt")
@@ -353,7 +423,12 @@ def main():
         for ci, (c_start, c_end) in my_chunks:
             try:
                 areas = process_chunk(predictor, cam0, anchor_dir, out_dir, jpeg_root,
-                                      c_start, c_end, med, anchor_manifest=anchor_manifest)
+                                      c_start, c_end, med, anchor_manifest=anchor_manifest,
+                                      inference_config=inference_config,
+                                      trim_base_attachment=args.trim_base_attachment,
+                                      base_side=args.base_side,
+                                      base_trim_width_ratio=args.base_trim_width_ratio,
+                                      base_trim_stable_span=args.base_trim_stable_span)
                 if areas is None:
                     ff.write(f"块 {c_start}-{c_end}: 无锚帧/缺图, 跳过\n")
                 elif areas:
@@ -383,8 +458,16 @@ def main():
             "shard": args.shard,
             "shards": args.shards,
             "device": args.device,
+            "temporary_jpeg_isolation": "unique_directory_per_invocation",
+            "block_provenance": "provenance/chunk_START_END.json",
+            "trim_base_attachment": args.trim_base_attachment,
+            "base_side": args.base_side,
+            "base_trim_width_ratio": args.base_trim_width_ratio,
+            "base_trim_stable_span": args.base_trim_stable_span,
         }, handle, indent=2, ensure_ascii=False)
     save_sam2_qc(cam0, anchor_dir, out_dir, args.shard)
+    if Path(fail_log).read_text().strip():
+        raise RuntimeError(f"SAM2 failed blocks recorded in {fail_log}")
     print(f">>> 分片 {args.shard} 完成 → {out_dir}", flush=True)
 
 

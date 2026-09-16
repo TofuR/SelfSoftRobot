@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 import sys
 import shutil
+import tempfile
 
 # ---- SAM2_HOME 必须在 import sam2 前设(指向持久 sam2_src) ----
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -84,8 +85,10 @@ def main():
     sequence = resolve_raw_sequence(paths, args.seq, camera="cam0")
     cam0 = str(sequence / "cam0")
     args.out = str(canonical_output(paths, args.out))
-    tmp_jpeg = str(paths.workspace_root / "cache" / "sam2_jpeg" /
-                   f"{sequence.name}_{args.start}-{args.end}")
+    cache_parent = paths.workspace_root / "cache" / "sam2_jpeg"
+    cache_parent.mkdir(parents=True, exist_ok=True)
+    tmp_jpeg = tempfile.mkdtemp(
+        prefix=f"{sequence.name}_{args.start}-{args.end}_", dir=str(cache_parent))
     canonical_checkpoint = paths.pretrained_model_dir(
         "sam2") / "sam2.1_hiera_tiny.pt"
     CKPT = str(args.checkpoint or (
