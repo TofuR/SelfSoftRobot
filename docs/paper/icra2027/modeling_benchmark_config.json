@@ -1,0 +1,19 @@
+{
+  "model": "hov",
+  "seed": 0,
+  "run_kind": "exploratory",
+  "history": 20,
+  "hidden": 64,
+  "epochs": 100,
+  "batch_size": 128,
+  "lr": 0.001,
+  "ridge": 0.0001,
+  "endpoint_weight": 0.25,
+  "prior_steps": 500,
+  "train_stride": 1,
+  "eval_stride": 1,
+  "max_train_windows": null,
+  "max_eval_windows": null,
+  "threads": 2,
+  "device": "cpu"
+}

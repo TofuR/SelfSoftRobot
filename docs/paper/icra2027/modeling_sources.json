@@ -1,0 +1,1279 @@
+{
+  "schema_version": 1,
+  "checked_date": "2026-09-12",
+  "scope": "literature, official repository acquisition, static inspection and adaptation advice only",
+  "task_contract": {
+    "input": "pressure window ending at t; shape at t",
+    "shape": "U: B,L,d_u; target skeleton: B,N,d_s",
+    "window_state": "independent initialization, no carried state from before window",
+    "extra_observations_allowed": false,
+    "direction_rule": "only differences within window, initial direction zero",
+    "train_supervision_note": "mask-derived SDF adaptation must disclose additional labels",
+    "runtime_tested": false
+  },
+  "minimum_recommendation": [
+    "chen2025",
+    "park2024",
+    "schafke2024"
+  ],
+  "papers": [
+    {
+      "id": "chen2025",
+      "title": "Hysteresis-Aware Neural Network Modeling and Whole-Body Reinforcement Learning Control of Soft Robots",
+      "paper_url": "https://arxiv.org/html/2504.13582",
+      "paper_verified": true,
+      "primary_source": {
+        "path": "workspace/reports/paper_preparation_20260910_000/sources/chen2025.html",
+        "sha256": "e63f5efdaf3f082d2bb38766405b0bdc2853cc873daa2a2a677724f7f7845639",
+        "matches_existing_manifest": true
+      },
+      "official_code_verified": false,
+      "downloaded": false,
+      "runtime_tested": false,
+      "adaptation_status": "recommendation_only_not_implemented_in_this_task",
+      "priority": "P0",
+      "sections": [
+        "III-A",
+        "III-B",
+        "V-A"
+      ],
+      "code_status": "no_official_repository_identified_in_checked_sources",
+      "search_scope": [
+        "saved full paper",
+        "current arXiv abstract",
+        "GitHub repository title search",
+        "GitHub repository arXiv-id in:readme search"
+      ],
+      "search_not_exhaustive": true,
+      "recommended_name": "Chen2025-inspired DirectionMLP",
+      "architecture": {
+        "paper_explicit": "3 pressures + 3 direction features -> 4 hidden layers of 128 -> 3*n keypoint coordinates; B-spline shape representation",
+        "adaptation_layers": [
+          "2*d_u",
+          128,
+          128,
+          128,
+          128,
+          "N*d_s"
+        ],
+        "activation": "ReLU proposed; not specified in checked modeling section",
+        "direction": "last nonzero signed difference within the current window; zero at window start; threshold declared",
+        "loss": "common skeleton loss in primary table; optional training-range weighted MSE as a separately labeled setting"
+      },
+      "official_equivalent": false,
+      "evidence_quote": "The model with the lowest test loss was selected, which consisted of 4 hidden layers, each containing 128 neurons.",
+      "primary_text_snapshot": "workspace/third_party/modeling_baselines/_provenance/chen2025_primary_text.txt"
+    },
+    {
+      "id": "park2024",
+      "title": "Hysteresis Compensation of Flexible Continuum Manipulator Using RGBD Sensing and Temporal Convolutional Network",
+      "paper_url": "https://arxiv.org/html/2402.11319",
+      "paper_verified": true,
+      "primary_source": {
+        "path": "workspace/reports/paper_preparation_20260910_000/sources/park2024.html",
+        "sha256": "71be2a4b6f03c27d24cac199d5b72abdcc5968941acefa6d850e20c7372f1c86",
+        "matches_existing_manifest": true
+      },
+      "official_code_verified": false,
+      "downloaded": false,
+      "runtime_tested": false,
+      "adaptation_status": "recommendation_only_not_implemented_in_this_task",
+      "priority": "P0",
+      "sections": [
+        "IV-C",
+        "equations 19-20",
+        "Figure 8"
+      ],
+      "code_status": "no_official_repository_identified_in_checked_sources",
+      "search_scope": [
+        "saved full paper",
+        "current arXiv abstract",
+        "GitHub repository title search",
+        "GitHub repository arXiv-id in:readme search"
+      ],
+      "search_not_exhaustive": true,
+      "recommended_name": "Park2024-inspired causal TCN",
+      "architecture": {
+        "paper_explicit": "two dilated causal convolutions with ReLU per residual block; kernel 3; dilation base 2; last temporal feature",
+        "blocks": "ceil(log2(1+(L-1)/4))",
+        "receptive_field": "1+4*(2**blocks-1)",
+        "channels": "d_u proposed; original 5 inferred from 800 parameters, not explicitly verified",
+        "readout": "Linear(channels,N*d_s), added for skeleton task",
+        "left_padding_per_conv": "2*2**block_index",
+        "activation_placement": "proposed two convolution/ReLU pairs before residual sum; post-sum activation is not resolved from paper text"
+      },
+      "official_equivalent": false,
+      "evidence_quote": "We use a kernel size ( k ) of 3 and a dilation base ( d ) of 2.",
+      "primary_text_snapshot": "workspace/third_party/modeling_baselines/_provenance/park2024_primary_text.txt"
+    },
+    {
+      "id": "schafke2024",
+      "title": "Learning-Based Nonlinear Model Predictive Control of Articulated Soft Robots Using Recurrent Neural Networks",
+      "paper_url": "https://arxiv.org/html/2411.05616",
+      "paper_verified": true,
+      "primary_source": {
+        "path": "workspace/reports/paper_preparation_20260910_000/sources/schafke2024.html",
+        "sha256": "c1e11451d01a5d21e1e3f22eae65f185333c159e268f6783a926405eddaa0962",
+        "matches_existing_manifest": true
+      },
+      "official_code_verified": true,
+      "downloaded": true,
+      "runtime_tested": false,
+      "adaptation_status": "recommendation_only_not_implemented_in_this_task",
+      "repository_id": "sponge",
+      "official_equivalent": false,
+      "priority": "P0",
+      "code_status": "official_model_classes_and_training_available_static_only",
+      "official_link_chain": [
+        "https://arxiv.org/abs/2411.05616",
+        "https://tlhabich.github.io/sponge/rnn_mpc",
+        "https://github.com/tlhabich/sponge/tree/main/rnn_mpc/software"
+      ],
+      "recommended_name": "Schafke2024-adapted GRU/LSTM",
+      "architecture": {
+        "paper_input": "system state (angles and optionally velocities) plus desired pressures; warm-up and recursive future prediction",
+        "adapted_input": "B,L,d_u actions only; zero hidden/cell state per window",
+        "layers": "nn.GRU or nn.LSTM -> last temporal output -> nn.Linear(hidden_dim,N*d_s)",
+        "proposed_config": {
+          "hidden_dim": 64,
+          "num_layer": 1,
+          "dropout": 0
+        },
+        "published_repository_config": {
+          "hidden_dim": 59,
+          "num_layer": 1,
+          "neglegt_qdyn": true,
+          "window": 100,
+          "prediction": 20
+        },
+        "modifications": [
+          "replace original state input by actions only",
+          "change output to current skeleton",
+          "independent fixed-window initialization",
+          "use local training protocol and data split"
+        ]
+      },
+      "official_interfaces": [
+        {
+          "name": "GRU",
+          "file": "workspace/third_party/modeling_baselines/sponge/rnn_mpc/software/rnn_training/NN_fcn.py",
+          "line": 156,
+          "methods": [
+            {
+              "name": "__init__",
+              "line": 157,
+              "arguments": "self, input_dim, output_dim, hidden_dim, num_layer, dropout"
+            },
+            {
+              "name": "forward",
+              "line": 167,
+              "arguments": "self, x, ht"
+            }
+          ],
+          "file_sha256": "cc4a0d9334a7e9ba7bcecac5a5bfe84ca309ef6dd574b16e6c1d398916138d25"
+        },
+        {
+          "name": "LSTM",
+          "file": "workspace/third_party/modeling_baselines/sponge/rnn_mpc/software/rnn_training/NN_fcn.py",
+          "line": 173,
+          "methods": [
+            {
+              "name": "__init__",
+              "line": 174,
+              "arguments": "self, input_dim, output_dim, hidden_dim, num_layer, dropout"
+            },
+            {
+              "name": "forward",
+              "line": 184,
+              "arguments": "self, x, ht, ct"
+            }
+          ],
+          "file_sha256": "cc4a0d9334a7e9ba7bcecac5a5bfe84ca309ef6dd574b16e6c1d398916138d25"
+        },
+        {
+          "name": "NNstep_window",
+          "file": "workspace/third_party/modeling_baselines/sponge/rnn_mpc/software/rnn_training/NN_fcn.py",
+          "line": 326,
+          "methods": [],
+          "file_sha256": "cc4a0d9334a7e9ba7bcecac5a5bfe84ca309ef6dd574b16e6c1d398916138d25"
+        }
+      ],
+      "primary_text_snapshot": "workspace/third_party/modeling_baselines/_provenance/schafke2024_primary_text.txt"
+    },
+    {
+      "id": "yu2026",
+      "title": "Shape-Interpretable Visual Self-Modeling Enables Geometry-Aware Continuum Robot Control",
+      "paper_url": "https://arxiv.org/html/2603.01751",
+      "paper_verified": true,
+      "primary_source": {
+        "path": "workspace/reports/paper_preparation_20260910_000/sources/yu2026.html",
+        "sha256": "5e5b8b20ccde3b0face1bbcd2157fc40dcbfcd83aa4a8f93a19fec62a520dc18",
+        "matches_existing_manifest": true
+      },
+      "official_code_verified": false,
+      "downloaded": false,
+      "runtime_tested": false,
+      "adaptation_status": "recommendation_only_not_implemented_in_this_task",
+      "priority": "P1",
+      "sections": [
+        "II-B",
+        "III-A equations 4-11",
+        "III-B equations 12-17"
+      ],
+      "code_status": "no_official_repository_identified_in_checked_sources",
+      "search_scope": [
+        "saved full paper",
+        "current arXiv abstract",
+        "GitHub repository title search",
+        "GitHub repository arXiv-id in:readme search"
+      ],
+      "search_not_exhaustive": true,
+      "recommended_name": "Yu2026-inspired Bezier readout",
+      "architecture": {
+        "curve": "M connected quadratic Bezier segments, 2*M+1 control points, fixed base",
+        "equation": "B_i(s)=(1-s)^2*P[2*i]+2*(1-s)*s*P[2*i+1]+s^2*P[2*i+2]",
+        "readout": "window encoder -> 2*M*d_s free point coordinates -> deterministic sampling -> N*d_s",
+        "paper_NODE": "dx_s/dt=f_theta(x_s,u,t), requires initial measured shape; separate endpoint NODE",
+        "not_reproduced": [
+          "multi-view shape initialization",
+          "NODE dynamics",
+          "hybrid control"
+        ]
+      },
+      "official_equivalent": false,
+      "primary_text_snapshot": "workspace/third_party/modeling_baselines/_provenance/yu2026_primary_text.txt"
+    },
+    {
+      "id": "krauss2026",
+      "title": "Accurate Open-Loop Control of a Soft Continuum Robot Through Visually Learned Latent Representations",
+      "paper_url": "https://arxiv.org/html/2603.19655",
+      "paper_verified": true,
+      "primary_source": {
+        "path": "workspace/reports/paper_preparation_20260910_000/sources/krauss2026.html",
+        "sha256": "03e38bf1bdd29b42143ba2b9f1558254b3f9d179e2b80983178d26ee8dde2b2f",
+        "matches_existing_manifest": true
+      },
+      "official_code_verified": true,
+      "downloaded": true,
+      "runtime_tested": false,
+      "adaptation_status": "recommendation_only_not_implemented_in_this_task",
+      "repository_id": "visual_oscillators_for_SCR",
+      "official_equivalent": false,
+      "priority": "P1",
+      "code_status": "official_related_VON_implementation_available_not_full_openloop_version",
+      "official_link_chain": [
+        "https://arxiv.org/abs/2603.19655",
+        "https://github.com/UThenrik/visual_oscillators_for_SCR"
+      ],
+      "repository_paper": {
+        "title": "Learning Visually Interpretable Oscillator Networks for Soft Continuum Robots from Video",
+        "arxiv_url": "https://arxiv.org/abs/2511.18322",
+        "doi": "10.1109/LRA.2026.3703241",
+        "publication_year": 2026,
+        "primary_snapshot": "workspace/third_party/modeling_baselines/_provenance/krauss_von_primary.html",
+        "sha256": "1a1a87c8b9e9e5f6915e0d74d25e06c7a558bc147a2e0bb88223375c187277dc"
+      },
+      "version_differences": [
+        "README cites VON representation paper, not the later open-loop title",
+        "step_symplectic_euler uses explicit damping; open-loop paper Eq.8 introduces implicit damping",
+        "checked code lacks a separate open-loop MLP dynamics class",
+        "full revised rest/KL losses and multi-step open-loop training parity not established"
+      ],
+      "recommended_names": [
+        "Krauss-VON-inspired action-only oscillator",
+        "Krauss-inspired Koopman core"
+      ],
+      "architecture": {
+        "Koopman": "xi_next=K*xi+B(u); B: d_u->16->2*d_z, LeakyReLU; dt argument unused in discrete update",
+        "oscillator": "M*zdd+D*zd+K*(z-z0)=B(u); B: d_u->32->32->d_z, LeakyReLU",
+        "adaptation": "zero z/v per window, consume pressure window, Linear(2*d_z,N*d_s) readout",
+        "proposed_latent_dim": 8,
+        "removed": [
+          "visual encoder initialization",
+          "image derivative input",
+          "ABCD image decoding",
+          "original visual losses"
+        ],
+        "timing": "declare per-record actuation interval; target stays S_t, no future command",
+        "delay_input_note": "Default num_actuation_delays=4; notebook expands effective actuation_dim by four. Match class input width; disable extra delays or form them strictly within the current window."
+      },
+      "official_interfaces": [
+        {
+          "name": "AttentionBroadcastDecoder",
+          "file": "workspace/third_party/modeling_baselines/visual_oscillators_for_SCR/models.py",
+          "line": 165,
+          "methods": [
+            {
+              "name": "__init__",
+              "line": 170,
+              "arguments": "self, latent_dim=16, output_channels=1, image_size=32, feature_dim=16, background_token_value=0.0, attention_downsample_factor=1, dynamics_type='harmonic1d', gumbel_noise_strength=0.0"
+            },
+            {
+              "name": "forward",
+              "line": 375,
+              "arguments": "self, z"
+            }
+          ],
+          "file_sha256": "c591cad54f802399bc708d7436aeefb985261845ecb6855570280332dd5f3453"
+        },
+        {
+          "name": "VAE",
+          "file": "workspace/third_party/modeling_baselines/visual_oscillators_for_SCR/models.py",
+          "line": 507,
+          "methods": [
+            {
+              "name": "__init__",
+              "line": 509,
+              "arguments": "self, input_channels=1, latent_dim=32, is_vae=True, use_attention_decoder=True, attention_feature_dim=16, attention_downsample_factor=2, background_token_value=0.0, image_size=32, dynamics_type='harmonic1d', gumbel_noise_strength=0.0"
+            },
+            {
+              "name": "encode",
+              "line": 549,
+              "arguments": "self, x"
+            },
+            {
+              "name": "decode",
+              "line": 565,
+              "arguments": "self, z"
+            },
+            {
+              "name": "forward",
+              "line": 569,
+              "arguments": "self, x"
+            }
+          ],
+          "file_sha256": "c591cad54f802399bc708d7436aeefb985261845ecb6855570280332dd5f3453"
+        },
+        {
+          "name": "KoopmanModel",
+          "file": "workspace/third_party/modeling_baselines/visual_oscillators_for_SCR/models.py",
+          "line": 600,
+          "methods": [
+            {
+              "name": "__init__",
+              "line": 602,
+              "arguments": "self, config: dict, init_K: str='identity'"
+            },
+            {
+              "name": "forward",
+              "line": 625,
+              "arguments": "self, z_t: torch.Tensor, z_dot_t: torch.Tensor, u_t: torch.Tensor, dt: float"
+            }
+          ],
+          "file_sha256": "c591cad54f802399bc708d7436aeefb985261845ecb6855570280332dd5f3453"
+        },
+        {
+          "name": "FullyCoupledOscNet",
+          "file": "workspace/third_party/modeling_baselines/visual_oscillators_for_SCR/models.py",
+          "line": 651,
+          "methods": [
+            {
+              "name": "__init__",
+              "line": 657,
+              "arguments": "self, config, device='cpu'"
+            },
+            {
+              "name": "step_symplectic_euler",
+              "line": 811,
+              "arguments": "self, y, u, dt"
+            }
+          ],
+          "file_sha256": "c591cad54f802399bc708d7436aeefb985261845ecb6855570280332dd5f3453"
+        },
+        {
+          "name": "HarmonicOscillatorDynamics",
+          "file": "workspace/third_party/modeling_baselines/visual_oscillators_for_SCR/models.py",
+          "line": 868,
+          "methods": [
+            {
+              "name": "__init__",
+              "line": 869,
+              "arguments": "self, config: dict, device='cpu'"
+            },
+            {
+              "name": "forward",
+              "line": 876,
+              "arguments": "self, z_t, z_dot_t, u_t, dt=1.0"
+            }
+          ],
+          "file_sha256": "c591cad54f802399bc708d7436aeefb985261845ecb6855570280332dd5f3453"
+        },
+        {
+          "name": "create_dynamics_model",
+          "file": "workspace/third_party/modeling_baselines/visual_oscillators_for_SCR/models.py",
+          "line": 930,
+          "methods": [],
+          "file_sha256": "c591cad54f802399bc708d7436aeefb985261845ecb6855570280332dd5f3453"
+        }
+      ],
+      "primary_text_snapshot": "workspace/third_party/modeling_baselines/_provenance/krauss2026_primary_text.txt"
+    },
+    {
+      "id": "softnerf2024",
+      "title": "SoftNeRF: A Self-Modeling Soft Robot Plugin for Various Tasks",
+      "paper_url": "https://doi.org/10.1109/IROS58592.2024.10801344",
+      "paper_verified": true,
+      "primary_source": {
+        "path": "docs/papers/Shan 等 - 2024 - SoftNeRF A self-modeling soft robot plugin for various tasks.pdf",
+        "sha256": "e04513b3119ad178b300428d978ddf5aded297bb203736399d852bfc532928fd",
+        "matches_existing_manifest": true
+      },
+      "official_code_verified": true,
+      "downloaded": true,
+      "runtime_tested": false,
+      "adaptation_status": "recommendation_only_not_implemented_in_this_task",
+      "repository_id": "softnerf",
+      "official_equivalent": false,
+      "priority": "P2",
+      "code_status": "official_model_components_available_training_entrypoint_not_found",
+      "official_link_chain": [
+        "https://doi.org/10.1109/IROS58592.2024.10801344",
+        "https://github.com/IRMVLab/soft-nerf"
+      ],
+      "recommended_names": [
+        "SoftNeRF-inspired 2D conditional SDF",
+        "SoftNeRF-inspired SIREN encoder (encoder-only comparison)"
+      ],
+      "architecture": {
+        "official_encoder": "kinematicNetwork: 4->128->128->128->32 using sin(30*Linear) in all four layers, configured by trunk.conf",
+        "official_field": "SDFNetwork(spatial_3d_points,kinematic_feature32) -> sdf + geometry features",
+        "official_task": "multi-view camera rays, action signals, RGB/mask supervision, conditional 3D hybrid SDF rendering",
+        "limitations": [
+          "SDF motion feature dimension hardcoded to 32",
+          "n_layers argument does not control kinematicNetwork depth",
+          "dataset contains author-specific absolute path, fixed image size and CUDA",
+          "no full training runner located",
+          "tinycudann and nerfacc dependencies not installed or tested"
+        ],
+        "proposed_2d_field": {
+          "equation": "g=E(U_window); signed_distance=G(concat(positional_encoding(xy),g))",
+          "encoder": "window SIREN or existing causal GRU -> 32 features; project choice",
+          "field": "4 hidden layers of width 128, Softplus or ReLU, linear scalar output; project choice",
+          "supervision": "EDT(1-M)-EDT(M) from train masks, consistent isotropic coordinate/distance scaling, declared truncation",
+          "sampling": "fixed boundary/inside/outside mixture, no test-driven tuning",
+          "evaluation": "fixed-grid zero-level mask -> skeleton extractor with declared topology/failure policy",
+          "fairness": "query xy is output coordinate, but mask/SDF labels add supervision relative to skeleton-only training",
+          "claim": "paper-inspired 2D representation adaptation, not official 3D rendering reproduction"
+        }
+      },
+      "official_interfaces": [
+        {
+          "name": "SirenLayer",
+          "file": "workspace/third_party/modeling_baselines/softnerf/models/fields.py",
+          "line": 6,
+          "methods": [
+            {
+              "name": "__init__",
+              "line": 7,
+              "arguments": "self, in_f, out_f, w0=30, is_first=False, is_last=False"
+            },
+            {
+              "name": "forward",
+              "line": 21,
+              "arguments": "self, x"
+            }
+          ],
+          "file_sha256": "508fc574369c4b746f5ed86ea46d009b03db165eb7b2c17778c298e99afed2c9"
+        },
+        {
+          "name": "kinematicNetwork",
+          "file": "workspace/third_party/modeling_baselines/softnerf/models/fields.py",
+          "line": 25,
+          "methods": [
+            {
+              "name": "__init__",
+              "line": 26,
+              "arguments": "self, kinematic_inputdims: int=8, d_out: int=8, d_hidden: int=128, n_layers: int=4, sphere_init: bool=True, sphere_init_radius: float=0.5, weight_norm: bool=True, device: str='cuda'"
+            },
+            {
+              "name": "forward",
+              "line": 69,
+              "arguments": "self, inputs, training=True"
+            }
+          ],
+          "file_sha256": "508fc574369c4b746f5ed86ea46d009b03db165eb7b2c17778c298e99afed2c9"
+        },
+        {
+          "name": "SDFNetwork",
+          "file": "workspace/third_party/modeling_baselines/softnerf/models/fields.py",
+          "line": 79,
+          "methods": [
+            {
+              "name": "__init__",
+              "line": 81,
+              "arguments": "self, geo_feat_dim: int=128, d_hidden: int=128, n_layers: int=1, n_frequencies: int=6, include_xyz: bool=True, sphere_init: bool=True, sphere_init_radius: float=0.5, weight_norm: bool=True, num_lods: int=16, feature_dim: int=2, codebook_bitwidth: int=18, max_width_codebook: int=2 ** 24, min_width_codebook: int=16, device: str='cuda', **kwargs"
+            },
+            {
+              "name": "forward",
+              "line": 156,
+              "arguments": "self, inputs, kinematic_feature, training=True"
+            },
+            {
+              "name": "sdf",
+              "line": 168,
+              "arguments": "self, x, kinematic_feature, training=True"
+            }
+          ],
+          "file_sha256": "508fc574369c4b746f5ed86ea46d009b03db165eb7b2c17778c298e99afed2c9"
+        },
+        {
+          "name": "NeuSModel",
+          "file": "workspace/third_party/modeling_baselines/softnerf/models/neus.py",
+          "line": 10,
+          "methods": [
+            {
+              "name": "__init__",
+              "line": 11,
+              "arguments": "self, config, scene_aabb, device"
+            },
+            {
+              "name": "forward_",
+              "line": 103,
+              "arguments": "self, rays_o, rays_d, near, far, signals"
+            }
+          ],
+          "file_sha256": "1f794b9c62319ec2020663c1ea652e3ca56b0e6a6e193d850ecb858a650fe552"
+        },
+        {
+          "name": "NeuSRenderer",
+          "file": "workspace/third_party/modeling_baselines/softnerf/models/renderer.py",
+          "line": 9,
+          "methods": [
+            {
+              "name": "__init__",
+              "line": 10,
+              "arguments": "self, neus_model, n_samples, n_importance, perturb, **kwargs"
+            },
+            {
+              "name": "render",
+              "line": 23,
+              "arguments": "self, rays_o, rays_d, near, far, signals"
+            }
+          ],
+          "file_sha256": "740ccc0767612f4f3a58dd24e8a50f9a1bf8f36bd43e88bbbe665874ba5d0ffb"
+        }
+      ],
+      "primary_text_snapshot": "workspace/reports/paper_preparation_20260910_000/sources/softnerf2024_raw.txt"
+    }
+  ],
+  "repositories": [
+    {
+      "id": "sponge",
+      "url": "https://github.com/tlhabich/sponge",
+      "commit": "fffb24a063475a3bca09f04968be0d165ad3f90a",
+      "local_path": "workspace/third_party/modeling_baselines/sponge",
+      "download_status": "success",
+      "download_method": "git shallow clone depth 1; no submodules",
+      "checkout_scope": "sparse_checkout_root_and_rnn_mpc",
+      "sparse_paths": [
+        "rnn_mpc"
+      ],
+      "license": {
+        "spdx_id": "MIT",
+        "status": "explicit_root_license",
+        "path": "workspace/third_party/modeling_baselines/sponge/LICENSE",
+        "reuse_note": "retain MIT notice when extracting classes"
+      },
+      "static_verification": {
+        "tracked_worktree_clean": true,
+        "checked_out_file_count": 40,
+        "python_files_parsed": 2,
+        "syntax_errors": [],
+        "runtime_tested": false,
+        "external_code_executed": false
+      },
+      "file_inventory": [
+        {
+          "path": ".gitignore",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "LICENSE",
+          "bytes": 1073,
+          "sha256": "e423a1a2ced27204e4a557c4a7793a769c743d4800bd281a2cff6b5483e592d4"
+        },
+        {
+          "path": "README.md",
+          "bytes": 128,
+          "sha256": "d8ad231967026c1293b44d1c2b6e72d3ce98f5132bf7c6593b8c0a0491ec763d"
+        },
+        {
+          "path": "_config.yml",
+          "bytes": 213,
+          "sha256": "3148bcb58f0292fd506d3784623a7d16cc0a27add3c49be4a6e54888406f6fd2"
+        },
+        {
+          "path": "index.md",
+          "bytes": 4075,
+          "sha256": "914c858fe08b8880a6b780736d019015b7cd2842e8394fb61f8a1c2fcdcec07b"
+        },
+        {
+          "path": "rnn_mpc/index.md",
+          "bytes": 2997,
+          "sha256": "2e0deb65f4a836a31e87b6d68407a05d873cb458599d06e960300975e4930b6a"
+        },
+        {
+          "path": "rnn_mpc/software/Extern/MPC_casadi_SFunction/.gitignore",
+          "bytes": 323,
+          "sha256": "2ccfad69a79e30a7596531dba185d34f25dfb14a47bd7c9d98f8c048542b36b3"
+        },
+        {
+          "path": "rnn_mpc/software/Extern/MPC_casadi_SFunction/CMakeLists.txt",
+          "bytes": 1631,
+          "sha256": "100a335c19f1721570a1c3fb1ac69e1a25fb4a90e803dd291f77580aa1f2f4b5"
+        },
+        {
+          "path": "rnn_mpc/software/Extern/MPC_casadi_SFunction/build.sh",
+          "bytes": 1434,
+          "sha256": "9415baf754af7a143ec512c2093d37ee4411d15d3476b18350fee5b02be74112"
+        },
+        {
+          "path": "rnn_mpc/software/Extern/MPC_casadi_SFunction/include/models/ModelBase.h",
+          "bytes": 852,
+          "sha256": "865f3cc4a0efe3c4f2e52d2a03a011e3842f3f4fb8e6bef7aa613ed88e6e4c2d"
+        },
+        {
+          "path": "rnn_mpc/software/Extern/MPC_casadi_SFunction/include/models/RobotSystem.h",
+          "bytes": 1581,
+          "sha256": "6a7b2d9bd9670081afbd82d91bffa34370d7293357bb430c88f1a67735aa987d"
+        },
+        {
+          "path": "rnn_mpc/software/Extern/MPC_casadi_SFunction/include/mpc_lib/sponge_mpc.h",
+          "bytes": 3352,
+          "sha256": "b2409ab77aebade2837434028eed772c4fe1b62b661803120b330f8362a96ce8"
+        },
+        {
+          "path": "rnn_mpc/software/Extern/MPC_casadi_SFunction/include/sl_function/sl_mpc.h",
+          "bytes": 1529,
+          "sha256": "fc629a10a7c172d07cfa2d2756a109f45a5114adcf721a7c73470d8af9ad409a"
+        },
+        {
+          "path": "rnn_mpc/software/Extern/MPC_casadi_SFunction/mFiles/bus_SL_func_IN.m",
+          "bytes": 1534,
+          "sha256": "3039c73f94e66076784507f18a74f7a95895fca3fa5e73dbd70cfc97cde60f27"
+        },
+        {
+          "path": "rnn_mpc/software/Extern/MPC_casadi_SFunction/mFiles/bus_SL_func_OUT.m",
+          "bytes": 1546,
+          "sha256": "6da340c1d7959df26e03dac27dece7112dd1f539ef36f8c4e1c4204bd785c203"
+        },
+        {
+          "path": "rnn_mpc/software/Extern/MPC_casadi_SFunction/mFiles/bus_SL_func_PARAM.m",
+          "bytes": 1582,
+          "sha256": "95ca188ffecb4ba047d14ad492b591e9947a55ed1c43beac667ad52b5dc213f7"
+        },
+        {
+          "path": "rnn_mpc/software/Extern/MPC_casadi_SFunction/mFiles/generate_sl_block.m",
+          "bytes": 1827,
+          "sha256": "e76a74199764776353ac2be3c7db6bcacf45926e7f5b6e021bd921f49f7ca8bf"
+        },
+        {
+          "path": "rnn_mpc/software/Extern/MPC_casadi_SFunction/mFiles/lib/info.md",
+          "bytes": 66,
+          "sha256": "dd4153620432cedc1cb68266e15a6682b12c33b8702749e9d26785195872448c"
+        },
+        {
+          "path": "rnn_mpc/software/Extern/MPC_casadi_SFunction/src/CMakeLists.txt",
+          "bytes": 1774,
+          "sha256": "0b658f350c2bf944ac2c84f111ac2bffae5fff8744a3bb34f9b581d98660b554"
+        },
+        {
+          "path": "rnn_mpc/software/Extern/MPC_casadi_SFunction/src/ModelBase.cpp",
+          "bytes": 1210,
+          "sha256": "026a3cc57e91440788a09abd70fe80d982ff54129241486e50969581721554cf"
+        },
+        {
+          "path": "rnn_mpc/software/Extern/MPC_casadi_SFunction/src/models/RobotSystem.cpp",
+          "bytes": 6189,
+          "sha256": "760c7d3a6fa4f2f9935192819c84694ea448af0e3d7733a9a3bbcccd79070e2f"
+        },
+        {
+          "path": "rnn_mpc/software/Extern/MPC_casadi_SFunction/src/sl_func_dummy.cpp",
+          "bytes": 450,
+          "sha256": "0cb5fc6e74868a3748664c068ca0bcaef566959a8e0f7d1e445eb87501dd38f5"
+        },
+        {
+          "path": "rnn_mpc/software/Extern/MPC_casadi_SFunction/src/sl_mpc.cpp",
+          "bytes": 5830,
+          "sha256": "d3fecf3c456aaf4e0950691b18a1986e748a47a254dbfc28b875e626b41f084d"
+        },
+        {
+          "path": "rnn_mpc/software/Extern/MPC_casadi_SFunction/src/sponge_mpc.cpp",
+          "bytes": 6976,
+          "sha256": "6124c95aff4efda76854591ce508cf9a399360b1aff799e1766ea4d1aee8fb10"
+        },
+        {
+          "path": "rnn_mpc/software/build.m",
+          "bytes": 316,
+          "sha256": "e33ae64242524dccaa6db97009dbe31f4f665b6a0e18a9e8189290cdc5adc574"
+        },
+        {
+          "path": "rnn_mpc/software/functions/fcn_GRU_n_layer.m",
+          "bytes": 1910,
+          "sha256": "c452df0dd0711826acd60387d15074fe2fcd3f063cb78d137e64c6b058cd0b1f"
+        },
+        {
+          "path": "rnn_mpc/software/functions/fcn_MinMax.m",
+          "bytes": 1246,
+          "sha256": "bb0b6ff9d3f2306a7f993682a139f4d35937a10f33455cffff18d28869ffd0a9"
+        },
+        {
+          "path": "rnn_mpc/software/functions/fcn_Transfer2Double.m",
+          "bytes": 947,
+          "sha256": "984b4b35df6e904059286e5acb7c2f90ff30e1e72ed4bb0930c7eb0418283b8d"
+        },
+        {
+          "path": "rnn_mpc/software/functions/fcn_generateRampTrajectories.m",
+          "bytes": 1364,
+          "sha256": "2b2130ede03025691e0fa807fe2723c2f1a64be606aac5f7434c542270cae264"
+        },
+        {
+          "path": "rnn_mpc/software/functions/fcn_load_yaml_params.m",
+          "bytes": 2612,
+          "sha256": "a2472f7eadd2956d2da42dc9304dd56d8601b5ff4c180d1d3accec4fdf7771f5"
+        },
+        {
+          "path": "rnn_mpc/software/functions/fcn_mat2yaml.m",
+          "bytes": 4247,
+          "sha256": "2f2ddd973cfec81b30379d8d18ec5a8f81453101afca63bb6f818af2d289a6cb"
+        },
+        {
+          "path": "rnn_mpc/software/init.m",
+          "bytes": 3690,
+          "sha256": "a2c399a0a1ddfde760b727afeb7649feb32c3eaa2cdf4c8c0b52ae6932fa0fa3"
+        },
+        {
+          "path": "rnn_mpc/software/model/GRU_params.mat",
+          "bytes": 3800,
+          "sha256": "545fa0949737f171e5207cac130d9b485eddf4faadad13d065fb45fdb1bd3661"
+        },
+        {
+          "path": "rnn_mpc/software/model/GRU_weights.mat",
+          "bytes": 56104,
+          "sha256": "163cfee2eb1dcc6dbfb99a84d4e760f631abb377789148ee0c1dfd9838492866"
+        },
+        {
+          "path": "rnn_mpc/software/model/checkpoint.pt",
+          "bytes": 172075,
+          "sha256": "ecd0d09e8bc4ac721f56b6719e4652181fb56daad5fc562efb89cbb05d1a8be2"
+        },
+        {
+          "path": "rnn_mpc/software/model/config.txt",
+          "bytes": 323,
+          "sha256": "14f1d8cf4160492668ef1e94461405cbf1ebe9ae65c5e9859885799ee9f98060"
+        },
+        {
+          "path": "rnn_mpc/software/rnn_training/NN_fcn.py",
+          "bytes": 26953,
+          "sha256": "cc4a0d9334a7e9ba7bcecac5a5bfe84ca309ef6dd574b16e6c1d398916138d25"
+        },
+        {
+          "path": "rnn_mpc/software/rnn_training/NN_main.py",
+          "bytes": 4399,
+          "sha256": "b5d664ab252bf1312779ab9da7ae8d851edd91c0062ea7f4930f425369660276"
+        },
+        {
+          "path": "rnn_mpc/software/sync.sh",
+          "bytes": 646,
+          "sha256": "632e4c0fc42121f881563d39d9f18e1c223056da67ffdc9a5d613440b085be56"
+        },
+        {
+          "path": "rnn_mpc/software/test_bench.mdl",
+          "bytes": 224523,
+          "sha256": "9cdcde4f35142afeeeb1faa69a9dc9df7a04599e1c1cb1e55f999abea945b0d1"
+        }
+      ],
+      "inventory_path": "workspace/third_party/modeling_baselines/_provenance/sponge_local_inventory.json",
+      "dependencies_installed": false,
+      "checkpoints_loaded": false,
+      "acquisition_attempts": [
+        {
+          "method": "clone --depth 1 --filter=blob:none --sparse",
+          "status": "failed_sparse_initialization",
+          "reason": "git could not change directory to public URL while initializing sparse checkout"
+        },
+        {
+          "method": "clone --depth 1 --filter=blob:none --no-checkout; sparse-checkout init --cone; sparse-checkout set; checkout",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "id": "visual_oscillators_for_SCR",
+      "url": "https://github.com/UThenrik/visual_oscillators_for_SCR",
+      "commit": "994bca02a1788cde19b0317b2836409af4057bfc",
+      "local_path": "workspace/third_party/modeling_baselines/visual_oscillators_for_SCR",
+      "download_status": "success",
+      "download_method": "git shallow clone depth 1; no submodules",
+      "checkout_scope": "sparse_checkout_root_and_configs_results_not_checked_out",
+      "sparse_paths": [
+        "configs"
+      ],
+      "license": {
+        "spdx_id": null,
+        "status": "not_found_in_repository_tree_or_readme",
+        "path": null,
+        "reuse_note": "public source availability does not establish a reuse license; use paper-based independent implementation or obtain permission"
+      },
+      "static_verification": {
+        "tracked_worktree_clean": true,
+        "checked_out_file_count": 16,
+        "python_files_parsed": 3,
+        "syntax_errors": [],
+        "runtime_tested": false,
+        "external_code_executed": false
+      },
+      "file_inventory": [
+        {
+          "path": ".gitignore",
+          "bytes": 4733,
+          "sha256": "98fb13cd49d1e06004e6d6b9f9096d7fb232dceea01710d890596986719b788c"
+        },
+        {
+          "path": "Latent_dynamics_learning.ipynb",
+          "bytes": 71094,
+          "sha256": "58270f9c920840c6b1ab2bfe3b1011bbb095e986fccfebce79a7ca66b03e2ab3"
+        },
+        {
+          "path": "README.md",
+          "bytes": 2512,
+          "sha256": "3ffbe32e2a348db0a6feac2eb6b9386171f55e12ca6bf41175e7bcd5e9b8150a"
+        },
+        {
+          "path": "SCR_data_processing.ipynb",
+          "bytes": 26268,
+          "sha256": "ca3ff4b24b5f29ae7ac6f6aa40884f44d07f620381b5dbde8999076daae295b4"
+        },
+        {
+          "path": "configs/base.yaml",
+          "bytes": 2497,
+          "sha256": "3a8ed0db9cbb06f74fe0b0b0fd78525884cacf62bdcad70e738f4b5acb1baebc"
+        },
+        {
+          "path": "configs/scr_1seg_harmonic.yaml",
+          "bytes": 102,
+          "sha256": "b0c32992e0a220ccb5c9bf7d96697342764f45763425551f5218d76b9392a620"
+        },
+        {
+          "path": "configs/scr_1seg_harmonic_attn.yaml",
+          "bytes": 145,
+          "sha256": "b4f347ee12ba1f58ca10e714caa9bd4513037d65e0cef91d478321ec523b0f4f"
+        },
+        {
+          "path": "configs/scr_1seg_koopman.yaml",
+          "bytes": 100,
+          "sha256": "adb2161721327a5cbea596b8c39038e61390b16ace5e9558ddf2c41fb7d6378e"
+        },
+        {
+          "path": "configs/scr_1seg_koopman_attn.yaml",
+          "bytes": 157,
+          "sha256": "50ba29858078298b4976be893ccfd461ebdc664a54f80a28ab3022883a8e6ecf"
+        },
+        {
+          "path": "configs/scr_2seg_harmonic.yaml",
+          "bytes": 104,
+          "sha256": "6c28444856059afc632e182a2543a11adc8f0455b08bcb265e82ef980a50b245"
+        },
+        {
+          "path": "configs/scr_2seg_harmonic_attn.yaml",
+          "bytes": 146,
+          "sha256": "e340ea1750bbc5c3697042d91c716d036f6402408a2be3305ac5e5b712161222"
+        },
+        {
+          "path": "configs/scr_2seg_koopman.yaml",
+          "bytes": 101,
+          "sha256": "6ae45eb813965fde4c86233e9793a86170a86d798eaff7b3f84a6d8cdef7a0c3"
+        },
+        {
+          "path": "configs/scr_2seg_koopman_attn.yaml",
+          "bytes": 139,
+          "sha256": "fd18109b6585598b67103fa9a43220c74d7f92d012af675bf4dd4bad4983c269"
+        },
+        {
+          "path": "matlab_import_helper.py",
+          "bytes": 2175,
+          "sha256": "8f91234cf85bdc8546333f1451a505197610b43ffca63a5340941763157a03ee"
+        },
+        {
+          "path": "models.py",
+          "bytes": 38605,
+          "sha256": "c591cad54f802399bc708d7436aeefb985261845ecb6855570280332dd5f3453"
+        },
+        {
+          "path": "utils.py",
+          "bytes": 9595,
+          "sha256": "28e2806fcec604b24db464140d32ff978ac19eff8ae688882406daf71cfd01e6"
+        }
+      ],
+      "inventory_path": "workspace/third_party/modeling_baselines/_provenance/visual_oscillators_for_SCR_local_inventory.json",
+      "dependencies_installed": false,
+      "checkpoints_loaded": false,
+      "acquisition_attempts": [
+        {
+          "method": "clone --depth 1 --filter=blob:none --sparse",
+          "status": "failed_sparse_initialization",
+          "reason": "git could not change directory to public URL while initializing sparse checkout"
+        },
+        {
+          "method": "clone --depth 1 --filter=blob:none --no-checkout; sparse-checkout init --cone; sparse-checkout set; checkout",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "id": "softnerf",
+      "url": "https://github.com/IRMVLab/soft-nerf",
+      "commit": "317f80f651edba17613f9e7567d17a9008cfbb79",
+      "local_path": "workspace/third_party/modeling_baselines/softnerf",
+      "download_status": "success",
+      "download_method": "git shallow clone depth 1; no submodules",
+      "checkout_scope": "full_shallow_checkout",
+      "sparse_paths": [],
+      "license": {
+        "spdx_id": null,
+        "status": "not_found_in_repository_tree_or_readme",
+        "path": null,
+        "reuse_note": "public source availability does not establish a reuse license; use paper-based independent implementation or obtain permission"
+      },
+      "static_verification": {
+        "tracked_worktree_clean": true,
+        "checked_out_file_count": 24,
+        "python_files_parsed": 20,
+        "syntax_errors": [],
+        "runtime_tested": false,
+        "external_code_executed": false
+      },
+      "file_inventory": [
+        {
+          "path": "README.md",
+          "bytes": 92,
+          "sha256": "6552a660c9ea29d3041b075f64cc2fc31421e2db27c8e63992f5d96de30a412a"
+        },
+        {
+          "path": "confs/trunk.conf",
+          "bytes": 2897,
+          "sha256": "5216c68ea0063c3f5694132463deba9a6f51aaf8fa13b2ddccb4b3828912244c"
+        },
+        {
+          "path": "environment.yaml",
+          "bytes": 126,
+          "sha256": "844db457f3895fc374490711905ff0006e1c5f79a40dd1fd3b9e92de2efcfc1f"
+        },
+        {
+          "path": "models/__init__.py",
+          "bytes": 73,
+          "sha256": "8257a7f0062ba88c13260bafe67f4c932b0fc542ae48f46b00088258d85f5966"
+        },
+        {
+          "path": "models/dataset.py",
+          "bytes": 11715,
+          "sha256": "9a94f5bac8fb8679fd998f7b5710ef1c620d3d4497d9c6544d7bf251961e19f4"
+        },
+        {
+          "path": "models/fields.py",
+          "bytes": 9701,
+          "sha256": "508fc574369c4b746f5ed86ea46d009b03db165eb7b2c17778c298e99afed2c9"
+        },
+        {
+          "path": "models/model_components.py",
+          "bytes": 8766,
+          "sha256": "ab5940ab4dc24f677eaecf5e055266c2a248f843d195738dfdbe4472c9688932"
+        },
+        {
+          "path": "models/neus.py",
+          "bytes": 7747,
+          "sha256": "1f794b9c62319ec2020663c1ea652e3ca56b0e6a6e193d850ecb858a650fe552"
+        },
+        {
+          "path": "models/renderer.py",
+          "bytes": 2420,
+          "sha256": "740ccc0767612f4f3a58dd24e8a50f9a1bf8f36bd43e88bbbe665874ba5d0ffb"
+        },
+        {
+          "path": "models/utils.py",
+          "bytes": 357,
+          "sha256": "3a985e03c25879ce68b5107be09b3eecd0c027016bf66077ce32a99de88d85f0"
+        },
+        {
+          "path": "ops/__init__.py",
+          "bytes": 19,
+          "sha256": "6ee34f8256f6740ca8a0431be50feb00733ec37ff7fc2bc8256b033bbe092738"
+        },
+        {
+          "path": "ops/loss.py",
+          "bytes": 239,
+          "sha256": "5cc5376bd0ec80b3abd00e1fbed93d3be311385bdfeb56ab18fcaa4df6bfc8a9"
+        },
+        {
+          "path": "ops/mesh/__init__.py",
+          "bytes": 145,
+          "sha256": "2242e2c3124d3caa97e3e9e51b060fa1f5870de78a26c1f3746108c7ce8cd0b1"
+        },
+        {
+          "path": "ops/mesh/affine_transform.py",
+          "bytes": 1552,
+          "sha256": "b87606191691b2d3ea5ec0af4653b5a3617d463dd72ba8dafb8e97e578101ce0"
+        },
+        {
+          "path": "ops/mesh/compute_normals.py",
+          "bytes": 756,
+          "sha256": "1e4c2766a4b004f03680f12725d7276fb9ef4ebc0423d2ff4257afabe1db9227"
+        },
+        {
+          "path": "ops/mesh/load_obj.py",
+          "bytes": 2992,
+          "sha256": "4cc475079c31006b9bc225b913923c0e7ab0986ac25bc701bdf69f1bb0ae7d64"
+        },
+        {
+          "path": "ops/mesh/metrics.py",
+          "bytes": 2906,
+          "sha256": "a776e160afb7d23969bdc2d14ff679032a1d0ca311cb8463af86aeadcc230a2f"
+        },
+        {
+          "path": "ops/mesh/numeric.py",
+          "bytes": 1539,
+          "sha256": "0c2e1123f384f98bc9c3fd4020d60e6423d65781562e48308382a70856ec3f39"
+        },
+        {
+          "path": "ops/mesh/save_obj.py",
+          "bytes": 1965,
+          "sha256": "ae40d75fee32b29e021ccb9f6cbebc9b89f47159ce64ee63401ea6314a680b3c"
+        },
+        {
+          "path": "requirements.txt",
+          "bytes": 109,
+          "sha256": "f79d9342286a2f064df521a2340cfa092cbbd6a5c64930b51a9c39a911a5e375"
+        },
+        {
+          "path": "utils/__init__.py",
+          "bytes": 21,
+          "sha256": "6a52031819f1587e09bcff945beecdf7db1e0418b4af5195d61f1fd4444505e7"
+        },
+        {
+          "path": "utils/utils.py",
+          "bytes": 442,
+          "sha256": "d0dbbe7a250e0a958b28d3b97b3b28e1b5b4e89aa0729358e0872e348b96b32f"
+        },
+        {
+          "path": "visualization/__init__.py",
+          "bytes": 30,
+          "sha256": "8ea739a4b0c32e7eb909cb7a18fe1bb103a260bd8748e49c6b3282c16fe2fce4"
+        },
+        {
+          "path": "visualization/error_to_color.py",
+          "bytes": 424,
+          "sha256": "605a57ebf85f6efc9488d425f1097d2812107605b1b488c8a2cdfbd30a37c351"
+        }
+      ],
+      "inventory_path": "workspace/third_party/modeling_baselines/_provenance/softnerf_local_inventory.json",
+      "dependencies_installed": false,
+      "checkpoints_loaded": false,
+      "acquisition_attempts": [
+        {
+          "method": "clone --depth 1",
+          "status": "success"
+        }
+      ]
+    }
+  ],
+  "evidence_files": [
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/chen2025_abstract.html",
+      "bytes": 44336,
+      "sha256": "0d32ba0db36d3d72405866aabae80753cedc681cbda3e16501afcd11d1cc87bd"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/chen2025_primary_text.txt",
+      "bytes": 32132,
+      "sha256": "b5cb2003636ba275b7e0738dee7f86a66f2da197e182db31a38db0b939441205"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/chen2025_search.json",
+      "bytes": 193,
+      "sha256": "532ebda335705670e3d8813c2a40018424d5a9db00af87721a018c1381245f80"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/chen2025_search2.json",
+      "bytes": 171343,
+      "sha256": "e8e0710deec04bd21db650c4c18fa294b258665e587af3a0266df278269ef209"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/krauss2026_commit.json",
+      "bytes": 1306673,
+      "sha256": "c28e6d7b936802ac5e95ecd9594f02f37cea7754f2168538e684a03caee2baa9"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/krauss2026_primary_text.txt",
+      "bytes": 20009,
+      "sha256": "e96852ab7847f801ed80f330be002797814c1908370c2c01cd98aaf7f0c3632a"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/krauss2026_repo.json",
+      "bytes": 5771,
+      "sha256": "3058c9b363fbe0d0bf33651afd239a6f868aec7f884cc9192d87ec130fefbc2a"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/krauss2026_tree.json",
+      "bytes": 355930,
+      "sha256": "8565fc2fc469d5044e027c2d90fcc2d949f29188669e05dee02e639a509d08b9"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/krauss_von_primary.html",
+      "bytes": 184210,
+      "sha256": "1a1a87c8b9e9e5f6915e0d74d25e06c7a558bc147a2e0bb88223375c187277dc"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/park2024_abstract.html",
+      "bytes": 45145,
+      "sha256": "5db99a88e94bfa99516bc8ac7a200ed85767152b8de39d2957c82ccf8a90e59b"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/park2024_primary_text.txt",
+      "bytes": 25249,
+      "sha256": "b179ac3742903491b67aab058a4415c6d32a14bc95dee1be2c8215bdb4531c4f"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/park2024_search.json",
+      "bytes": 7695,
+      "sha256": "e647e0e9cb42fe6b49fd1532a104f92bd412df03ce4c2be6bf56ec8a0778bf39"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/park2024_search2.json",
+      "bytes": 169167,
+      "sha256": "52facd4c58204804f6c33c5a3df6bdffb84713b361a20573f884215a3c56a7a5"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/schafke2024_commit.json",
+      "bytes": 49286,
+      "sha256": "7cfba82bc542d544aa4f119853fd39a662d458396bfa55ea1bb8be0cde112666"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/schafke2024_primary_text.txt",
+      "bytes": 36254,
+      "sha256": "df129c7dbd679b84cc4107a5ff9c78bda49afc1c20d1a85d15cee37ea34da8f8"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/schafke2024_project.html",
+      "bytes": 14518,
+      "sha256": "6427e5f361c2141573fa0bee09361327d91677f2c4396df1b181e34ea52b9ba4"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/schafke2024_repo.json",
+      "bytes": 5835,
+      "sha256": "87e0fd7d2932ea1bf9c714a60f1c569e58a0b74186364007271563d48fddac83"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/schafke2024_tree.json",
+      "bytes": 168205,
+      "sha256": "06ff1c9d4b0ab797c2204ae17f4fbd553b26be4c2da14019ed3f4d96c8457e17"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/softnerf2024_commit.json",
+      "bytes": 79418,
+      "sha256": "6ad1b9f40ea35d1083b4f8899baa8684bcbb45ee0629944c22e7b14c0956763e"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/softnerf2024_repo.json",
+      "bytes": 6036,
+      "sha256": "0c061b66a5d41586cd218fce01dd4220743e6f96733333f21e29de841954be65"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/softnerf2024_search.json",
+      "bytes": 12176,
+      "sha256": "6469d4e7d3f6fe8c024e8e34998616c7874f64802198aed6e57144f1bae00dd5"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/softnerf2024_tree.json",
+      "bytes": 8563,
+      "sha256": "b538ec82ee8b08939470d802151bd2ae744afb203b30ade52591abec3190899f"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/softnerf_local_inventory.json",
+      "bytes": 3948,
+      "sha256": "e442ec872d2c5eb4f12fd9ed44542d8b98aabe04cb6fe0c3eb11cf57391c4a19"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/sponge_local_inventory.json",
+      "bytes": 7514,
+      "sha256": "4cabde94efadd58aff7bb463cccbbb683faa0fd48defe65c3c7e4fd2b5e02522"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/visual_oscillators_for_SCR_local_inventory.json",
+      "bytes": 2837,
+      "sha256": "e3b1e01f26318511d1de6a63a801b0a09392b98538e116cf6aef4084115fb762"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/yu2026_abstract.html",
+      "bytes": 43623,
+      "sha256": "a95814f1460e3837f28d24d27b8cd488ea2390ce66cd63383f9e41933435dc9a"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/yu2026_primary_text.txt",
+      "bytes": 45337,
+      "sha256": "431f223a7cb4cf31e43da992f2994379dac50a3b8418028f69d7766d2b789628"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/yu2026_search.json",
+      "bytes": 9024,
+      "sha256": "270007e1dadab66178de90130823806609027f7373c9c5f818b4b0cd23316002"
+    },
+    {
+      "path": "workspace/third_party/modeling_baselines/_provenance/yu2026_search2.json",
+      "bytes": 51813,
+      "sha256": "407b947f861468a67dfa132d2430c055316941f63159c10bd940179adfefe09d"
+    }
+  ],
+  "verification": {
+    "official_repositories_downloaded": 3,
+    "python_files_syntax_parsed": 25,
+    "syntax_errors": 0,
+    "external_code_executed": false,
+    "external_dependencies_installed": false,
+    "training_run": false,
+    "performance_claims": false
+  },
+  "search_limitations": [
+    "Search is not exhaustive; no identified official repository does not establish no code exists.",
+    "arXiv platform feedback and LaTeXML links excluded.",
+    "Repository search by arXiv numeric identifier returned weakly related results and is not evidence of official authorship."
+  ],
+  "adaptation_claim_rule": "All local architectures are proposed adaptations; do not report original-paper reproduction or performance without separate protocol and runtime validation.",
+  "benchmark_integration": {
+    "entrypoint": "scripts/experiments/modeling_benchmark.py",
+    "implementation": "src/benchmarks/modeling_models.py",
+    "status": "implemented; real-data smoke tested; full campaigns pending",
+    "models": {
+      "chen2025": [
+        "chen_direction",
+        "chen_static"
+      ],
+      "park2024": [
+        "park_tcn"
+      ],
+      "schafke2024": [
+        "gru",
+        "lstm"
+      ],
+      "yu2026": [
+        "bezier_gru"
+      ],
+      "krauss2026": [
+        "oscillator"
+      ]
+    },
+    "official_code_extraction": {
+      "repository": "sponge",
+      "commit": "fffb24a063475a3bca09f04968be0d165ad3f90a",
+      "classes": [
+        "GRU",
+        "LSTM"
+      ],
+      "path": "src/benchmarks/vendor/sponge_rnn.py",
+      "license": "src/benchmarks/vendor/SPONGE_LICENSE.txt",
+      "extraction": "verbatim classes; only torch.nn import"
+    },
+    "complete_original_method_reproduction": false,
+    "protocol": "fixed causal pressure window to current ordered skeleton; equal supervision; details in modeling_experiments.md"
+  }
+}
